@@ -5,6 +5,185 @@ const ApiError = require("../../../error/ApiError");
 const { ProductSearchableFields } = require("./product.constants");
 const Product = db.product;
 const Variation = db.variation;
+const InventoryMaster = db.inventoryMaster;
+
+const productNameSyncModels = [
+  { Model: db.purchaseRequisition, reference: "product" },
+  { Model: db.receivedProduct, reference: "product" },
+  { Model: db.purchaseReturnProduct, reference: "inventory" },
+  { Model: db.inTransitProduct, reference: "inventory" },
+  { Model: db.returnProduct, reference: "inventory" },
+  { Model: db.damageStock, reference: "product" },
+  { Model: db.damageProduct, reference: "inventory" },
+  { Model: db.damageRepair, reference: "damageStock" },
+  { Model: db.damageReparingStock, reference: "product" },
+  { Model: db.damageRepaired, reference: "repairingStock" },
+];
+
+const parseItems = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const hasAttribute = (Model, attribute) =>
+  Boolean(Model?.rawAttributes?.[attribute]);
+
+const buildJoinedName = (items = []) =>
+  items
+    .map((item) => String(item?.name || "").trim())
+    .filter(Boolean)
+    .join(", ");
+
+const renameItemsByReference = (
+  items = [],
+  referenceIds = [],
+  nextName,
+  previousNames = [],
+) => {
+  const idSet = new Set(referenceIds.map((item) => Number(item)));
+  const previousNameSet = new Set(
+    previousNames.map((item) => String(item || "").trim()).filter(Boolean),
+  );
+  let changed = false;
+
+  const renamedItems = items.map((item) => {
+    const itemProductId = Number(item?.productId ?? item?.receivedId);
+    const itemName = String(item?.name || "").trim();
+    if (!idSet.has(itemProductId) && !previousNameSet.has(itemName)) {
+      return item;
+    }
+
+    changed = true;
+    return {
+      ...item,
+      name: nextName,
+    };
+  });
+
+  return { changed, items: renamedItems };
+};
+
+const syncNameRows = async (
+  Model,
+  referenceIds,
+  nextName,
+  transaction,
+  previousNames = [],
+) => {
+  if (!Model) return;
+
+  const previousNameSet = new Set(
+    previousNames.map((item) => String(item || "").trim()).filter(Boolean),
+  );
+  if (!referenceIds.length && !previousNameSet.size) return;
+
+  const attributes = ["Id", "name"];
+  if (hasAttribute(Model, "productId")) attributes.push("productId");
+  if (hasAttribute(Model, "items")) attributes.push("items");
+
+  const rows = await Model.findAll({
+    attributes,
+    transaction,
+    paranoid: false,
+  });
+
+  await Promise.all(
+    rows.map(async (row) => {
+      const rowProductId = Number(row.productId);
+      const items = parseItems(row.items);
+      const data = {};
+
+      if (items.length) {
+        const renamed = renameItemsByReference(
+          items,
+          referenceIds,
+          nextName,
+          previousNames,
+        );
+        if (!renamed.changed) return;
+
+        data.items = renamed.items;
+        data.name = buildJoinedName(renamed.items) || nextName;
+      } else if (
+        referenceIds.includes(rowProductId) ||
+        previousNameSet.has(String(row.name || "").trim())
+      ) {
+        data.name = nextName;
+      } else {
+        return;
+      }
+
+      await row.update(data, { transaction });
+    }),
+  );
+};
+
+const syncProductNameReferences = async (
+  productId,
+  nextName,
+  transaction,
+  previousNames = [],
+) => {
+  const [inventoryRows, damageStockRows, repairingStockRows] =
+    await Promise.all([
+      InventoryMaster.findAll({
+        attributes: ["Id"],
+        where: { productId },
+        transaction,
+        paranoid: false,
+      }),
+      db.damageStock.findAll({
+        attributes: ["Id"],
+        where: { productId },
+        transaction,
+        paranoid: false,
+      }),
+      db.damageReparingStock.findAll({
+        attributes: ["Id"],
+        where: { productId },
+        transaction,
+        paranoid: false,
+      }),
+    ]);
+  const inventoryIds = inventoryRows.map((row) => Number(row.Id));
+  const damageStockIds = damageStockRows.map((row) => Number(row.Id));
+  const repairingStockIds = repairingStockRows.map((row) => Number(row.Id));
+
+  await InventoryMaster.update(
+    { name: nextName },
+    {
+      where: { productId },
+      transaction,
+      paranoid: false,
+    },
+  );
+
+  await Promise.all(
+    productNameSyncModels.map(({ Model, reference }) => {
+      const referenceIds = {
+        damageStock: damageStockIds,
+        inventory: inventoryIds,
+        product: [productId],
+        repairingStock: repairingStockIds,
+      }[reference];
+
+      return syncNameRows(
+        Model,
+        referenceIds || [],
+        nextName,
+        transaction,
+        previousNames,
+      );
+    }),
+  );
+};
 
 const insertIntoDB = async (data) => {
   const { name, size, color, sku } = data;
@@ -137,40 +316,66 @@ const deleteIdFromDB = async (id) => {
 const updateOneFromDB = async (id, payload) => {
   const { name, size, color, sku } = payload;
 
-  const data = {
-    name,
-    sku,
-  };
-  const result = await Product.update(data, {
-    where: {
-      Id: id,
-    },
-  });
+  return db.sequelize.transaction(async (transaction) => {
+    const existingProduct = await Product.findOne({
+      where: { Id: id },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
 
-  const existingVariation = await Variation.findOne({
-    where: { productId: id },
-  });
+    if (!existingProduct) throw new ApiError(404, "Product not found");
 
-  if (existingVariation) {
-    await Variation.update(
-      {
-        size: size || existingVariation.size,
-        color: color || existingVariation.color,
-      },
-      {
-        where: { productId: id },
-      },
-    );
-  } else if (size || color) {
-    const variationData = {
-      size: size || null,
-      color: color || null,
-      productId: id,
+    const data = {
+      name,
+      sku,
     };
-    await Variation.create(variationData);
-  }
+    const result = await Product.update(data, {
+      where: {
+        Id: id,
+      },
+      transaction,
+    });
 
-  return result;
+    const nextName = String(name || "").trim();
+    const oldName = String(existingProduct.name || "").trim();
+    if (nextName) {
+      await syncProductNameReferences(
+        Number(id),
+        nextName,
+        transaction,
+        oldName && oldName !== nextName ? [oldName] : [],
+      );
+    }
+
+    const existingVariation = await Variation.findOne({
+      where: { productId: id },
+      transaction,
+    });
+
+    if (existingVariation) {
+      await Variation.update(
+        {
+          size: size || existingVariation.size,
+          color: color || existingVariation.color,
+        },
+        {
+          where: { productId: id },
+          transaction,
+        },
+      );
+    } else if (size || color) {
+      const variationData = {
+        size: size || null,
+        color: color || null,
+        productId: id,
+      };
+      await Variation.create(variationData, {
+        transaction,
+      });
+    }
+
+    return result;
+  });
 };
 
 const getAllFromDBWithoutQuery = async () => {

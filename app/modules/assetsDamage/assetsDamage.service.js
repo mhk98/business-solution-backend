@@ -122,13 +122,20 @@ const getAllFromDB = async (filters, options) => {
 
   // const total = await AssetsDamage.count({ where: whereConditions });
 
-  const [count, totalQuantity] = await Promise.all([
+  const [count, totalQuantity, totalAmount] = await Promise.all([
     AssetsDamage.count({ where: whereConditions }),
     AssetsDamage.sum("quantity", { where: whereConditions }),
+    AssetsDamage.sum("total", { where: whereConditions }),
   ]);
 
   return {
-    meta: { count, totalQuantity: totalQuantity || 0, page, limit },
+    meta: {
+      count,
+      totalQuantity: totalQuantity || 0,
+      totalAmount: totalAmount || 0,
+      page,
+      limit,
+    },
     data: result,
   };
 };

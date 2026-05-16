@@ -16,6 +16,10 @@ module.exports = (sequelize, DataTypes) => {
           notEmpty: true,
         },
       },
+      assetId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       quantity: {
         type: DataTypes.INTEGER(10),
         allowNull: false,

@@ -1125,6 +1125,12 @@ db.assetsPurchase.belongsTo(db.asset, {
   as: "asset",
 });
 
+db.asset.hasOne(db.assetsStock, { foreignKey: "assetId" });
+db.assetsStock.belongsTo(db.asset, {
+  foreignKey: "assetId",
+  as: "asset",
+});
+
 db.asset.hasMany(db.assetsRequisition, { foreignKey: "assetId" });
 db.assetsRequisition.belongsTo(db.asset, {
   foreignKey: "assetId",
@@ -1695,6 +1701,13 @@ const ensureAssetsStockColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.assetsStock.getTableName();
   const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.assetId) {
+    await queryInterface.addColumn(tableName, "assetId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
 
   if (!tableDefinition.price) {
     await queryInterface.addColumn(tableName, "price", {

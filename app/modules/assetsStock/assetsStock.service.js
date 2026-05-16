@@ -31,7 +31,9 @@ const buildDateWhere = (startDate, endDate) => {
   }
 
   return {
-    createdAt: { [Op.lte]: new Date(new Date(endDate).setHours(23, 59, 59, 999)) },
+    createdAt: {
+      [Op.lte]: new Date(new Date(endDate).setHours(23, 59, 59, 999)),
+    },
   };
 };
 
@@ -57,7 +59,9 @@ const mapRow = (row) => ({
   quantity: n(row.quantity),
   price: n(row.price),
   total: n(row.quantity) * n(row.price),
-  date: row.updatedAt ? new Date(row.updatedAt).toISOString().slice(0, 10) : null,
+  date: row.updatedAt
+    ? new Date(row.updatedAt).toISOString().slice(0, 10)
+    : null,
   status: "Active",
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
@@ -79,18 +83,35 @@ const getAllFromDB = async (filters = {}, options = {}) => {
     ],
   });
 
-  const totalQuantity = n(
-    await AssetsStock.sum("quantity", {
+  const [totalQuantity, totalAmountRow] = await Promise.all([
+    AssetsStock.sum("quantity", { where }),
+    AssetsStock.findOne({
       where,
+      paranoid: true,
+      attributes: [
+        [
+          db.Sequelize.fn(
+            "COALESCE",
+            db.Sequelize.fn(
+              "SUM",
+              db.Sequelize.literal("quantity * price"),
+            ),
+            0,
+          ),
+          "totalAmount",
+        ],
+      ],
+      raw: true,
     }),
-  );
+  ]);
 
   return {
     meta: {
       page,
       limit,
       count,
-      totalQuantity,
+      totalQuantity: n(totalQuantity),
+      totalAmount: n(totalAmountRow?.totalAmount),
       totalPages: Math.max(1, Math.ceil(count / limit)),
     },
     data: rows.map(mapRow),

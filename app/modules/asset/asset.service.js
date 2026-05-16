@@ -4,6 +4,11 @@ const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 
 const Asset = db.asset;
+const AssetsRequisition = db.assetsRequisition;
+const AssetsPurchase = db.assetsPurchase;
+const AssetsSale = db.assetsSale;
+const AssetsDamage = db.assetsDamage;
+const AssetsStock = db.assetsStock;
 
 const normalizeName = (name) => String(name || "").trim();
 
@@ -103,6 +108,56 @@ const updateOneFromDB = async (id, payload) => {
 };
 
 const deleteIdFromDB = async (id) => {
+  const asset = await Asset.findOne({
+    where: { Id: id },
+  });
+
+  if (!asset) {
+    throw new ApiError(404, "Asset not found");
+  }
+
+  const stock = await AssetsStock.findOne({
+    where: { name: asset.name },
+    attributes: ["Id"],
+    raw: true,
+  });
+
+  const stockId = stock?.Id || 0;
+  const usageWhereByAsset = {
+    [Op.or]: [{ assetId: asset.Id }, { name: asset.name }],
+  };
+  const usageWhereByStock = {
+    [Op.or]: [{ productId: stockId }, { name: asset.name }],
+  };
+
+  const [
+    requisitionCount,
+    purchaseCount,
+    saleCount,
+    damageCount,
+  ] = await Promise.all([
+    AssetsRequisition.count({ where: usageWhereByAsset, paranoid: true }),
+    AssetsPurchase.count({
+      where: {
+        [Op.or]: [
+          { assetId: asset.Id },
+          { productId: stockId },
+          { name: asset.name },
+        ],
+      },
+      paranoid: true,
+    }),
+    AssetsSale.count({ where: usageWhereByStock, paranoid: true }),
+    AssetsDamage.count({ where: usageWhereByStock, paranoid: true }),
+  ]);
+
+  if (requisitionCount || purchaseCount || saleCount || damageCount) {
+    throw new ApiError(
+      400,
+      "This asset is already used in requisition, purchase, sale, or damage. It cannot be deleted.",
+    );
+  }
+
   const result = await Asset.destroy({
     where: {
       Id: id,

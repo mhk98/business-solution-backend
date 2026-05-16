@@ -29,6 +29,15 @@ const DeliveryAdvance = db.deliveryAdvance;
 // ✅ helper: safe number
 const n = (v) => Number(v || 0);
 
+const activeWhere = (Model, where = {}) => {
+  if (!Model?.rawAttributes?.deletedAt || where.deletedAt) return where;
+
+  return {
+    ...where,
+    deletedAt: { [Op.is]: null },
+  };
+};
+
 const formatDateOnly = (date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -176,7 +185,7 @@ const buildDateWhere = (from, to, field = "createdAt") => {
 const sumField = async (Model, field, where = {}) => {
   if (!Model) return 0;
   const total = await Model.sum(field, {
-    where,
+    where: activeWhere(Model, where),
     paranoid: true,
   });
   return n(total);
@@ -184,7 +193,7 @@ const sumField = async (Model, field, where = {}) => {
 
 const sumExcludedCashOutAmount = async (where = {}) => {
   const total = await CashInOut.sum("amount", {
-    where: {
+    where: activeWhere(CashInOut, {
       ...where,
       paymentStatus: "CashOut",
       [Op.and]: [
@@ -192,7 +201,7 @@ const sumExcludedCashOutAmount = async (where = {}) => {
           "LOWER(category) IN ('loan', 'advance', 'product purchase')",
         ),
       ],
-    },
+    }),
     paranoid: true,
   });
 
@@ -203,7 +212,7 @@ const countWhere = async (Model, where = {}) => {
   if (!Model) return 0;
   return n(
     await Model.count({
-      where,
+      where: activeWhere(Model, where),
       paranoid: true,
     }),
   );
@@ -217,7 +226,7 @@ const sumQuantityValue = async (
   if (!Model) return 0;
 
   const result = await Model.findOne({
-    where,
+    where: activeWhere(Model, where),
     paranoid: true,
     attributes: [
       [
@@ -244,13 +253,13 @@ const getProductKey = (row) =>
 const calculateNetPurchaseFromProductRows = async (where = {}) => {
   const [inTransitRows, returnRows] = await Promise.all([
     IntransitProduct.findAll({
-      where,
+      where: activeWhere(IntransitProduct, where),
       attributes: ["Id", "name", "productId", "quantity", "purchase_price"],
       paranoid: true,
       raw: true,
     }),
     ReturnProduct.findAll({
-      where,
+      where: activeWhere(ReturnProduct, where),
       attributes: ["Id", "name", "productId", "quantity"],
       paranoid: true,
       raw: true,
@@ -300,7 +309,7 @@ const calculateNetPurchaseFromProductRows = async (where = {}) => {
 
 const countLowStockProducts = async (where = {}) => {
   const rows = await InventoryMaster.findAll({
-    where,
+    where: activeWhere(InventoryMaster, where),
     attributes: ["quantity", "variants", "minimumStock"],
     paranoid: true,
   });
@@ -345,7 +354,7 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
       ...transactionDateWhere,
       paymentStatus: "CashOut",
     }),
-    sumQuantityValue(AssetsStock, snapshotWhere, "price"),
+    sumQuantityValue(AssetsStock, {}, "price"),
     sumField(Receiveable, "amount", transactionDateWhere),
     sumField(Payable, "amount", transactionDateWhere),
     sumQuantityValue(InventoryMaster, snapshotWhere, "purchase_price"),

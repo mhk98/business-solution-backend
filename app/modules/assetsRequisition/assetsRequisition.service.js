@@ -175,13 +175,20 @@ const getAllFromDB = async (filters, options) => {
 
   // const total = await AssetsRequisition.count({ where: whereConditions });
 
-  const [count, totalQuantity] = await Promise.all([
+  const [count, totalQuantity, totalAmount] = await Promise.all([
     AssetsRequisition.count({ where: whereConditions }),
     AssetsRequisition.sum("quantity", { where: whereConditions }),
+    AssetsRequisition.sum("total", { where: whereConditions }),
   ]);
 
   return {
-    meta: { count, totalQuantity: totalQuantity || 0, page, limit },
+    meta: {
+      count,
+      totalQuantity: totalQuantity || 0,
+      totalAmount: totalAmount || 0,
+      page,
+      limit,
+    },
     data: result,
   };
 };

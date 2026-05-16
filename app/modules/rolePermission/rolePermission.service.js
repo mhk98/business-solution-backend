@@ -124,6 +124,10 @@ const includeNewSettingsChildren = (role, permissions = []) => {
   }
 
   [
+    "cod_change",
+    "cod_charge",
+    "delivery_advance",
+    "delivery_charge",
     "ads_campaign_kpi",
     "auto_profit_loss",
     "stock_alert",

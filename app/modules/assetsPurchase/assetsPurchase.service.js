@@ -33,11 +33,22 @@ const normalizeOptionalId = (value) => {
 };
 
 const ensureStockForAsset = async (asset, transaction) => {
-  const [stock] = await AssetsStock.findOrCreate({
-    where: { name: asset.name },
-    defaults: { name: asset.name, quantity: 0, price: 0 },
+  const stockByAsset = await AssetsStock.findOne({
+    where: { assetId: asset.Id },
     transaction,
   });
+
+  if (stockByAsset) return stockByAsset;
+
+  const [stock] = await AssetsStock.findOrCreate({
+    where: { name: asset.name },
+    defaults: { name: asset.name, assetId: asset.Id, quantity: 0, price: 0 },
+    transaction,
+  });
+
+  if (!stock.assetId) {
+    await stock.update({ assetId: asset.Id }, { transaction });
+  }
 
   return stock;
 };
@@ -169,13 +180,20 @@ const getAllFromDB = async (filters, options) => {
 
   // const total = await AssetsPurchase.count({ where: whereConditions });
 
-  const [count, totalQuantity] = await Promise.all([
+  const [count, totalQuantity, totalAmount] = await Promise.all([
     AssetsPurchase.count({ where: whereConditions }),
     AssetsPurchase.sum("quantity", { where: whereConditions }),
+    AssetsPurchase.sum("total", { where: whereConditions }),
   ]);
 
   return {
-    meta: { count, totalQuantity: totalQuantity || 0, page, limit },
+    meta: {
+      count,
+      totalQuantity: totalQuantity || 0,
+      totalAmount: totalAmount || 0,
+      page,
+      limit,
+    },
     data: result,
   };
 };

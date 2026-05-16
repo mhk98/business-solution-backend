@@ -132,17 +132,14 @@ const moveItemFromInventory = async (item, transaction) => {
   if (!inventory) throw new ApiError(404, "Received product not found");
 
   const oldQty = toNumber(inventory.quantity);
-  // if (oldQty < returnQty) {
-  //   throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
-  // }
 
   const finalVariants = incomingVariants.length
-    ? subtractVariants(inventory.variants, incomingVariants)
+    ? mergeVariants(inventory.variants, incomingVariants)
     : inventory.variants;
 
   await inventory.update(
     {
-      quantity: oldQty - returnQty,
+      quantity: oldQty + returnQty,
       variants: finalVariants,
     },
     { transaction },
@@ -171,8 +168,8 @@ const restoreItemsToInventory = async (items = [], transaction) => {
 
     await inventory.update(
       {
-        quantity: toNumber(inventory.quantity) + toNumber(item.quantity),
-        variants: mergeVariants(
+        quantity: toNumber(inventory.quantity) - toNumber(item.quantity),
+        variants: subtractVariants(
           inventory.variants,
           parseVariants(item.variants),
         ),
@@ -184,7 +181,7 @@ const restoreItemsToInventory = async (items = [], transaction) => {
 
 const insertIntoDB = async (data) => {
   const bulkItems = getBulkItems(data);
-  if (bulkItems.length > 1) {
+  if (bulkItems.length) {
     return insertBulkIntoDB(data, bulkItems);
   }
 
@@ -271,7 +268,7 @@ const insertIntoDB = async (data) => {
 
     const finalQuantity = oldQty + returnQty;
     const finalVariants = incomingVariants.length
-      ? subtractVariants(inventory.variants, incomingVariants)
+      ? mergeVariants(inventory.variants, incomingVariants)
       : inventory.variants;
     await InventoryMaster.update(
       {
@@ -521,7 +518,10 @@ const deleteIdFromDB = async (id) => {
     if (!received) throw new ApiError(404, "Received product not found");
 
     const finalQuantity = Number(received.quantity || 0) - qty;
-    const finalVariants = mergeVariants(received.variants, ret.variants);
+    const retVariants = parseVariants(ret.variants);
+    const finalVariants = retVariants.length
+      ? subtractVariants(received.variants, retVariants)
+      : received.variants;
 
     // 3) stock ফিরিয়ে নেওয়া হবে InventoryMaster থেকে
     await InventoryMaster.update(
@@ -732,7 +732,141 @@ const deleteIdFromDB = async (id) => {
 //   });
 // };
 
+const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
+  const { note, status, date, userId, supplierId, warehouseId, actorRole } =
+    payload;
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const inputDateStr = String(date || "").slice(0, 10);
+
+  return db.sequelize.transaction(async (t) => {
+    const existing = await ReturnProduct.findOne({
+      where: { Id: id },
+      attributes: [
+        "Id",
+        "note",
+        "status",
+        "quantity",
+        "sale_price",
+        "variants",
+        "productId",
+        "items",
+      ],
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+
+    if (!existing) return 0;
+
+    const oldNote = String(existing.note || "").trim();
+    const newNote = String(note || "").trim();
+    const noteTriggersPending = Boolean(newNote) && newNote !== oldNote;
+    const dateTriggersPending =
+      Boolean(inputDateStr) && inputDateStr !== todayStr;
+
+    const inputStatus = String(status || "").trim();
+    let finalStatus = existing.status || "Pending";
+    const isPrivileged = actorRole === "superAdmin" || actorRole === "admin";
+
+    if (isPrivileged) {
+      finalStatus = inputStatus || finalStatus;
+    } else if (dateTriggersPending || noteTriggersPending) {
+      finalStatus = "Pending";
+    } else {
+      finalStatus = inputStatus || finalStatus;
+    }
+
+    const oldItems = parseItems(existing.items);
+    const restoreItems = oldItems.length
+      ? oldItems
+      : [
+          {
+            productId: existing.productId,
+            receivedId: existing.productId,
+            quantity: existing.quantity,
+            variants: existing.variants,
+          },
+        ];
+
+    await restoreItemsToInventory(restoreItems, t);
+
+    const nextItems = preparedItems.length ? preparedItems : oldItems;
+    const normalizedItems = [];
+    for (const item of nextItems) {
+      normalizedItems.push(await moveItemFromInventory(item, t));
+    }
+
+    const summary = summarizeItems(normalizedItems);
+    const data = {
+      name: normalizedItems.map((item) => item.name).join(", "),
+      supplierId,
+      warehouseId,
+      quantity: summary.quantity,
+      variants: [],
+      items: normalizedItems,
+      purchase_price: summary.purchase_price,
+      sale_price: summary.sale_price,
+      productId: normalizedItems[0]?.productId || null,
+      note: finalStatus === "Approved" ? null : newNote || null,
+      status: finalStatus,
+      date: inputDateStr || undefined,
+    };
+
+    const [updatedCount] = await ReturnProduct.update(data, {
+      where: { Id: id },
+      transaction: t,
+    });
+
+    const users = await User.findAll({
+      attributes: ["Id", "role"],
+      where: {
+        Id: { [Op.ne]: userId },
+        role: { [Op.in]: ["superAdmin", "admin", "inventor"] },
+      },
+      transaction: t,
+    });
+
+    if (!users.length) return updatedCount;
+
+    const message = resolveApprovalNotificationMessage({
+      status: finalStatus,
+      note: newNote,
+      date: inputDateStr,
+      approvedMessage: "Received product request approved",
+      fallbackMessage: "Please approved my request",
+    });
+
+    await Promise.all(
+      users.map((u) =>
+        Notification.create(
+          {
+            userId: u.Id,
+            message,
+            url: `/${process.env.APP_BASE_URL}/purchase-requisition`,
+          },
+          { transaction: t },
+        ),
+      ),
+    );
+
+    return updatedCount;
+  });
+};
+
 const updateOneFromDB = async (id, payload) => {
+  const incomingBulkItems = getBulkItems(payload);
+  if (incomingBulkItems.length) {
+    return updateBulkOneFromDB(id, payload, incomingBulkItems);
+  }
+
+  const existingItemsRow = await ReturnProduct.findOne({
+    where: { Id: id },
+    attributes: ["Id", "items"],
+  });
+  if (parseItems(existingItemsRow?.items).length > 0) {
+    return updateBulkOneFromDB(id, payload, incomingBulkItems);
+  }
+
   const {
     quantity,
     purchase_price,
@@ -827,10 +961,13 @@ const updateOneFromDB = async (id, payload) => {
     let targetInv = oldInv;
 
     if (productChanged) {
+      // undo old return from old product
       await oldInv.update(
         {
           quantity: toNumber(oldInv.quantity) - oldQty,
-          variants: mergeVariants(oldInv.variants, existingVariants),
+          variants: existingVariants.length
+            ? subtractVariants(oldInv.variants, existingVariants)
+            : oldInv.variants,
         },
         { transaction: t },
       );
@@ -838,11 +975,12 @@ const updateOneFromDB = async (id, payload) => {
       targetInv = await findInventoryByRequestReference(newProductId, t);
       if (!targetInv) throw new ApiError(404, "Product not found in inventory");
 
+      // apply new return to new product
       await targetInv.update(
         {
           quantity: toNumber(targetInv.quantity) + nextQty,
           variants: incomingVariants.length
-            ? subtractVariants(targetInv.variants, incomingVariants)
+            ? mergeVariants(targetInv.variants, incomingVariants)
             : targetInv.variants,
         },
         { transaction: t },
@@ -851,9 +989,14 @@ const updateOneFromDB = async (id, payload) => {
       const diff = nextQty - oldQty;
 
       let updatedVariants = oldInv.variants;
-      if (incomingVariants.length > 0) {
-        const restored = mergeVariants(oldInv.variants, existingVariants);
-        updatedVariants = subtractVariants(restored, incomingVariants);
+      if (existingVariants.length > 0 || incomingVariants.length > 0) {
+        // undo old return's contribution, then apply new return's contribution
+        const withOldRemoved = existingVariants.length
+          ? subtractVariants(oldInv.variants, existingVariants)
+          : oldInv.variants;
+        updatedVariants = incomingVariants.length
+          ? mergeVariants(withOldRemoved, incomingVariants)
+          : withOldRemoved;
       }
 
       await oldInv.update(
