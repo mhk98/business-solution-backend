@@ -359,7 +359,7 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     sumField(Payable, "amount", transactionDateWhere),
     sumQuantityValue(InventoryMaster, snapshotWhere, "purchase_price"),
     sumQuantityValue(InventoryMaster, snapshotWhere, "sale_price"),
-    sumField(DamageStock, "purchase_price", transactionDateWhere),
+    sumQuantityValue(DamageStock, snapshotWhere, "purchase_price"),
     sumField(DamageReparingStock, "purchase_price", transactionDateWhere),
     sumField(CashInOut, "amount", {
       ...transactionDateWhere,

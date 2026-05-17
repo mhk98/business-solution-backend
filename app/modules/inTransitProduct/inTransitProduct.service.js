@@ -727,7 +727,141 @@ const deleteIdFromDB = async (id) => {
 //   });
 // };
 
+const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
+  const { note, status, date, userId, supplierId, warehouseId, actorRole } =
+    payload;
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const inputDateStr = String(date || "").slice(0, 10);
+
+  return db.sequelize.transaction(async (t) => {
+    const existing = await InTransitProduct.findOne({
+      where: { Id: id },
+      attributes: [
+        "Id",
+        "note",
+        "status",
+        "quantity",
+        "sale_price",
+        "variants",
+        "productId",
+        "items",
+      ],
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+
+    if (!existing) return 0;
+
+    const oldNote = String(existing.note || "").trim();
+    const newNote = String(note || "").trim();
+    const noteTriggersPending = Boolean(newNote) && newNote !== oldNote;
+    const dateTriggersPending =
+      Boolean(inputDateStr) && inputDateStr !== todayStr;
+
+    const inputStatus = String(status || "").trim();
+    let finalStatus = existing.status || "Pending";
+    const isPrivileged = actorRole === "superAdmin" || actorRole === "admin";
+
+    if (isPrivileged) {
+      finalStatus = inputStatus || finalStatus;
+    } else if (dateTriggersPending || noteTriggersPending) {
+      finalStatus = "Pending";
+    } else {
+      finalStatus = inputStatus || finalStatus;
+    }
+
+    const oldItems = parseItems(existing.items);
+    const restoreItems = oldItems.length
+      ? oldItems
+      : [
+          {
+            productId: existing.productId,
+            receivedId: existing.productId,
+            quantity: existing.quantity,
+            variants: existing.variants,
+          },
+        ];
+
+    await restoreItemsToInventory(restoreItems, t);
+
+    const nextItems = preparedItems.length ? preparedItems : oldItems;
+    const normalizedItems = [];
+    for (const item of nextItems) {
+      normalizedItems.push(await moveItemFromInventory(item, t));
+    }
+
+    const summary = summarizeItems(normalizedItems);
+    const data = {
+      name: normalizedItems.map((item) => item.name).join(", "),
+      supplierId,
+      warehouseId,
+      quantity: summary.quantity,
+      variants: [],
+      items: normalizedItems,
+      purchase_price: summary.purchase_price,
+      sale_price: summary.sale_price,
+      productId: normalizedItems[0]?.productId || null,
+      note: finalStatus === "Approved" ? null : newNote || null,
+      status: finalStatus,
+      date: inputDateStr || undefined,
+    };
+
+    const [updatedCount] = await InTransitProduct.update(data, {
+      where: { Id: id },
+      transaction: t,
+    });
+
+    const users = await User.findAll({
+      attributes: ["Id", "role"],
+      where: {
+        Id: { [Op.ne]: userId },
+        role: { [Op.in]: ["superAdmin", "admin", "inventor"] },
+      },
+      transaction: t,
+    });
+
+    if (!users.length) return updatedCount;
+
+    const message = resolveApprovalNotificationMessage({
+      status: finalStatus,
+      note: newNote,
+      date: inputDateStr,
+      approvedMessage: "Received product request approved",
+      fallbackMessage: "Please approved my request",
+    });
+
+    await Promise.all(
+      users.map((u) =>
+        Notification.create(
+          {
+            userId: u.Id,
+            message,
+            url: `/${process.env.APP_BASE_URL}/purchase-requisition`,
+          },
+          { transaction: t },
+        ),
+      ),
+    );
+
+    return updatedCount;
+  });
+};
+
 const updateOneFromDB = async (id, payload) => {
+  const incomingBulkItems = getBulkItems(payload);
+  if (incomingBulkItems.length) {
+    return updateBulkOneFromDB(id, payload, incomingBulkItems);
+  }
+
+  const existingItemsRow = await InTransitProduct.findOne({
+    where: { Id: id },
+    attributes: ["Id", "items"],
+  });
+  if (parseItems(existingItemsRow?.items).length > 0) {
+    return updateBulkOneFromDB(id, payload, incomingBulkItems);
+  }
+
   const {
     quantity,
     purchase_price,
