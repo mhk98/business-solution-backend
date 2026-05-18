@@ -90,7 +90,7 @@ const notifyApprovedAssetsRequisition = async (req) => {
 };
 
 const applyApprovalWorkflow =
-  ({ modelKey, entityLabel }) =>
+  ({ modelKey, entityLabel, updatePrivilegedRoles }) =>
   async (req, res, next) => {
     try {
       const Model = db[modelKey];
@@ -122,7 +122,9 @@ const applyApprovalWorkflow =
       }
 
       if (req.method === "PUT" || req.method === "PATCH") {
-        const nextBody = applyUpdateWorkflow(req.body || {}, req.user || {});
+        const nextBody = applyUpdateWorkflow(req.body || {}, req.user || {}, {
+          privilegedRoles: updatePrivilegedRoles,
+        });
 
         if (!hasAttribute(Model, "status")) {
           delete nextBody.status;

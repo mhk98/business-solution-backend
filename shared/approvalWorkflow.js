@@ -3,7 +3,13 @@ const { ENUM_USER_ROLE } = require("../app/enums/user");
 const PRIVILEGED_ROLES = [ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN];
 const DEFAULT_DELETE_APPROVAL_NOTE = "Delete requested";
 
-const isPrivilegedRole = (role) => PRIVILEGED_ROLES.includes(role);
+const getPrivilegedRoles = (options = {}) =>
+  Array.isArray(options.privilegedRoles) && options.privilegedRoles.length
+    ? options.privilegedRoles
+    : PRIVILEGED_ROLES;
+
+const isPrivilegedRole = (role, options = {}) =>
+  getPrivilegedRoles(options).includes(role);
 
 const sanitizeApprovalNote = (value) => {
   const note = String(value || "").trim();
@@ -53,8 +59,8 @@ const applyCreateWorkflow = (payload = {}, user = {}, options = {}) => {
   };
 };
 
-const applyUpdateWorkflow = (payload = {}, user = {}) => {
-  if (isPrivilegedRole(user.role)) {
+const applyUpdateWorkflow = (payload = {}, user = {}, options = {}) => {
+  if (isPrivilegedRole(user.role, options)) {
     return {
       ...payload,
       status: payload.status || "Active",

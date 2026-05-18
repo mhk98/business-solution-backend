@@ -37,6 +37,12 @@ router.put(
   applyApprovalWorkflow({
     modelKey: "purchaseRequisition",
     entityLabel: "Purchase Requisition",
+    updatePrivilegedRoles: [
+      ENUM_USER_ROLE.SUPER_ADMIN,
+      ENUM_USER_ROLE.ADMIN,
+      ENUM_USER_ROLE.ACCOUNTANT,
+      ENUM_USER_ROLE.INVENTOR,
+    ],
   }),
   PurchaseRequisitionController.updateOneFromDB,
 );

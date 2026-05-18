@@ -19,6 +19,12 @@ const Supplier = db.supplier;
 const Warehouse = db.warehouse;
 const CashInOut = db.cashInOut;
 const SupplierHistory = db.supplierHistory;
+const PURCHASE_REQUISITION_STATUS_UPDATE_ROLES = [
+  "superAdmin",
+  "admin",
+  "accountant",
+  "inventor",
+];
 
 const normalizeOptionalText = (value) => {
   if (value === undefined || value === null) return null;
@@ -570,7 +576,8 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
   const inputStatus = String(status || "").trim();
 
   let finalStatus = existing.status || "Pending";
-  const isPrivileged = actorRole === "superAdmin" || actorRole === "admin";
+  const isPrivileged =
+    PURCHASE_REQUISITION_STATUS_UPDATE_ROLES.includes(actorRole);
   if (isPrivileged) {
     finalStatus = inputStatus || finalStatus;
   } else if (dateTriggersPending || noteTriggersPending) {
@@ -805,7 +812,8 @@ const updateOneFromDB = async (id, payload) => {
 
   let finalStatus = existing.status || "Pending";
 
-  const isPrivileged = actorRole === "superAdmin" || actorRole === "admin";
+  const isPrivileged =
+    PURCHASE_REQUISITION_STATUS_UPDATE_ROLES.includes(actorRole);
 
   if (isPrivileged) {
     // ✅ superAdmin/admin: যা পাঠাবে সেটাই

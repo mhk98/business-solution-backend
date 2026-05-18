@@ -17,6 +17,7 @@ const User = db.user;
 const Supplier = db.supplier;
 const Warehouse = db.warehouse;
 const InventoryMaster = db.inventoryMaster;
+const IN_TRANSIT_STATUS_UPDATE_ROLES = ["superAdmin", "admin", "accountant"];
 
 const parseItems = (value) => {
   if (Array.isArray(value)) return value;
@@ -74,7 +75,10 @@ const summarizeItems = (items = []) => ({
     (total, item) => total + toNumber(item.purchase_price),
     0,
   ),
-  sale_price: items.reduce((total, item) => total + toNumber(item.sale_price), 0),
+  sale_price: items.reduce(
+    (total, item) => total + toNumber(item.sale_price),
+    0,
+  ),
 });
 
 const findInventoryByStoredReference = async (receivedId, transaction) => {
@@ -110,7 +114,9 @@ const moveItemFromInventory = async (item, transaction) => {
   const rid = Number(item.receivedId ?? item.productId);
   const incomingVariants = normalizeItemVariants(item);
   const customSalePrice =
-    item.sale_price === undefined || item.sale_price === null || item.sale_price === ""
+    item.sale_price === undefined ||
+    item.sale_price === null ||
+    item.sale_price === ""
       ? null
       : Number(item.sale_price);
 
@@ -129,9 +135,9 @@ const moveItemFromInventory = async (item, transaction) => {
   if (!inventory) throw new ApiError(404, "Received product not found");
 
   const oldQty = toNumber(inventory.quantity);
-  if (oldQty < returnQty) {
-    throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
-  }
+  // if (oldQty < returnQty) {
+  //   throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
+  // }
 
   const finalVariants = incomingVariants.length
     ? subtractVariants(inventory.variants, incomingVariants)
@@ -169,7 +175,10 @@ const restoreItemsToInventory = async (items = [], transaction) => {
     await inventory.update(
       {
         quantity: toNumber(inventory.quantity) + toNumber(item.quantity),
-        variants: mergeVariants(inventory.variants, parseVariants(item.variants)),
+        variants: mergeVariants(
+          inventory.variants,
+          parseVariants(item.variants),
+        ),
       },
       { transaction },
     );
@@ -226,9 +235,9 @@ const insertIntoDB = async (data) => {
     if (!inventory) throw new ApiError(404, "Received product not found");
 
     const oldQty = Number(inventory.quantity || 0);
-    if (oldQty < returnQty) {
-      throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
-    }
+    // if (oldQty < returnQty) {
+    //   throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
+    // }
 
     // const perUnitPurchase =
     //   oldQty > 0 ? Number(inventory.purchase_price || 0) / oldQty : 0;
@@ -761,7 +770,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
 
     const inputStatus = String(status || "").trim();
     let finalStatus = existing.status || "Pending";
-    const isPrivileged = actorRole === "superAdmin" || actorRole === "admin";
+    const isPrivileged = IN_TRANSIT_STATUS_UPDATE_ROLES.includes(actorRole);
 
     if (isPrivileged) {
       finalStatus = inputStatus || finalStatus;
@@ -928,7 +937,7 @@ const updateOneFromDB = async (id, payload) => {
 
     let finalStatus = existing.status || "Pending";
 
-    const isPrivileged = actorRole === "superAdmin" || actorRole === "admin";
+    const isPrivileged = IN_TRANSIT_STATUS_UPDATE_ROLES.includes(actorRole);
 
     if (isPrivileged) {
       // ✅ superAdmin/admin: যা পাঠাবে সেটাই
