@@ -111,9 +111,23 @@ const buildCashInOutPayload = ({ amount, payload, existing }) => ({
     payload?.employeeId ?? existing?.employeeId,
   ),
   bookId: normalizeOptionalForeignKey(payload?.bookId ?? existing?.bookId),
+  paymentMode: payload?.paymentMode ?? existing?.paymentMode ?? "",
+  bankName:
+    (payload?.paymentMode ?? existing?.paymentMode) === "Bank"
+      ? payload?.bankName ?? existing?.bankName ?? ""
+      : "",
+  bankAccount:
+    (payload?.paymentMode ?? existing?.paymentMode) === "Bank"
+      ? payload?.bankAccount ?? existing?.bankAccount ?? null
+      : null,
   paymentStatus: "CashOut",
   amount,
   status: "Active",
+  category: normalizeOptionalForeignKey(
+    payload?.employeeId ?? existing?.employeeId,
+  )
+    ? "Employee Advance"
+    : undefined,
   date: payload?.date ?? existing?.date ?? new Date(),
   note: payload?.note ?? existing?.note ?? "",
 });
@@ -139,7 +153,9 @@ const findMatchingSupplierHistory = async (entry, transaction) => {
 };
 
 const findMatchingCashInOut = async (entry, transaction) => {
-  if (getLedgerHistoryEntryType(entry) !== "Paid") return null;
+  if (getLedgerHistoryEntryType(entry) !== "Paid" && !entry?.employeeId) {
+    return null;
+  }
   if (!entry?.supplierId && !entry?.employeeId) return null;
 
   const where = {
@@ -171,6 +187,9 @@ const insertIntoDB = async (payload) => {
     bookId,
     supplierId,
     employeeId,
+    paymentMode,
+    bankName,
+    bankAccount,
   } = payload;
 
   console.log("payload", payload);
@@ -188,6 +207,9 @@ const insertIntoDB = async (payload) => {
     bookId: normalizeOptionalForeignKey(bookId),
     supplierId: normalizeOptionalForeignKey(supplierId),
     employeeId: normalizeOptionalForeignKey(employeeId),
+    paymentMode,
+    bankName,
+    bankAccount,
     note,
     date,
   };
@@ -223,10 +245,14 @@ const insertIntoDB = async (payload) => {
             {
               supplierId,
               bookId,
+              paymentMode,
+              bankName: paymentMode === "Bank" ? bankName || "" : "",
+              bankAccount: paymentMode === "Bank" ? bankAccount || null : null,
               paymentStatus: "CashOut",
               amount: paidAmount,
               status: "Active",
               date,
+              note: note || "",
             },
             { transaction: t },
           );
@@ -235,21 +261,23 @@ const insertIntoDB = async (payload) => {
       }
 
       if (employeeId) {
-        // CashInOut — শুধু পরিশোধ (Paid) হলে CashOut। বাকি যোগ (Unpaid) হলে কোনো cash movement নেই।
-        if (cashType === "Paid") {
-          const cashInOut = await CashInOut.create(
-            {
-              employeeId,
-              bookId,
-              paymentStatus: "CashOut",
-              amount: paidAmount,
-              status: "Active",
-              date,
-            },
-            { transaction: t },
-          );
-          cashInOutId = cashInOut.Id;
-        }
+        const cashInOut = await CashInOut.create(
+          {
+            employeeId,
+            bookId,
+            paymentMode,
+            bankName: paymentMode === "Bank" ? bankName || "" : "",
+          bankAccount: paymentMode === "Bank" ? bankAccount || null : null,
+          paymentStatus: "CashOut",
+          amount: cashType === "Paid" ? paidAmount : unpaidAmount,
+          status: "Active",
+          category: "Employee Advance",
+          date,
+          note: note || "",
+        },
+          { transaction: t },
+        );
+        cashInOutId = cashInOut.Id;
       }
 
     data.supplierHistoryId = supplierHistoryId;
@@ -434,6 +462,15 @@ const updateOneFromDB = async (id, payload) => {
         payload?.employeeId ?? existing.employeeId,
       ),
       bookId: normalizeOptionalForeignKey(payload?.bookId ?? existing.bookId),
+      paymentMode: payload?.paymentMode ?? existing.paymentMode ?? "",
+      bankName:
+        (payload?.paymentMode ?? existing.paymentMode) === "Bank"
+          ? payload?.bankName ?? existing.bankName ?? ""
+          : "",
+      bankAccount:
+        (payload?.paymentMode ?? existing.paymentMode) === "Bank"
+          ? payload?.bankAccount ?? existing.bankAccount ?? null
+          : null,
       status: nextEntryType,
       paidAmount: nextEntryType === "Paid" ? nextAmount : 0,
       unpaidAmount: nextEntryType === "Unpaid" ? nextAmount : 0,
@@ -481,7 +518,7 @@ const updateOneFromDB = async (id, payload) => {
       previousCashInOut || (await findMatchingCashInOut(existing, t));
 
     let nextCashInOutId = existing.cashInOutId || null;
-    if (nextEntryType === "Paid") {
+    if (nextEntryType === "Paid" || normalizedPayload.employeeId) {
       const cashPayload = buildCashInOutPayload({
         amount: nextAmount,
         payload: normalizedPayload,

@@ -7,17 +7,20 @@ const CashInOut = db.cashInOut;
 const Notification = db.notification;
 const User = db.user;
 const SupplierHistory = db.supplierHistory;
+const Loan = db.loan;
 
 const buildLoanWhere = (filters = {}, extraConditions = []) => {
-  const { searchTerm, startDate, endDate, lender } = filters;
+  const { searchTerm, startDate, endDate, lender, loanId } = filters;
   const conditions = [
     db.Sequelize.where(db.Sequelize.fn("LOWER", db.Sequelize.col("category")), {
       [Op.eq]: "loan",
     }),
-    { lender: { [Op.ne]: null } },
-    { lender: { [Op.ne]: "" } },
     ...extraConditions,
   ];
+
+  if (loanId) {
+    conditions.push({ loanId: { [Op.eq]: loanId } });
+  }
 
   if (lender) {
     conditions.push({ lender: { [Op.eq]: lender } });
@@ -420,6 +423,7 @@ const getAllFromDB = async (filters, options) => {
 
   const data = await CashInOut.findAll({
     where: listWhere,
+    include: [{ model: Loan, as: "loan", required: false }],
     offset: skip,
     limit,
     paranoid: true,
@@ -458,12 +462,14 @@ const getLoanSummaries = async (filters, options) => {
 
   const data = await CashInOut.findAll({
     attributes: [
+      "loanId",
       "lender",
       ...loanSumAttributes,
       [db.Sequelize.fn("MAX", db.Sequelize.col("date")), "lastDate"],
     ],
     where,
-    group: ["lender"],
+    include: [{ model: Loan, as: "loan", attributes: [], required: false }],
+    group: ["loanId", "lender"],
     order: [[db.Sequelize.fn("MAX", db.Sequelize.col("date")), "DESC"]],
     offset: skip,
     limit,
@@ -500,6 +506,7 @@ const getLoanSummaries = async (filters, options) => {
       const given = Number(row.totalLoanGiven || 0);
 
       return {
+        loanId: row.loanId,
         lender: row.lender,
         totalLoanTaken: taken,
         totalLoanGiven: given,
@@ -510,13 +517,19 @@ const getLoanSummaries = async (filters, options) => {
   };
 };
 
-const getLoanHistory = async (lender, filters, options) => {
+const getLoanHistory = async (loanIdentifier, filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
-  const where = buildLoanWhere({ ...filters, lender });
+  const identifier = String(loanIdentifier || "").trim();
+  const isNumericId = identifier && /^\d+$/.test(identifier);
+  const where = buildLoanWhere({
+    ...filters,
+    ...(isNumericId ? { loanId: Number(identifier) } : { lender: identifier }),
+  });
 
   const [data, count, totals] = await Promise.all([
     CashInOut.findAll({
       where,
+      include: [{ model: Loan, as: "loan", required: false }],
       offset: skip,
       limit,
       paranoid: true,

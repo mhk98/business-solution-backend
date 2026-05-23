@@ -203,6 +203,8 @@ db.supplier = require("../app/modules/supplier/supplier.model")(
   DataTypes,
 );
 
+db.loan = require("../app/modules/loan/loan.model")(db.sequelize, DataTypes);
+
 db.supplierHistory =
   require("../app/modules/supplierHistory/supplierHistory.model")(
     db.sequelize,
@@ -820,6 +822,14 @@ db.employee.belongsTo(db.department, {
   foreignKey: "departmentId",
   as: "department",
 });
+db.designation.hasMany(db.employee, {
+  foreignKey: "designationId",
+  as: "payrolls",
+});
+db.employee.belongsTo(db.designation, {
+  foreignKey: "designationId",
+  as: "designation",
+});
 
 db.employeeList.hasMany(db.attendanceEnrollment, {
   foreignKey: "employeeId",
@@ -979,6 +989,9 @@ db.ledgerHistory.belongsTo(db.employeeList, {
 
 db.supplier.hasMany(db.cashInOut, { foreignKey: "supplierId" });
 db.cashInOut.belongsTo(db.supplier, { foreignKey: "supplierId" });
+
+db.loan.hasMany(db.cashInOut, { foreignKey: "loanId" });
+db.cashInOut.belongsTo(db.loan, { foreignKey: "loanId", as: "loan" });
 
 db.marketingBook.hasMany(db.marketingExpense, { foreignKey: "bookId" });
 db.marketingExpense.belongsTo(db.marketingBook, { foreignKey: "bookId" });
@@ -1304,6 +1317,10 @@ const ensureEmployeeColumns = async () => {
     allowNull: true,
   });
   await maybeAddColumn("departmentId", {
+    type: DataTypes.INTEGER(10),
+    allowNull: true,
+  });
+  await maybeAddColumn("designationId", {
     type: DataTypes.INTEGER(10),
     allowNull: true,
   });
@@ -1828,6 +1845,23 @@ const ensureCreditLedgerColumns = async () => {
     });
   }
 
+  const ledgerStringColumns = ["paymentMode", "bankName"];
+  for (const columnName of ledgerStringColumns) {
+    if (!ledgerTableDefinition[columnName]) {
+      await queryInterface.addColumn(ledgerTableName, columnName, {
+        type: DataTypes.STRING,
+        allowNull: true,
+      });
+    }
+  }
+
+  if (!ledgerTableDefinition.bankAccount) {
+    await queryInterface.addColumn(ledgerTableName, "bankAccount", {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    });
+  }
+
   const ledgerHistoryTableName = db.ledgerHistory.getTableName();
   const ledgerHistoryTableDefinition = await queryInterface.describeTable(
     ledgerHistoryTableName,
@@ -1842,9 +1876,77 @@ const ensureCreditLedgerColumns = async () => {
     }
   };
 
+  const maybeAddLedgerHistoryStringColumn = async (columnName) => {
+    if (!ledgerHistoryTableDefinition[columnName]) {
+      await queryInterface.addColumn(ledgerHistoryTableName, columnName, {
+        type: DataTypes.STRING,
+        allowNull: true,
+      });
+    }
+  };
+
   await maybeAddLedgerHistoryColumn("bookId");
+  await maybeAddLedgerHistoryStringColumn("paymentMode");
+  await maybeAddLedgerHistoryStringColumn("bankName");
+  if (!ledgerHistoryTableDefinition.bankAccount) {
+    await queryInterface.addColumn(ledgerHistoryTableName, "bankAccount", {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    });
+  }
   await maybeAddLedgerHistoryColumn("supplierHistoryId");
   await maybeAddLedgerHistoryColumn("cashInOutId");
+};
+
+const ensureCashInOutLoanColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.cashInOut.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.loanId) {
+    await queryInterface.addColumn(tableName, "loanId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+};
+
+const syncLoanRowsFromCashInOut = async () => {
+  const loanRows = await db.cashInOut.findAll({
+    attributes: [
+      [db.Sequelize.fn("DISTINCT", db.Sequelize.col("lender")), "lender"],
+    ],
+    where: {
+      category: { [Op.like]: "loan" },
+      lender: { [Op.ne]: null },
+    },
+    raw: true,
+    paranoid: false,
+  });
+
+  await Promise.all(
+    loanRows
+      .map((row) => String(row.lender || "").trim())
+      .filter(Boolean)
+      .map(async (loanName) => {
+        const [loan] = await db.loan.findOrCreate({
+          where: { name: loanName },
+          defaults: { name: loanName, status: "Active" },
+        });
+
+        await db.cashInOut.update(
+          { loanId: loan.Id },
+          {
+            where: {
+              category: { [Op.like]: "loan" },
+              lender: loanName,
+              loanId: null,
+            },
+            paranoid: false,
+          },
+        );
+      }),
+  );
 };
 
 const ensureUserStatusColumn = async () => {
@@ -1865,6 +1967,38 @@ const ensureUserStatusColumn = async () => {
      SET status = 'Active'
      WHERE status IS NULL OR TRIM(status) = ''`,
   );
+};
+
+const ensureUserRoleColumn = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.user.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+  const roleValues = [
+    "superAdmin",
+    "admin",
+    "marketer",
+    "leader",
+    "inventor",
+    "accountant",
+    "logistics",
+    "up",
+    "cs",
+    "staff",
+    "employee",
+    "user",
+  ];
+  const definition = {
+    type: DataTypes.ENUM(...roleValues),
+    allowNull: true,
+    defaultValue: "user",
+  };
+
+  if (!tableDefinition.role) {
+    await queryInterface.addColumn(tableName, "role", definition);
+    return;
+  }
+
+  await queryInterface.changeColumn(tableName, "role", definition);
 };
 
 const ensureUserDocumentColumns = async () => {
@@ -2134,6 +2268,7 @@ db.sequelize
     await ensureDailyWorkReportTaskColumns();
     await ensureKPIColumns();
     await ensureAdsCampaignKPIColumns();
+    await ensureUserRoleColumn();
     await ensureUserStatusColumn();
     await ensureUserDocumentColumns();
     await ensureApprovalColumns("department");
@@ -2143,20 +2278,35 @@ db.sequelize
     await ensureApprovalColumns("shift");
     await ensureApprovalColumns("holiday");
     await Promise.all(
-      ["item", "product", "supplier", "warehouse", "profitLoss", "salary"].map(
-        (modelKey) => ensureStatusAndNoteColumns(modelKey),
-      ),
+      [
+        "item",
+        "product",
+        "supplier",
+        "loan",
+        "warehouse",
+        "profitLoss",
+        "salary",
+      ].map((modelKey) => ensureStatusAndNoteColumns(modelKey)),
     );
     await Promise.all(
-      ["receivedProduct", "inTransitProduct", "returnProduct"].map((modelKey) =>
-        ensureBatchIdColumn(modelKey),
-      ),
+      [
+        "receivedProduct",
+        "inTransitProduct",
+        "returnProduct",
+        "damageProduct",
+        "damageRepair",
+        "damageRepaired",
+      ].map((modelKey) => ensureBatchIdColumn(modelKey)),
     );
     await ensureReceivedProductItemsColumn();
     await Promise.all(
-      ["inTransitProduct", "returnProduct"].map((modelKey) =>
-        ensureInventoryMovementItemsColumn(modelKey),
-      ),
+      [
+        "inTransitProduct",
+        "returnProduct",
+        "damageProduct",
+        "damageRepair",
+        "damageRepaired",
+      ].map((modelKey) => ensureInventoryMovementItemsColumn(modelKey)),
     );
     await ensureProfitLossModeColumn();
     await Promise.all(
@@ -2174,6 +2324,8 @@ db.sequelize
       ),
     );
     await ensureCreditLedgerColumns();
+    await ensureCashInOutLoanColumns();
+    await syncLoanRowsFromCashInOut();
     await ensureInventoryMinimumStockColumn();
     await ensureAssetsStockColumns();
     await Promise.all(

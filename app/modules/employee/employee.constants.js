@@ -3,7 +3,9 @@ const EmployeeFilterAbleFileds = [
   "startDate",
   "endDate",
   "name",
+  "employeeListId",
   "departmentId",
+  "designationId",
   "status",
 ];
 

@@ -13,12 +13,25 @@ const LedgerHistory = db.ledgerHistory;
 const CashInOut = db.cashInOut;
 const EmployeeList = db.employeeList;
 const Department = db.department;
+const Designation = db.designation;
 
 const employeeInclude = [
+  {
+    model: EmployeeList,
+    as: "employeeProfile",
+    attributes: ["Id", "name", "employee_id", "employeeCode", "designationId"],
+    required: false,
+  },
   {
     model: Department,
     as: "department",
     attributes: ["Id", "name", "code", "status"],
+    required: false,
+  },
+  {
+    model: Designation,
+    as: "designation",
+    attributes: ["Id", "name", "code", "status", "departmentId"],
     required: false,
   },
 ];
@@ -122,48 +135,51 @@ const insertIntoDB = async (payload) => {
     userId,
     employeeListId,
     departmentId,
+    designationId,
     date,
   } = payload;
 
   console.log("employeeData", payload);
   const finalStatus = String(status || "").trim() || "Pending";
 
-  const data = {
-    name,
-    employee_id,
-    basic_salary,
-    incentive,
-    holiday_payment,
-    total_salary,
-    advance,
-    late,
-    early_leave,
-    absent,
-    friday_absent,
-    unapproval_absent,
-    net_salary,
-    note,
-    remarks,
-    status: finalStatus,
-    userId,
-    employeeListId,
-    departmentId: normalizeOptionalId(departmentId),
-    bookId: normalizeOptionalId(bookId),
-    date,
-  };
-
   return db.sequelize.transaction(async (t) => {
+    const resolvedEmployeeListId = await resolveEmployeeListId({
+      employeeListId,
+      employee_id,
+      transaction: t,
+    });
+
+    const data = {
+      name,
+      employee_id,
+      basic_salary,
+      incentive,
+      holiday_payment,
+      total_salary,
+      advance,
+      late,
+      early_leave,
+      absent,
+      friday_absent,
+      unapproval_absent,
+      net_salary,
+      note,
+      remarks,
+      status: finalStatus,
+      userId,
+      employeeListId: resolvedEmployeeListId,
+      departmentId: normalizeOptionalId(departmentId),
+      designationId: normalizeOptionalId(designationId),
+      bookId: normalizeOptionalId(bookId),
+      date,
+    };
+
     const result = await Employee.create(data, { transaction: t });
 
     if (!result) {
       throw new ApiError(500, "Failed to create employee record");
     }
 
-    const resolvedEmployeeListId = await resolveEmployeeListId({
-      employeeListId,
-      employee_id,
-      transaction: t,
-    });
     const payrollEmployeeId = resolveLedgerEmployeeId({
       employee_id,
       employeeListId: resolvedEmployeeListId,
@@ -206,7 +222,8 @@ const insertIntoDB = async (payload) => {
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
 
-  const { searchTerm, startDate, endDate, ...otherFilters } = filters;
+  const { searchTerm, startDate, endDate, employeeListId, ...otherFilters } =
+    filters;
 
   const andConditions = [];
 
@@ -217,6 +234,27 @@ const getAllFromDB = async (filters, options) => {
         [field]: { [Op.iLike]: `%${searchTerm.trim()}%` },
       })),
     });
+  }
+
+  if (employeeListId) {
+    const selectedEmployee = await EmployeeList.findOne({
+      where: { Id: employeeListId },
+      attributes: ["Id", "name", "employee_id"],
+    });
+
+    if (selectedEmployee) {
+      const employeeMatches = [{ employeeListId: selectedEmployee.Id }];
+
+      if (selectedEmployee.employee_id) {
+        employeeMatches.push({ employee_id: selectedEmployee.employee_id });
+      } else if (selectedEmployee.name) {
+        employeeMatches.push({ name: selectedEmployee.name });
+      }
+
+      andConditions.push({ [Op.or]: employeeMatches });
+    } else {
+      andConditions.push({ employeeListId: { [Op.eq]: employeeListId } });
+    }
   }
 
   // ✅ Exact filters (e.g. name)
@@ -316,6 +354,7 @@ const updateOneFromDB = async (id, payload) => {
     userId,
     employeeListId,
     departmentId,
+    designationId,
     bookId,
     date,
     actorRole,
@@ -361,6 +400,11 @@ const updateOneFromDB = async (id, payload) => {
     }
   }
 
+  const resolvedEmployeeListId = await resolveEmployeeListId({
+    employeeListId,
+    employee_id,
+  });
+
   const data = {
     name,
     employee_id,
@@ -380,8 +424,9 @@ const updateOneFromDB = async (id, payload) => {
     remarks,
     status: finalStatus,
     userId,
-    employeeListId,
+    employeeListId: resolvedEmployeeListId,
     departmentId: normalizeOptionalId(departmentId),
+    designationId: normalizeOptionalId(designationId),
     bookId: normalizeOptionalId(bookId),
   };
 

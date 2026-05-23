@@ -46,11 +46,20 @@ module.exports = (sequelize, DataTypes) => {
         defaultValue: [],
         allowNull: true,
       },
+      items: {
+        type: DataTypes.JSON,
+        defaultValue: [],
+        allowNull: true,
+      },
       note: {
         type: DataTypes.STRING,
         allowNull: true,
       },
       source: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      batchId: {
         type: DataTypes.STRING,
         allowNull: true,
       },

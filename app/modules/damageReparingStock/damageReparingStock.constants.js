@@ -5,7 +5,7 @@ const DamageReparingStockFilterAbleFileds = [
   "name",
 ];
 
-const DamageReparingStockSearchableFields = [""];
+const DamageReparingStockSearchableFields = ["name"];
 
 module.exports = {
   DamageReparingStockFilterAbleFileds,

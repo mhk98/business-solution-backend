@@ -9,6 +9,11 @@ const {
 const mergeVariants = require("../../../shared/mergeVariants");
 const parseVariants = require("../../../shared/parseVariants");
 const subtractVariants = require("../../../shared/subtractVariants");
+const {
+  getInventoryDisplayQuantity,
+  getVariantQuantityTotal,
+  hasVariantRows,
+} = require("../../../shared/variantQuantity");
 const DamageProduct = db.damageProduct;
 const Notification = db.notification;
 const User = db.user;
@@ -42,7 +47,7 @@ const findInventoryByRequestReference = async (rid, transaction) => {
 
   if (inventoryByProductId) return inventoryByProductId;
 
-  return findInventoryByStoredReference(receivedId, transaction);
+  return findInventoryByStoredReference(rid, transaction);
 };
 
 const findDamageStockByProductId = async (productId, transaction) =>
@@ -51,6 +56,222 @@ const findDamageStockByProductId = async (productId, transaction) =>
     transaction,
     lock: transaction?.LOCK?.UPDATE,
   });
+
+const parseItems = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const getBulkItems = (data = {}) => {
+  const items = parseItems(data.items);
+  if (!items.length) return [];
+
+  const { items: _items, ...commonFields } = data;
+  return items.map((item) => ({
+    ...commonFields,
+    ...item,
+  }));
+};
+
+const summarizeItems = (items = []) => ({
+  quantity: items.reduce((total, item) => total + Number(item.quantity || 0), 0),
+  purchase_price: items.reduce(
+    (total, item) => total + Number(item.purchase_price || 0),
+    0,
+  ),
+  sale_price: items.reduce(
+    (total, item) => total + Number(item.sale_price || 0),
+    0,
+  ),
+});
+
+const getVariantKey = (variant = {}) =>
+  `${String(variant.size || "")}__${String(variant.color || "")}`;
+
+const validateVariantStock = (inventoryVariants, requestedVariants) => {
+  const stockMap = new Map();
+
+  parseVariants(inventoryVariants).forEach((variant) => {
+    stockMap.set(getVariantKey(variant), Number(variant.quantity || 0));
+  });
+
+  parseVariants(requestedVariants).forEach((variant) => {
+    const requestedQty = Number(variant.quantity || 0);
+    const availableQty = Number(stockMap.get(getVariantKey(variant)) || 0);
+
+    if (requestedQty > availableQty) {
+      throw new ApiError(400, `Not enough stock. Available: ${availableQty}`);
+    }
+  });
+};
+
+const moveDamageProductItem = async (item, transaction) => {
+  const returnQty = Number(item.quantity);
+  const rid = Number(item.receivedId || item.productId);
+  const incomingVariants = parseVariants(item.variants);
+
+  if (!rid) throw new ApiError(400, "receivedId is required");
+  if (!returnQty || returnQty <= 0) {
+    throw new ApiError(400, "Quantity must be greater than 0");
+  }
+
+  const inventory = await findInventoryByRequestReference(rid, transaction);
+  if (!inventory) throw new ApiError(404, "inventory product not found");
+
+  const oldQty = getInventoryDisplayQuantity(inventory);
+  if (incomingVariants.length) {
+    validateVariantStock(inventory.variants, incomingVariants);
+  } else if (oldQty < returnQty) {
+    throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
+  }
+
+  const inventoryId = Number(inventory.Id);
+  const catalogProductId = Number(inventory.productId);
+  if (!inventoryId) throw new ApiError(400, "InventoryMaster.Id missing");
+  if (!catalogProductId) {
+    throw new ApiError(
+      400,
+      "InventoryMaster.productId missing (Products.Id)",
+    );
+  }
+
+  const purchasePrice = Number(inventory.purchase_price || 0) * returnQty;
+  const salePrice = Number(inventory.sale_price || 0) * returnQty;
+
+  const dStock = await findDamageStockByProductId(catalogProductId, transaction);
+  if (dStock) {
+    await dStock.update(
+      {
+        quantity: Number(dStock.quantity || 0) + returnQty,
+        variants: mergeVariants(dStock.variants, incomingVariants),
+        purchase_price: Number(dStock.purchase_price || 0) + purchasePrice,
+        sale_price: Number(dStock.sale_price || 0) + salePrice,
+      },
+      { transaction },
+    );
+  } else {
+    await DamageStock.create(
+      {
+        productId: catalogProductId,
+        name: inventory.name,
+        quantity: returnQty,
+        variants: incomingVariants,
+        purchase_price: purchasePrice,
+        sale_price: salePrice,
+      },
+      { transaction },
+    );
+  }
+
+  const finalVariants = incomingVariants.length
+    ? subtractVariants(inventory.variants, incomingVariants)
+    : inventory.variants;
+  const finalQuantity = incomingVariants.length
+    ? getVariantQuantityTotal(finalVariants)
+    : oldQty - returnQty;
+
+  await InventoryMaster.update(
+    {
+      quantity: finalQuantity,
+      variants: finalVariants,
+      purchase_price: Number(inventory.purchase_price),
+      sale_price: Number(inventory.sale_price),
+    },
+    { where: { Id: inventory.Id }, transaction },
+  );
+
+  return {
+    name: inventory.name,
+    receivedId: inventoryId,
+    productId: inventoryId,
+    quantity: returnQty,
+    variants: incomingVariants,
+    purchase_price: purchasePrice,
+    sale_price: salePrice,
+  };
+};
+
+const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
+  const items = preparedItems || getBulkItems(data);
+  if (!items.length) return null;
+
+  const userId = data.userId ?? items[0]?.userId;
+  const supplierId = data.supplierId ?? items[0]?.supplierId;
+  const warehouseId = data.warehouseId ?? items[0]?.warehouseId;
+  const date = data.date ?? items[0]?.date;
+  const note = data.note ?? items[0]?.note;
+  const batchId = data.batchId ?? items[0]?.batchId;
+  const finalStatus = String(data.status ?? items[0]?.status ?? "").trim() || "Active";
+
+  return db.sequelize.transaction(async (t) => {
+    const normalizedItems = [];
+    for (const item of items) {
+      normalizedItems.push(await moveDamageProductItem(item, t));
+    }
+
+    const summary = summarizeItems(normalizedItems);
+    const result = await DamageProduct.create(
+      {
+        name: normalizedItems.map((item) => item.name).join(", "),
+        supplierId,
+        warehouseId,
+        quantity: summary.quantity,
+        variants: [],
+        items: normalizedItems,
+        source: "Damage Product",
+        batchId: batchId || null,
+        purchase_price: summary.purchase_price,
+        sale_price: summary.sale_price,
+        productId: normalizedItems[0]?.productId || null,
+        status: finalStatus || "---",
+        note: finalStatus === "Approved" ? null : note || null,
+        date,
+      },
+      { transaction: t },
+    );
+
+    const users = await User.findAll({
+      attributes: ["Id", "role"],
+      where: {
+        Id: { [Op.ne]: userId },
+        role: { [Op.in]: ["superAdmin", "admin", "inventor"] },
+      },
+      transaction: t,
+    });
+
+    if (users.length) {
+      const message = resolveApprovalNotificationMessage({
+        status: finalStatus,
+        note,
+        date,
+        approvedMessage: "Damage product request approved",
+        fallbackMessage: "Please approved my request",
+      });
+
+      await Promise.all(
+        users.map((u) =>
+          Notification.create(
+            {
+              userId: u.Id,
+              message,
+              url: `/${process.env.APP_BASE_URL}/damage-product`,
+            },
+            { transaction: t },
+          ),
+        ),
+      );
+    }
+
+    return result;
+  });
+};
 
 // const insertIntoDB = async (data) => {
 //   const { quantity, productId } = data;
@@ -126,6 +347,11 @@ const findDamageStockByProductId = async (productId, transaction) =>
 // };
 
 const insertIntoDB = async (data) => {
+  const bulkItems = getBulkItems(data);
+  if (bulkItems.length) {
+    return insertBulkIntoDB(data, bulkItems);
+  }
+
   const {
     quantity,
     receivedId,
@@ -156,8 +382,10 @@ const insertIntoDB = async (data) => {
 
     if (!inventory) throw new ApiError(404, "inventory product not found");
 
-    const oldQty = Number(inventory.quantity || 0);
-    if (oldQty < returnQty) {
+    const oldQty = getInventoryDisplayQuantity(inventory);
+    if (incomingVariants.length) {
+      validateVariantStock(inventory.variants, incomingVariants);
+    } else if (oldQty < returnQty) {
       throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
     }
 
@@ -234,10 +462,12 @@ const insertIntoDB = async (data) => {
         );
       }
     }
-    const finalQuantity = oldQty - returnQty;
     const finalVariants = incomingVariants.length
       ? subtractVariants(inventory.variants, incomingVariants)
       : inventory.variants;
+    const finalQuantity = incomingVariants.length
+      ? getVariantQuantityTotal(finalVariants)
+      : oldQty - returnQty;
     await InventoryMaster.update(
       {
         quantity: finalQuantity,
@@ -292,7 +522,7 @@ const getAllFromDB = async (filters, options) => {
   if (searchTerm && searchTerm.trim()) {
     andConditions.push({
       [Op.or]: DamageProductSearchableFields.map((field) => ({
-        [field]: { [Op.iLike]: `%${searchTerm.trim()}%` },
+        [field]: { [Op.like]: `%${searchTerm.trim()}%` },
       })),
     });
   }
@@ -380,12 +610,71 @@ const deleteIdFromDB = async (id) => {
     // 1) Return row খুঁজে বের করো
     const ret = await DamageProduct.findOne({
       where: { Id: id },
-      attributes: ["Id", "productId", "quantity", "variants"],
+      attributes: ["Id", "productId", "quantity", "variants", "items"],
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
 
     if (!ret) throw new ApiError(404, "Return product not found");
+    const bulkItems = parseItems(ret.items);
+    if (bulkItems.length) {
+      for (const item of bulkItems) {
+        const inventoryMaster = await findInventoryByStoredReference(
+          Number(item.productId || item.receivedId),
+          t,
+        );
+        if (!inventoryMaster) {
+          throw new ApiError(404, "Inventory product not found");
+        }
+
+        const qty = Number(item.quantity || 0);
+        const itemVariants = parseVariants(item.variants);
+        const finalVariants = mergeVariants(inventoryMaster.variants, itemVariants);
+        const finalQuantity = finalVariants.length
+          ? getVariantQuantityTotal(finalVariants)
+          : Number(inventoryMaster.quantity || 0) + qty;
+
+        await inventoryMaster.update(
+          {
+            quantity: finalQuantity,
+            variants: finalVariants,
+          },
+          { transaction: t },
+        );
+
+        const damageStock = await findDamageStockByProductId(
+          Number(inventoryMaster.productId),
+          t,
+        );
+        if (damageStock) {
+          const nextDamageQty = Number(damageStock.quantity || 0) - qty;
+          if (nextDamageQty < 0) {
+            throw new ApiError(400, "DamageStock cannot be negative");
+          }
+
+          await damageStock.update(
+            {
+              quantity: nextDamageQty,
+              variants: subtractVariants(damageStock.variants, itemVariants),
+              purchase_price: Math.max(
+                0,
+                Number(damageStock.purchase_price || 0) -
+                  Number(item.purchase_price || 0),
+              ),
+              sale_price: Math.max(
+                0,
+                Number(damageStock.sale_price || 0) -
+                  Number(item.sale_price || 0),
+              ),
+            },
+            { transaction: t },
+          );
+        }
+      }
+
+      await DamageProduct.destroy({ where: { Id: id }, transaction: t });
+      return { deleted: true };
+    }
 
     const qty = Number(ret.quantity || 0);
     // if (qty <= 0) throw new ApiError(400, "Invalid return quantity");
@@ -640,12 +929,16 @@ const updateOneFromDB = async (id, payload) => {
         "productId",
         "purchase_price",
         "sale_price",
+        "items",
       ],
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
 
     if (!existing) return 0;
+    if (parseItems(existing.items).length) {
+      throw new ApiError(400, "Bulk damage product records cannot be edited");
+    }
 
     const qty = Number(existing.quantity || 0);
     const oldProductId = Number(existing.productId);
@@ -695,10 +988,18 @@ const updateOneFromDB = async (id, payload) => {
 
     if (!oldInv) throw new ApiError(404, "Old inventory product not found");
 
+    const restoredOldVariants = mergeVariants(
+      oldInv.variants,
+      existingVariants,
+    );
+    const restoredOldQuantity = hasVariantRows(restoredOldVariants)
+      ? getVariantQuantityTotal(restoredOldVariants)
+      : Number(oldInv.quantity || 0) + qty;
+
     await oldInv.update(
       {
-        quantity: Number(oldInv.quantity || 0) + qty,
-        variants: mergeVariants(oldInv.variants, existingVariants),
+        quantity: restoredOldQuantity,
+        variants: restoredOldVariants,
       },
       { transaction: t },
     );
@@ -710,14 +1011,19 @@ const updateOneFromDB = async (id, payload) => {
 
     if (!targetInv) throw new ApiError(404, "Product not found in inventory");
 
-    const reducedQty = Number(targetInv.quantity || 0) - nextQty;
-    if (reducedQty < 0) {
-      throw new ApiError(400, "Inventory cannot be negative");
+    const availableQty = getInventoryDisplayQuantity(targetInv);
+    if (incomingVariants.length) {
+      validateVariantStock(targetInv.variants, incomingVariants);
+    } else if (availableQty < nextQty) {
+      throw new ApiError(400, `Not enough stock. Available: ${availableQty}`);
     }
 
     const updatedVariants = incomingVariants.length
       ? subtractVariants(targetInv.variants, incomingVariants)
       : targetInv.variants;
+    const reducedQty = incomingVariants.length
+      ? getVariantQuantityTotal(updatedVariants)
+      : availableQty - nextQty;
 
     const data = {
       name: targetInv.name,

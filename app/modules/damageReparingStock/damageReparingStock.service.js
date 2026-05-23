@@ -45,7 +45,7 @@ const getAllFromDB = async (filters, options) => {
   if (searchTerm && searchTerm.trim()) {
     andConditions.push({
       [Op.or]: DamageReparingStockSearchableFields.map((field) => ({
-        [field]: { [Op.iLike]: `%${searchTerm.trim()}%` },
+        [field]: { [Op.like]: `%${searchTerm.trim()}%` },
       })),
     });
   }

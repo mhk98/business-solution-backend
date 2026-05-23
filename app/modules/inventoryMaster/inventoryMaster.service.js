@@ -7,6 +7,7 @@ const {
 } = require("./inventoryMaster.constants");
 const {
   getInventoryDisplayQuantity,
+  getInventoryStockBalance,
   normalizeInventoryQuantityForDisplay,
 } = require("../../../shared/variantQuantity");
 
@@ -84,7 +85,7 @@ const getAllFromDB = async (filters, options) => {
     InventoryMaster.count({ where: whereConditions }),
     InventoryMaster.findAll({
       where: whereConditions,
-      attributes: ["quantity", "variants"],
+      attributes: ["quantity", "variants", "purchase_price"],
       paranoid: true,
     }),
   ]);
@@ -92,11 +93,16 @@ const getAllFromDB = async (filters, options) => {
     (sum, row) => sum + getInventoryDisplayQuantity(row),
     0,
   );
+  const totalStockBalance = quantityRows.reduce(
+    (sum, row) => sum + getInventoryStockBalance(row),
+    0,
+  );
 
   return {
     meta: {
       count, // total filtered records
       totalQuantity: totalQuantity || 0, // total filtered quantity
+      totalStockBalance: totalStockBalance || 0,
       page,
       limit,
     },

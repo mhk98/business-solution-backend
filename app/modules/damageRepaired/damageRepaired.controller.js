@@ -1,14 +1,13 @@
 const catchAsync = require("../../../shared/catchAsync");
 const sendResponse = require("../../../shared/sendResponse");
 const pick = require("../../../shared/pick");
-const { insertBulkOrSingle } = require("../../../shared/bulkItems");
 const {
   DamageRepairedFilterAbleFileds,
 } = require("./damageRepaired.constants");
 const DamageRepairedService = require("./damageRepaired.service");
 
 const insertIntoDB = catchAsync(async (req, res) => {
-  const result = await insertBulkOrSingle(req.body, DamageRepairedService.insertIntoDB);
+  const result = await DamageRepairedService.insertIntoDB(req.body);
 
   sendResponse(res, {
     statusCode: 200,

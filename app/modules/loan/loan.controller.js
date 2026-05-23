@@ -1,76 +1,73 @@
 const catchAsync = require("../../../shared/catchAsync");
 const sendResponse = require("../../../shared/sendResponse");
 const pick = require("../../../shared/pick");
-const DamageRepairService = require("./damageRepair.service");
-const { DamageRepairFilterAbleFileds } = require("./damageRepair.constants");
+const { LoanFilterAbleFields } = require("./loan.constants");
+const LoanService = require("./loan.service");
 
 const insertIntoDB = catchAsync(async (req, res) => {
-  const result = await DamageRepairService.insertIntoDB(req.body);
-
+  const result = await LoanService.insertIntoDB(req.body);
   sendResponse(res, {
     statusCode: 200,
     success: true,
-    message: "DamageRepair data created!!",
+    message: "Loan data created!!",
     data: result,
   });
 });
 
 const getAllFromDB = catchAsync(async (req, res) => {
-  const filters = pick(req.query, DamageRepairFilterAbleFileds);
+  const filters = pick(req.query, LoanFilterAbleFields);
   const options = pick(req.query, ["limit", "page", "sortBy", "sortOrder"]);
-
-  const result = await DamageRepairService.getAllFromDB(filters, options);
+  const result = await LoanService.getAllFromDB(filters, options);
   sendResponse(res, {
     statusCode: 200,
     success: true,
-    message: "Damage repair data fetched!!",
+    message: "Loan data fetched!!",
     meta: result.meta,
     data: result.data,
   });
 });
 
 const getDataById = catchAsync(async (req, res) => {
-  const result = await DamageRepairService.getDataById(req.params.id);
+  const result = await LoanService.getDataById(req.params.id);
   sendResponse(res, {
     statusCode: 200,
     success: true,
-    message: "DamageRepair data fetched!!",
+    message: "Loan data fetched!!",
     data: result,
   });
 });
 
 const updateOneFromDB = catchAsync(async (req, res) => {
-  const { id } = req.params;
-  const result = await DamageRepairService.updateOneFromDB(id, req.body);
+  const result = await LoanService.updateOneFromDB(req.params.id, req.body);
   sendResponse(res, {
     statusCode: 200,
     success: true,
-    message: "DamageRepair update successfully!!",
+    message: "Loan update successfully!!",
     data: result,
   });
 });
 
 const deleteIdFromDB = catchAsync(async (req, res) => {
-  const result = await DamageRepairService.deleteIdFromDB(req.params.id);
+  const result = await LoanService.deleteIdFromDB(req.params.id);
   sendResponse(res, {
     statusCode: 200,
     success: true,
-    message: "DamageRepair delete successfully!!",
+    message: "Loan delete successfully!!",
     data: result,
   });
 });
 
 const getAllFromDBWithoutQuery = catchAsync(async (req, res) => {
-  const result = await DamageRepairService.getAllFromDBWithoutQuery();
+  const result = await LoanService.getAllFromDBWithoutQuery();
   sendResponse(res, {
     statusCode: 200,
     success: true,
-    message: "DamageRepair data fetch!!",
+    message: "Loan data fetch!!",
     data: result,
   });
 });
 
-const DamageRepairController = {
+module.exports = {
   getAllFromDB,
   insertIntoDB,
   getDataById,
@@ -78,5 +75,3 @@ const DamageRepairController = {
   deleteIdFromDB,
   getAllFromDBWithoutQuery,
 };
-
-module.exports = DamageRepairController;

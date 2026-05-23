@@ -5,7 +5,7 @@ const DamageRepairedFilterAbleFileds = [
   "name",
 ];
 
-const DamageRepairedSearchableFields = ["searchTerm", "name"];
+const DamageRepairedSearchableFields = ["name"];
 
 module.exports = {
   DamageRepairedFilterAbleFileds,

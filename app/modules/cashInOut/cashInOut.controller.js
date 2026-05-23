@@ -12,6 +12,7 @@ const {
 const User = db.user;
 const CashInOut = db.cashInOut;
 const Notification = db.notification;
+const Loan = db.loan;
 
 const normalizeOptionalText = (value) => {
   if (value === undefined || value === null) return null;
@@ -41,6 +42,31 @@ const getTodayYmd = () => {
   } catch (e) {
     return new Date().toISOString().slice(0, 10);
   }
+};
+
+const resolveLoanFields = async ({ category, loanId, lender }) => {
+  const isLoan = String(category || "").trim().toLowerCase() === "loan";
+  if (!isLoan) {
+    return { loanId: null, lender: null };
+  }
+
+  const hasLoanId =
+    loanId !== undefined && loanId !== null && String(loanId).trim() !== "";
+  if (!hasLoanId) {
+    return { loanId: null, lender: normalizeOptionalText(lender) };
+  }
+
+  const finalLoanId = Number(loanId);
+  if (Number.isNaN(finalLoanId)) {
+    throw new ApiError(400, "LoanId must be a valid number");
+  }
+
+  const loan = await Loan.findByPk(finalLoanId);
+  if (!loan) {
+    throw new ApiError(404, "Loan not found");
+  }
+
+  return { loanId: finalLoanId, lender: loan.name };
 };
 
 // const insertIntoDB = catchAsync(async (req, res) => {
@@ -170,6 +196,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     note,
     status,
     lender,
+    loanId,
     bookId,
     supplierId,
   } = req.body;
@@ -217,6 +244,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
 
   const normalizedNote = normalizeOptionalText(note);
   const finalStatus = String(status || "").trim() || "Active";
+  const loanFields = await resolveLoanFields({ category, loanId, lender });
 
   const data = {
     name: name || null,
@@ -229,7 +257,8 @@ const insertIntoDB = catchAsync(async (req, res) => {
     status: finalStatus || "---",
     note: normalizedNote,
     date,
-    lender,
+    lender: loanFields.lender,
+    loanId: loanFields.loanId,
     file,
     category,
     bookId,
@@ -384,6 +413,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     status,
     bookId,
     lender,
+    loanId,
     supplierId,
   } = req.body;
 
@@ -432,6 +462,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     String(status || "").trim() ||
     String(existing.status || "").trim() ||
     "Active";
+  const loanFields = await resolveLoanFields({ category, loanId, lender });
 
   const data = {
     name: name ?? undefined,
@@ -444,7 +475,8 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     status: finalStatus,
     date: (date && String(date).slice(0, 10)) || undefined,
     category,
-    lender,
+    lender: category ? loanFields.lender : undefined,
+    loanId: category ? loanFields.loanId : undefined,
     bookId: bookId || undefined,
     supplierId: supplierId || undefined,
     ...(amountNumber !== undefined ? { amount: amountNumber } : {}),

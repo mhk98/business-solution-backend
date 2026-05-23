@@ -5,6 +5,7 @@ const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const {
   getInventoryDisplayQuantity,
+  getInventoryStockBalance,
 } = require("../../../shared/variantQuantity");
 
 const Receiveable = db.receiveable;
@@ -247,6 +248,44 @@ const sumQuantityValue = async (
   return n(result?.totalValue);
 };
 
+const sumInventoryDisplayQuantityValue = async (
+  Model,
+  where = {},
+  priceField = "purchase_price",
+) => {
+  if (!Model) return 0;
+
+  const rows = await Model.findAll({
+    where: activeWhere(Model, where),
+    paranoid: true,
+    attributes: ["quantity", "variants", priceField],
+  });
+
+  return rows.reduce(
+    (total, row) =>
+      total +
+      (priceField === "purchase_price"
+        ? getInventoryStockBalance(row)
+        : n(getInventoryDisplayQuantity(row)) * n(row[priceField])),
+    0,
+  );
+};
+
+const sumDisplayQuantity = async (Model, where = {}) => {
+  if (!Model) return 0;
+
+  const rows = await Model.findAll({
+    where: activeWhere(Model, where),
+    paranoid: true,
+    attributes: ["quantity", "variants"],
+  });
+
+  return rows.reduce(
+    (total, row) => total + n(getInventoryDisplayQuantity(row)),
+    0,
+  );
+};
+
 const getProductKey = (row) =>
   String(row?.productId ?? row?.receivedId ?? row?.name ?? row?.Id ?? "");
 
@@ -322,7 +361,7 @@ const countLowStockProducts = async (where = {}) => {
 const getOverviewSummaryFromDB = async (filters = {}) => {
   const { from, to, filterType } = normalizeDateFilters(filters);
   const transactionDateWhere = buildDateWhere(from, to, "date");
-  const snapshotWhere = buildDateWhere(from, to, "createdAt");
+  const snapshotWhere = {};
 
   const [
     totalMetaAmount,
@@ -330,9 +369,12 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     totalReceiveableAmount,
     totalPayableAmount,
     totalInventoryOverview,
+    totalInventoryQuantity,
     totalInventoryRetailValue,
     totalDamageStockPrice,
+    totalDamageStockQuantity,
     totalRepairingStockPrice,
+    totalRepairingStockQuantity,
     totalCashInAmount,
     totalCashOutAmount,
     excludedCashOutAmount,
@@ -357,10 +399,17 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     sumQuantityValue(AssetsStock, {}, "price"),
     sumField(Receiveable, "amount", transactionDateWhere),
     sumField(Payable, "amount", transactionDateWhere),
-    sumQuantityValue(InventoryMaster, snapshotWhere, "purchase_price"),
-    sumQuantityValue(InventoryMaster, snapshotWhere, "sale_price"),
-    sumQuantityValue(DamageStock, snapshotWhere, "purchase_price"),
-    sumField(DamageReparingStock, "purchase_price", transactionDateWhere),
+    sumInventoryDisplayQuantityValue(
+      InventoryMaster,
+      snapshotWhere,
+      "purchase_price",
+    ),
+    sumDisplayQuantity(InventoryMaster, snapshotWhere),
+    sumInventoryDisplayQuantityValue(InventoryMaster, snapshotWhere, "sale_price"),
+    sumField(DamageStock, "purchase_price", snapshotWhere),
+    sumDisplayQuantity(DamageStock, snapshotWhere),
+    sumField(DamageReparingStock, "purchase_price", snapshotWhere),
+    sumDisplayQuantity(DamageReparingStock, snapshotWhere),
     sumField(CashInOut, "amount", {
       ...transactionDateWhere,
       paymentStatus: "CashIn",
@@ -427,9 +476,12 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     totalReceiveableAmount,
     totalPayableAmount,
     totalInventoryOverview,
+    totalInventoryQuantity,
     totalInventoryRetailValue,
     totalDamageStockPrice,
+    totalDamageStockQuantity,
     totalRepairingStockPrice,
+    totalRepairingStockQuantity,
     grossSalesAmount,
     inTransitSalesAmount,
     salesReturnSalesAmount,

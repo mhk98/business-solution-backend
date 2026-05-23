@@ -34,6 +34,10 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      designationId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       basic_salary: {
         type: DataTypes.INTEGER(10),
         allowNull: false,

@@ -21,6 +21,7 @@ const PayableRoutes = require("../modules/payable/payable.routes");
 const OverviewRoutes = require("../modules/overview/overview.routes");
 const AssetsDamageRoutes = require("../modules/assetsDamage/assetsDamage.routes");
 const SupplierRoutes = require("../modules/supplier/supplier.routes");
+const LoanRoutes = require("../modules/loan/loan.routes");
 const CategoryRoutes = require("../modules/category/category.routes");
 const BankAccountRoutes = require("../modules/bankAccount/bankAccount.routes");
 const DamageProductRoutes = require("../modules/damageProduct/damageProduct.routes");
@@ -265,6 +266,10 @@ const moduleRoutes = [
   {
     path: "/supplier",
     route: SupplierRoutes,
+  },
+  {
+    path: "/loan",
+    route: LoanRoutes,
   },
   {
     path: "/supplier-history",

@@ -235,6 +235,15 @@ const buildEmployeeData = (payload = {}, currentStatus) => {
   };
 };
 
+const normalizeEmployeeStatus = (value) => {
+  const status = String(value || "").trim().toLowerCase();
+
+  if (status === "active") return "Active";
+  if (status === "deactive" || status === "inactive") return "Deactive";
+
+  return null;
+};
+
 const ensureLinkedUserExists = async (userId) => {
   if (!userId) return;
 
@@ -389,10 +398,17 @@ const updateOneFromDB = async (id, payload, user) => {
     throw new ApiError(404, "Employee record not found");
   }
 
-  const data = buildEmployeeData(
-    applyUpdateWorkflow(payload, user),
-    existing.status,
-  );
+  const workflowPayload = applyUpdateWorkflow(payload, user);
+  const explicitEmployeeStatus = normalizeEmployeeStatus(payload.status);
+
+  if (explicitEmployeeStatus) {
+    workflowPayload.status = explicitEmployeeStatus;
+    workflowPayload.pendingAction = null;
+    workflowPayload.approvalNote = null;
+    workflowPayload.requestedByUserId = null;
+  }
+
+  const data = buildEmployeeData(workflowPayload, existing.status);
 
   await ensureLinkedUserExists(data.userId);
 

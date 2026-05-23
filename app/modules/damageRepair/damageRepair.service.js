@@ -50,6 +50,48 @@ const getVariantQuantityTotal = (variants) =>
     0,
   );
 
+const hasVariantRows = (variants) => parseVariants(variants).length > 0;
+
+const getStockQuantity = (row = {}) =>
+  hasVariantRows(row.variants)
+    ? getVariantQuantityTotal(row.variants)
+    : Number(row.quantity || 0);
+
+const parseItems = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const getBulkItems = (data = {}) => {
+  const items = parseItems(data.items);
+  if (!items.length) return [];
+
+  const { items: _items, ...commonFields } = data;
+  return items.map((item) => ({
+    ...commonFields,
+    ...item,
+  }));
+};
+
+const summarizeItems = (items = []) => ({
+  quantity: items.reduce((total, item) => total + Number(item.quantity || 0), 0),
+  purchase_price: items.reduce(
+    (total, item) => total + Number(item.purchase_price || 0),
+    0,
+  ),
+  sale_price: items.reduce(
+    (total, item) => total + Number(item.sale_price || 0),
+    0,
+  ),
+});
+
 const productHasVariations = async (productId, transaction) => {
   if (!productId) return false;
 
@@ -140,7 +182,7 @@ const syncDamageReparingStock = async (
     return;
   }
 
-  const currentQty = Number(repairingStock.quantity || 0);
+  const currentQty = getStockQuantity(repairingStock);
   const nextQty = currentQty + quantityDelta;
 
   if (nextQty < 0) {
@@ -152,11 +194,15 @@ const syncDamageReparingStock = async (
       ? mergeVariants(repairingStock.variants, variants)
       : subtractVariants(repairingStock.variants, variants);
 
+  const syncedQty = hasVariantRows(nextVariants)
+    ? getVariantQuantityTotal(nextVariants)
+    : nextQty;
+
   await repairingStock.update(
     {
       name: name || repairingStock.name,
       date: date || repairingStock.date,
-      quantity: nextQty,
+      quantity: syncedQty,
       purchase_price: Math.max(
         0,
         Number(repairingStock.purchase_price || 0) +
@@ -172,7 +218,179 @@ const syncDamageReparingStock = async (
   );
 };
 
+const moveDamageRepairItem = async (item, transaction) => {
+  const returnQty = Number(item.quantity);
+  const rid = Number(item.receivedId || item.productId);
+  const incomingVariants = parseVariants(item.variants);
+
+  if (!rid) throw new ApiError(400, "receivedId is required");
+  if (!returnQty || returnQty <= 0) {
+    throw new ApiError(400, "Quantity must be greater than 0");
+  }
+
+  const received = await findDamageStockByReference(rid, transaction);
+  if (!received) throw new ApiError(404, "Received product not found");
+
+  const oldQty = getStockQuantity(received);
+  if (oldQty < returnQty) {
+    throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
+  }
+
+  const damageStockId = Number(received.Id);
+  const catalogProductId = Number(received.productId);
+  if (!damageStockId) throw new ApiError(400, "DamageStock.Id missing");
+  if (!catalogProductId) {
+    throw new ApiError(400, "DamageStock.productId missing (Products.Id)");
+  }
+
+  const hasProductVariations = await productHasVariations(
+    catalogProductId,
+    transaction,
+  );
+  const selectedVariants = hasProductVariations ? incomingVariants : [];
+
+  if (hasProductVariations) {
+    assertValidVariantSelection({
+      availableVariants: received.variants,
+      incomingVariants: selectedVariants,
+      quantity: returnQty,
+    });
+  }
+
+  const perUnitPurchase =
+    oldQty > 0 ? Number(received.purchase_price || 0) / oldQty : 0;
+  const perUnitSale =
+    oldQty > 0 ? Number(received.sale_price || 0) / oldQty : 0;
+  const deductPurchase = perUnitPurchase * returnQty;
+  const deductSale = perUnitSale * returnQty;
+
+  const finalVariants = hasProductVariations
+    ? selectedVariants.length
+      ? subtractVariants(received.variants, selectedVariants)
+      : received.variants
+    : [];
+  const finalQuantity = hasVariantRows(finalVariants)
+    ? getVariantQuantityTotal(finalVariants)
+    : oldQty - returnQty;
+
+  await DamageStock.update(
+    {
+      quantity: finalQuantity,
+      variants: finalVariants,
+      purchase_price: Math.max(
+        0,
+        Number(received.purchase_price || 0) - deductPurchase,
+      ),
+      sale_price: Math.max(0, Number(received.sale_price || 0) - deductSale),
+    },
+    { where: { Id: received.Id }, transaction },
+  );
+
+  await syncDamageReparingStock(
+    {
+      productId: catalogProductId,
+      name: received.name,
+      quantityDelta: returnQty,
+      purchasePriceDelta: deductPurchase,
+      salePriceDelta: deductSale,
+      variants: selectedVariants,
+      date: item.date,
+    },
+    transaction,
+  );
+
+  return {
+    name: received.name,
+    receivedId: damageStockId,
+    productId: damageStockId,
+    quantity: returnQty,
+    variants: selectedVariants,
+    purchase_price: deductPurchase,
+    sale_price: deductSale,
+  };
+};
+
+const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
+  const items = preparedItems || getBulkItems(data);
+  if (!items.length) return null;
+
+  const userId = data.userId ?? items[0]?.userId;
+  const supplierId = data.supplierId ?? items[0]?.supplierId;
+  const warehouseId = data.warehouseId ?? items[0]?.warehouseId;
+  const date = data.date ?? items[0]?.date;
+  const note = data.note ?? items[0]?.note;
+  const batchId = data.batchId ?? items[0]?.batchId;
+  const finalStatus = String(data.status ?? items[0]?.status ?? "").trim() || "Active";
+
+  return db.sequelize.transaction(async (t) => {
+    const normalizedItems = [];
+    for (const item of items) {
+      normalizedItems.push(await moveDamageRepairItem({ ...item, date }, t));
+    }
+
+    const summary = summarizeItems(normalizedItems);
+    const result = await DamageRepair.create(
+      {
+        name: normalizedItems.map((item) => item.name).join(", "),
+        supplierId,
+        warehouseId,
+        source: "Damage Repair",
+        quantity: summary.quantity,
+        variants: [],
+        items: normalizedItems,
+        batchId: batchId || null,
+        purchase_price: summary.purchase_price,
+        sale_price: summary.sale_price,
+        productId: normalizedItems[0]?.productId || null,
+        status: finalStatus || "---",
+        note: finalStatus === "Approved" ? null : note || null,
+        date,
+      },
+      { transaction: t },
+    );
+
+    const users = await User.findAll({
+      attributes: ["Id", "role"],
+      where: {
+        Id: { [Op.ne]: userId },
+        role: { [Op.in]: ["superAdmin", "admin", "inventor"] },
+      },
+      transaction: t,
+    });
+
+    if (users.length) {
+      const message = resolveApprovalNotificationMessage({
+        status: finalStatus,
+        note,
+        date,
+        approvedMessage: "Damage repairing request approved",
+        fallbackMessage: "Please approved my request",
+      });
+
+      await Promise.all(
+        users.map((u) =>
+          Notification.create(
+            {
+              userId: u.Id,
+              message,
+              url: `/${process.env.APP_BASE_URL}/damage-repair`,
+            },
+            { transaction: t },
+          ),
+        ),
+      );
+    }
+
+    return result;
+  });
+};
+
 const insertIntoDB = async (data) => {
+  const bulkItems = getBulkItems(data);
+  if (bulkItems.length) {
+    return insertBulkIntoDB(data, bulkItems);
+  }
+
   const {
     quantity,
     receivedId,
@@ -203,7 +421,7 @@ const insertIntoDB = async (data) => {
 
     if (!received) throw new ApiError(404, "Received product not found");
 
-    const oldQty = Number(received.quantity || 0);
+    const oldQty = getStockQuantity(received);
     if (oldQty < returnQty) {
       throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
     }
@@ -259,12 +477,14 @@ const insertIntoDB = async (data) => {
       { transaction: t },
     );
 
-    const finalQuantity = oldQty - returnQty;
     const finalVariants = hasProductVariations
       ? selectedVariants.length
         ? subtractVariants(received.variants, selectedVariants)
         : received.variants
       : [];
+    const finalQuantity = hasVariantRows(finalVariants)
+      ? getVariantQuantityTotal(finalVariants)
+      : oldQty - returnQty;
     await DamageStock.update(
       {
         quantity: finalQuantity,
@@ -334,7 +554,7 @@ const getAllFromDB = async (filters, options) => {
   if (searchTerm && searchTerm.trim()) {
     andConditions.push({
       [Op.or]: DamageRepairSearchableFields.map((field) => ({
-        [field]: { [Op.iLike]: `%${searchTerm.trim()}%` },
+        [field]: { [Op.like]: `%${searchTerm.trim()}%` },
       })),
     });
   }
@@ -422,12 +642,69 @@ const deleteIdFromDB = async (id) => {
     // 1) Return row খুঁজে বের করো
     const ret = await DamageRepair.findOne({
       where: { Id: id },
-      attributes: ["Id", "name", "date", "productId", "quantity", "variants"],
+      attributes: [
+        "Id",
+        "name",
+        "date",
+        "productId",
+        "quantity",
+        "purchase_price",
+        "sale_price",
+        "variants",
+        "items",
+      ],
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
 
     if (!ret) throw new ApiError(404, "Return product not found");
+    const bulkItems = parseItems(ret.items);
+    if (bulkItems.length) {
+      for (const item of bulkItems) {
+        const qty = Number(item.quantity || 0);
+        const itemVariants = parseVariants(item.variants);
+        const received = await DamageStock.findOne({
+          where: { Id: Number(item.productId || item.receivedId) },
+          transaction: t,
+          lock: t.LOCK.UPDATE,
+        });
+        if (!received) throw new ApiError(404, "Received product not found");
+
+        const finalVariants = mergeVariants(received.variants, itemVariants);
+        const finalQuantity = hasVariantRows(finalVariants)
+          ? getVariantQuantityTotal(finalVariants)
+          : Number(received.quantity || 0) + qty;
+
+        await received.update(
+          {
+            quantity: finalQuantity,
+            variants: finalVariants,
+            purchase_price:
+              Number(received.purchase_price || 0) +
+              Number(item.purchase_price || 0),
+            sale_price:
+              Number(received.sale_price || 0) + Number(item.sale_price || 0),
+          },
+          { transaction: t },
+        );
+
+        await syncDamageReparingStock(
+          {
+            productId: Number(received.productId),
+            name: item.name || received.name,
+            quantityDelta: -qty,
+            purchasePriceDelta: -Number(item.purchase_price || 0),
+            salePriceDelta: -Number(item.sale_price || 0),
+            variants: itemVariants,
+            date: ret.date,
+          },
+          t,
+        );
+      }
+
+      await DamageRepair.destroy({ where: { Id: id }, transaction: t });
+      return { deleted: true };
+    }
 
     const qty = Number(ret.quantity || 0);
     if (qty <= 0) throw new ApiError(400, "Invalid return quantity");
@@ -441,8 +718,10 @@ const deleteIdFromDB = async (id) => {
 
     if (!received) throw new ApiError(404, "Received product not found");
 
-    const finalQuantity = Number(received.quantity || 0) + qty;
     const finalVariants = mergeVariants(received.variants, ret.variants);
+    const finalQuantity = hasVariantRows(finalVariants)
+      ? getVariantQuantityTotal(finalVariants)
+      : Number(received.quantity || 0) + qty;
     // 3) stock ফিরিয়ে দাও
     await DamageStock.update(
       {
@@ -549,12 +828,25 @@ const updateOneFromDB = async (id, data) => {
   return await db.sequelize.transaction(async (t) => {
     const existing = await DamageRepair.findOne({
       where: { Id: id },
-      attributes: ["Id", "name", "date", "quantity", "variants", "productId"],
+      attributes: [
+        "Id",
+        "name",
+        "date",
+        "quantity",
+        "purchase_price",
+        "sale_price",
+        "variants",
+        "productId",
+        "items",
+      ],
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
 
     if (!existing) return 0;
+    if (parseItems(existing.items).length) {
+      throw new ApiError(400, "Bulk damage repairing records cannot be edited");
+    }
 
     const qty = Number(existing.quantity || 0);
     const oldProductId = Number(existing.productId);
@@ -568,10 +860,20 @@ const updateOneFromDB = async (id, data) => {
 
     if (!oldStock) throw new ApiError(404, "DamageStock product not found");
 
+    const restoredOldVariants = mergeVariants(oldStock.variants, existingVariants);
+    const restoredOldQuantity = hasVariantRows(restoredOldVariants)
+      ? getVariantQuantityTotal(restoredOldVariants)
+      : Number(oldStock.quantity || 0) + qty;
+
     await oldStock.update(
       {
-        quantity: Number(oldStock.quantity || 0) + qty,
-        variants: mergeVariants(oldStock.variants, existingVariants),
+        quantity: restoredOldQuantity,
+        purchase_price:
+          Number(oldStock.purchase_price || 0) +
+          Number(existing.purchase_price || 0),
+        sale_price:
+          Number(oldStock.sale_price || 0) + Number(existing.sale_price || 0),
+        variants: restoredOldVariants,
       },
       { transaction: t },
     );
@@ -586,6 +888,8 @@ const updateOneFromDB = async (id, data) => {
         productId: oldCatalogProductId,
         name: existing.name,
         quantityDelta: -qty,
+        purchasePriceDelta: -Number(existing.purchase_price || 0),
+        salePriceDelta: -Number(existing.sale_price || 0),
         variants: existingVariants,
         date: existing.date,
       },
@@ -599,7 +903,7 @@ const updateOneFromDB = async (id, data) => {
 
     if (!received) throw new ApiError(404, "Received product not found");
 
-    const availableQty = Number(received.quantity || 0);
+    const availableQty = getStockQuantity(received);
     if (availableQty < nextQty) {
       throw new ApiError(400, `Not enough stock. Available: ${availableQty}`);
     }
@@ -658,16 +962,23 @@ const updateOneFromDB = async (id, data) => {
       transaction: t,
     });
 
-    const stockQuantity = Number(received.quantity || 0) - nextQty;
     const updatedVariants = hasProductVariations
       ? selectedVariants.length
         ? subtractVariants(received.variants, selectedVariants)
         : received.variants
       : [];
+    const stockQuantity = hasVariantRows(updatedVariants)
+      ? getVariantQuantityTotal(updatedVariants)
+      : availableQty - nextQty;
 
     await DamageStock.update(
       {
         quantity: stockQuantity,
+        purchase_price: Math.max(
+          0,
+          Number(received.purchase_price || 0) - deductPurchase,
+        ),
+        sale_price: Math.max(0, Number(received.sale_price || 0) - deductSale),
         variants: updatedVariants,
       },
       { where: { Id: received.Id }, transaction: t },
@@ -678,6 +989,8 @@ const updateOneFromDB = async (id, data) => {
         productId: catalogProductId,
         name: received.name,
         quantityDelta: nextQty,
+        purchasePriceDelta: deductPurchase,
+        salePriceDelta: deductSale,
         variants: selectedVariants,
         date: inputDateStr || date,
       },

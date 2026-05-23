@@ -6,6 +6,7 @@ const CashInOutFilterAbleFields = [
   "endDate",
   "category",
   "lender",
+  "loanId",
   "bookId",
 ];
 

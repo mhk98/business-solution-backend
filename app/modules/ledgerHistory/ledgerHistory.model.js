@@ -35,6 +35,18 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      paymentMode: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      bankName: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      bankAccount: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
       supplierHistoryId: {
         type: DataTypes.INTEGER(10),
         allowNull: true,

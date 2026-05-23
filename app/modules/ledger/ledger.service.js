@@ -28,14 +28,25 @@ const normalizeOptionalForeignKey = (value) => {
 };
 
 const normalizeLedgerPayload = (payload) => {
+  const paymentMode = String(payload?.paymentMode || "").trim();
+
   const normalizedPayload = {
+    role: payload?.role,
+    name: payload?.name,
+    phone: payload?.phone,
+    countryCode: payload?.countryCode,
+    address: payload?.address,
+    amount: payload?.amount,
     cashType: payload?.cashType,
     note: payload?.note,
     date: payload?.date,
-    supplierId: payload?.supplierId,
-    employeeId: payload?.employeeId,
     bookId: payload?.bookId,
     file: payload?.file,
+    sendMessage: payload?.sendMessage,
+    status: payload?.status,
+    paymentMode,
+    bankName: paymentMode === "Bank" ? payload?.bankName || "" : "",
+    bankAccount: paymentMode === "Bank" ? payload?.bankAccount || null : null,
     supplierId: normalizeOptionalForeignKey(payload?.supplierId),
     employeeId: normalizeOptionalForeignKey(payload?.employeeId),
   };
@@ -100,6 +111,9 @@ const insertIntoDB = async (data) => {
       employeeId,
       bookId,
       file,
+      paymentMode,
+      bankName,
+      bankAccount,
     } = normalizedData;
 
     const result = await Ledger.create(normalizedData, { transaction: t });
@@ -128,6 +142,9 @@ const insertIntoDB = async (data) => {
           {
             supplierId,
             bookId,
+            paymentMode,
+            bankName,
+            bankAccount,
             paymentStatus: "CashOut",
             amount,
             status: "Active",
@@ -141,21 +158,23 @@ const insertIntoDB = async (data) => {
     }
 
     if (employeeId) {
-      // CashInOut — শুধু পরিশোধ (Paid) হলে CashOut। বাকি যোগ (Unpaid) হলে cash movement নেই।
-      if (cashType === "Paid") {
-        const cashInOut = await CashInOut.create(
-          {
-            employeeId,
-            bookId,
-            paymentStatus: "CashOut",
-            amount,
-            status: "Active",
-            date,
-          },
-          { transaction: t },
-        );
-        cashInOutId = cashInOut.Id;
-      }
+      const cashInOut = await CashInOut.create(
+        {
+          employeeId,
+          bookId,
+          paymentMode,
+          bankName,
+          bankAccount,
+          paymentStatus: "CashOut",
+          amount,
+          status: "Active",
+          category: "Employee Advance",
+          date,
+          note: note || "",
+        },
+        { transaction: t },
+      );
+      cashInOutId = cashInOut.Id;
     }
 
     await LedgerHistory.create(

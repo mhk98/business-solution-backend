@@ -15,7 +15,7 @@ router.post(
 );
 router.get("/", auth(), DamageRepairController.getAllFromDB);
 router.get("/all", auth(), DamageRepairController.getAllFromDBWithoutQuery);
-router.get("/", auth(), DamageRepairController.getDataById);
+router.get("/:id", auth(), DamageRepairController.getDataById);
 router.delete(
   "/:id",
   auth(),
