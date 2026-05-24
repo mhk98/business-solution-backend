@@ -2340,6 +2340,83 @@ db.sequelize
     const {
       DEFAULT_ROLE_MENU_PERMISSIONS,
     } = require("../app/config/roleMenuPermissions");
+    const { MENU_PERMISSIONS } = require("../app/enums/menuPermissions");
+    const { ENUM_USER_ROLE } = require("../app/enums/user");
+
+    const rolesWithLegacyDailyWorkReportDefault = new Set([
+      ENUM_USER_ROLE.SUPER_ADMIN,
+      ENUM_USER_ROLE.ADMIN,
+      ENUM_USER_ROLE.MARKETER,
+      ENUM_USER_ROLE.LEADER,
+      ENUM_USER_ROLE.INVENTOR,
+      ENUM_USER_ROLE.ACCOUNTANT,
+      ENUM_USER_ROLE.UP,
+      ENUM_USER_ROLE.STAFF,
+      ENUM_USER_ROLE.USER,
+    ]);
+
+    const normalizePermissionList = (permissions) => {
+      if (Array.isArray(permissions)) return permissions;
+      if (!permissions) return [];
+
+      if (typeof permissions === "string") {
+        try {
+          const parsed = JSON.parse(permissions);
+          return normalizePermissionList(parsed);
+        } catch (error) {
+          return [];
+        }
+      }
+
+      if (typeof permissions === "object") {
+        return normalizePermissionList(permissions.menuPermissions);
+      }
+
+      return [];
+    };
+
+    const areSamePermissions = (left = [], right = []) => {
+      const leftSet = new Set(left);
+      const rightSet = new Set(right);
+
+      if (leftSet.size !== rightSet.size) return false;
+
+      return Array.from(leftSet).every((permission) =>
+        rightSet.has(permission),
+      );
+    };
+
+    const removeLegacyDailyWorkReportDefault = async (
+      role,
+      defaultMenuPermissions,
+    ) => {
+      if (!rolesWithLegacyDailyWorkReportDefault.has(role)) return;
+
+      const record = await db.rolePermission.findOne({ where: { role } });
+      if (!record) return;
+
+      const currentPermissions = normalizePermissionList(
+        record.menuPermissions,
+      );
+      if (!currentPermissions.includes(MENU_PERMISSIONS.DAILY_WORK_REPORTS)) {
+        return;
+      }
+
+      const permissionsWithoutDailyWorkReports = currentPermissions.filter(
+        (permission) => permission !== MENU_PERMISSIONS.DAILY_WORK_REPORTS,
+      );
+
+      if (
+        areSamePermissions(
+          permissionsWithoutDailyWorkReports,
+          defaultMenuPermissions,
+        )
+      ) {
+        await record.update({
+          menuPermissions: permissionsWithoutDailyWorkReports,
+        });
+      }
+    };
 
     await Promise.all(
       Object.entries(DEFAULT_ROLE_MENU_PERMISSIONS).map(
@@ -2351,6 +2428,7 @@ db.sequelize
               menuPermissions,
             },
           });
+          await removeLegacyDailyWorkReportDefault(role, menuPermissions);
         },
       ),
     );

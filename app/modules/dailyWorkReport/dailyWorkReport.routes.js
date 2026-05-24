@@ -7,146 +7,97 @@ const { uploadFile } = require("../../middlewares/upload");
 const DailyWorkReportController = require("./dailyWorkReport.controller");
 
 const router = require("express").Router();
+const dailyWorkReportPermissions = ["daily_work_reports"];
 
 router.post(
   "/create",
   auth(),
-  requireAnyPermission([
-    "daily_work_reports",
-    "employee_profile",
-    "employee_list",
-    "employee_management",
-  ]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.submitReport,
 );
 router.post(
   "/upload-proof",
   auth(),
-  requireAnyPermission([
-    "daily_work_reports",
-    "employee_profile",
-    "employee_list",
-    "employee_management",
-  ]),
+  requireAnyPermission(dailyWorkReportPermissions),
   uploadFile,
   DailyWorkReportController.uploadProof,
 );
 router.get(
   "/me",
   auth(),
-  requireAnyPermission([
-    "daily_work_reports",
-    "employee_profile",
-    "employee_list",
-    "employee_management",
-  ]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.getMyReports,
 );
 router.get(
   "/assigned-tasks",
   auth(),
-  requireAnyPermission([
-    "daily_work_reports",
-    "employee_profile",
-    "employee_list",
-    "employee_management",
-  ]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.getAssignedTasksForReport,
 );
 router.put(
   "/:id",
   auth(),
-  requireAnyPermission([
-    "daily_work_reports",
-    "employee_profile",
-    "employee_list",
-    "employee_management",
-  ]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.updateMyReport,
 );
 router.delete(
   "/:id",
   auth(),
-  requireAnyPermission([
-    "daily_work_reports",
-    "employee_profile",
-    "employee_list",
-    "employee_management",
-  ]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.deleteReport,
 );
 router.get(
   "/leaderboard",
   auth(),
-  requireAnyPermission([
-    "daily_work_reports",
-    "employee_profile",
-    "employee_list",
-    "employee_management",
-  ]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.getLeaderboard,
 );
 router.get(
   "/dashboard/employee",
   auth(),
-  requireAnyPermission([
-    "daily_work_reports",
-    "employee_profile",
-    "employee_list",
-    "employee_management",
-  ]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.getEmployeeDashboard,
 );
 router.get(
   "/dashboard/admin",
   auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
-  requireAnyPermission(["daily_work_reports", "employee_list", "employee_management"]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.getAdminDashboard,
 );
 router.get(
   "/eligible-submitters",
   auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
-  requireAnyPermission(["daily_work_reports", "employee_list", "employee_management"]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.getEligibleSubmitters,
 );
 router.post(
   "/:id/calculate-score",
   auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
-  requireAnyPermission(["daily_work_reports", "employee_list", "employee_management"]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.recalculatePerformanceScore,
 );
 router.get(
   "/",
   auth(),
-  requireAnyPermission([
-    "daily_work_reports",
-    "employee_profile",
-    "employee_list",
-    "employee_management",
-  ]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.getAllReports,
 );
 router.get(
   "/:id",
   auth(),
-  requireAnyPermission([
-    "daily_work_reports",
-    "employee_profile",
-    "employee_list",
-    "employee_management",
-  ]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.getDataById,
 );
 router.put(
   "/:id/review",
   auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
-  requireAnyPermission(["daily_work_reports", "employee_list", "employee_management"]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.reviewReport,
 );
 router.post(
   "/send-reminders",
   auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
-  requireAnyPermission(["daily_work_reports", "employee_list", "employee_management"]),
+  requireAnyPermission(dailyWorkReportPermissions),
   DailyWorkReportController.sendPendingReminders,
 );
 

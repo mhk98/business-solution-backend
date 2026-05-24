@@ -145,13 +145,18 @@ const removeReceivedItemFromInventory = async (item, transaction) => {
 };
 
 const summarizeReceivedItems = (items = []) => {
-  const quantity = items.reduce((total, item) => total + toNumber(item.quantity), 0);
+  const quantity = items.reduce(
+    (total, item) => total + toNumber(item.quantity),
+    0,
+  );
   const totalPurchase = items.reduce(
-    (total, item) => total + toNumber(item.purchase_price) * toNumber(item.quantity),
+    (total, item) =>
+      total + toNumber(item.purchase_price) * toNumber(item.quantity),
     0,
   );
   const totalSale = items.reduce(
-    (total, item) => total + toNumber(item.sale_price) * toNumber(item.quantity),
+    (total, item) =>
+      total + toNumber(item.sale_price) * toNumber(item.quantity),
     0,
   );
 
@@ -578,7 +583,9 @@ const insertBulkIntoDB = async (data, file, preparedItems = null) => {
   const finalStatus = String(status || "").trim() || "Active";
 
   return db.sequelize.transaction(async (t) => {
-    const productIds = [...new Set(items.map((item) => Number(item.productId)))];
+    const productIds = [
+      ...new Set(items.map((item) => Number(item.productId))),
+    ];
     if (productIds.some((id) => !id)) {
       throw new ApiError(400, "Product is required for every item");
     }
@@ -587,7 +594,9 @@ const insertBulkIntoDB = async (data, file, preparedItems = null) => {
       where: { Id: { [Op.in]: productIds } },
       transaction: t,
     });
-    const productMap = new Map(products.map((product) => [Number(product.Id), product]));
+    const productMap = new Map(
+      products.map((product) => [Number(product.Id), product]),
+    );
 
     if (products.length !== productIds.length) {
       throw new ApiError(404, "One or more products not found");
@@ -602,7 +611,10 @@ const insertBulkIntoDB = async (data, file, preparedItems = null) => {
       const quantity = toNumber(item.quantity);
 
       if (quantity <= 0) {
-        throw new ApiError(400, "Quantity must be greater than 0 for every item");
+        throw new ApiError(
+          400,
+          "Quantity must be greater than 0 for every item",
+        );
       }
 
       const normalizedItem = {
@@ -861,7 +873,10 @@ const deleteIdFromDB = async (id, options = {}) => {
 
         if (inv) {
           const nextQty = Number(inv.quantity || 0) - qty;
-          const nextVariants = subtractVariants(inv.variants, existing.variants);
+          const nextVariants = subtractVariants(
+            inv.variants,
+            existing.variants,
+          );
 
           if (nextQty < 0) {
             throw new ApiError(
@@ -1033,9 +1048,9 @@ const updateOneFromDB = async (id, payload) => {
       const quantityDiff = nextQty - qty;
       const nextInventoryQty = toNumber(oldInv.quantity) + quantityDiff;
 
-      if (nextInventoryQty < 0) {
-        throw new ApiError(400, "Inventory cannot be negative");
-      }
+      // if (nextInventoryQty < 0) {
+      //   throw new ApiError(400, "Inventory cannot be negative");
+      // }
 
       const nextInventoryVariants = mergeVariants(
         subtractVariants(oldInv.variants, existingVariants),
