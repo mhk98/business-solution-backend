@@ -259,8 +259,6 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
       finalStatus = inputStatus || finalStatus;
     }
 
-    let normalizedItems = oldItems;
-
     if (preparedItems.length > 0) {
       for (const item of oldItems) {
         await removeReceivedItemFromInventory(item, t);
@@ -285,7 +283,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
         throw new ApiError(404, "One or more products not found");
       }
 
-      normalizedItems = [];
+      const normalizedItems = [];
       for (const item of preparedItems) {
         const productId = Number(item.productId);
         const productData = productMap.get(productId);
@@ -314,23 +312,51 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
         normalizedItems.push(normalizedItem);
         await applyReceivedItemToInventory(normalizedItem, productData, t);
       }
+
+      // Delete the old single bulk row and create separate rows per item
+      await ReceivedProduct.destroy({ where: { Id: id }, transaction: t });
+
+      const resolvedBatchId = batchId || existing.batchId || `batch-${Date.now()}`;
+      for (const normalizedItem of normalizedItems) {
+        await ReceivedProduct.create(
+          {
+            name: normalizedItem.name,
+            quantity: normalizedItem.quantity,
+            source: "Received Product",
+            batchId: resolvedBatchId,
+            items: [],
+            purchase_price: normalizedItem.purchase_price,
+            sale_price: normalizedItem.sale_price,
+            supplierId,
+            warehouseId,
+            productId: normalizedItem.productId,
+            sku: normalizedItem.sku || "",
+            weight: normalizedItem.weight || 0,
+            variants: normalizedItem.variants,
+            status: finalStatus || "---",
+            note: finalStatus === "Approved" ? null : newNote || null,
+            date: inputDateStr || undefined,
+            file,
+          },
+          { transaction: t },
+        );
+      }
+
+      await sendReceivedProductNotifications({
+        userId,
+        status: finalStatus,
+        note: newNote,
+        date: inputDateStr,
+        transaction: t,
+      });
+
+      return normalizedItems.length;
     }
 
-    const summary = summarizeReceivedItems(normalizedItems);
-    const firstItem = normalizedItems[0] || {};
+    // No preparedItems — just update the metadata fields (status, note, date, etc.)
     const data = {
-      name: normalizedItems.map((item) => item.name).join(", "),
-      quantity: summary.quantity,
-      purchase_price: summary.purchase_price,
-      sale_price: summary.sale_price,
       supplierId,
       warehouseId,
-      productId: firstItem.productId || existing.productId,
-      sku: "",
-      weight: 0,
-      variants: [],
-      items: normalizedItems,
-      batchId: batchId || undefined,
       note: finalStatus === "Approved" ? null : newNote || null,
       status: finalStatus,
       date: inputDateStr || undefined,
@@ -651,40 +677,32 @@ const insertBulkIntoDB = async (data, file, preparedItems = null) => {
       }
     }
 
-    const totalQuantity = normalizedItems.reduce(
-      (total, item) => total + item.quantity,
-      0,
-    );
-    const totalPurchase = normalizedItems.reduce(
-      (total, item) => total + item.purchase_price * item.quantity,
-      0,
-    );
-    const totalSale = normalizedItems.reduce(
-      (total, item) => total + item.sale_price * item.quantity,
-      0,
-    );
-
-    const result = await ReceivedProduct.create(
-      {
-        name: normalizedItems.map((item) => item.name).join(", "),
-        quantity: totalQuantity,
-        source: "Received Product",
-        batchId: batchId || null,
-        items: normalizedItems,
-        purchase_price: totalQuantity ? totalPurchase / totalQuantity : 0,
-        sale_price: totalQuantity ? totalSale / totalQuantity : 0,
-        supplierId,
-        warehouseId,
-        productId: normalizedItems[0]?.productId || null,
-        sku: "",
-        weight: 0,
-        variants: [],
-        status: finalStatus || "---",
-        note: finalStatus === "Approved" ? null : note || null,
-        date,
-      },
-      { transaction: t },
-    );
+    const results = [];
+    for (const normalizedItem of normalizedItems) {
+      const result = await ReceivedProduct.create(
+        {
+          name: normalizedItem.name,
+          quantity: normalizedItem.quantity,
+          source: "Received Product",
+          batchId: batchId || null,
+          items: [],
+          purchase_price: normalizedItem.purchase_price,
+          sale_price: normalizedItem.sale_price,
+          supplierId,
+          warehouseId,
+          productId: normalizedItem.productId,
+          sku: normalizedItem.sku || "",
+          weight: normalizedItem.weight || 0,
+          variants: normalizedItem.variants,
+          status: finalStatus || "---",
+          note: finalStatus === "Approved" ? null : note || null,
+          date,
+        },
+        { transaction: t },
+      );
+      results.push(result);
+    }
+    const result = results[0];
 
     await sendReceivedProductNotifications({
       userId,

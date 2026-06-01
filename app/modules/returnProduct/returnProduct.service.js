@@ -332,26 +332,30 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
       normalizedItems.push(await moveItemFromInventory(item, t));
     }
 
-    const summary = summarizeItems(normalizedItems);
-    const result = await ReturnProduct.create(
-      {
-        name: normalizedItems.map((item) => item.name).join(", "),
-        supplierId,
-        warehouseId,
-        quantity: summary.quantity,
-        variants: [],
-        items: normalizedItems,
-        source: "Sales Return Product",
-        batchId: batchId || null,
-        purchase_price: summary.purchase_price,
-        sale_price: summary.sale_price,
-        productId: normalizedItems[0]?.productId || null,
-        status: finalStatus || "---",
-        note: finalStatus === "Approved" ? null : note || null,
-        date,
-      },
-      { transaction: t },
-    );
+    const results = [];
+    for (const normalizedItem of normalizedItems) {
+      const result = await ReturnProduct.create(
+        {
+          name: normalizedItem.name,
+          supplierId,
+          warehouseId,
+          quantity: normalizedItem.quantity,
+          variants: normalizedItem.variants,
+          items: [],
+          source: "Sales Return Product",
+          batchId: batchId || null,
+          purchase_price: normalizedItem.purchase_price,
+          sale_price: normalizedItem.sale_price,
+          productId: normalizedItem.productId,
+          status: finalStatus || "---",
+          note: finalStatus === "Approved" ? null : note || null,
+          date,
+        },
+        { transaction: t },
+      );
+      results.push(result);
+    }
+    const result = results[0];
 
     const users = await User.findAll({
       attributes: ["Id", "role"],
@@ -751,6 +755,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
         "variants",
         "productId",
         "items",
+        "batchId",
       ],
       transaction: t,
       lock: t.LOCK.UPDATE,
@@ -796,26 +801,32 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
       normalizedItems.push(await moveItemFromInventory(item, t));
     }
 
-    const summary = summarizeItems(normalizedItems);
-    const data = {
-      name: normalizedItems.map((item) => item.name).join(", "),
-      supplierId,
-      warehouseId,
-      quantity: summary.quantity,
-      variants: [],
-      items: normalizedItems,
-      purchase_price: summary.purchase_price,
-      sale_price: summary.sale_price,
-      productId: normalizedItems[0]?.productId || null,
-      note: finalStatus === "Approved" ? null : newNote || null,
-      status: finalStatus,
-      date: inputDateStr || undefined,
-    };
+    // Delete the old single bulk row and create separate rows per item
+    await ReturnProduct.destroy({ where: { Id: id }, transaction: t });
 
-    const [updatedCount] = await ReturnProduct.update(data, {
-      where: { Id: id },
-      transaction: t,
-    });
+    const resolvedBatchId = existing.batchId || `batch-${Date.now()}`;
+    for (const normalizedItem of normalizedItems) {
+      await ReturnProduct.create(
+        {
+          name: normalizedItem.name,
+          supplierId,
+          warehouseId,
+          quantity: normalizedItem.quantity,
+          variants: normalizedItem.variants,
+          items: [],
+          source: "Sales Return Product",
+          batchId: resolvedBatchId,
+          purchase_price: normalizedItem.purchase_price,
+          sale_price: normalizedItem.sale_price,
+          productId: normalizedItem.productId,
+          note: finalStatus === "Approved" ? null : newNote || null,
+          status: finalStatus,
+          date: inputDateStr || undefined,
+        },
+        { transaction: t },
+      );
+    }
+    const updatedCount = normalizedItems.length;
 
     const users = await User.findAll({
       attributes: ["Id", "role"],

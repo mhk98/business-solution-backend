@@ -320,25 +320,29 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
       normalizedItems.push(await normalizeReturnItem(item, t));
     }
 
-    const summary = summarizeReturnItems(normalizedItems);
-    const result = await PurchaseReturnProduct.create(
-      {
-        name: normalizedItems.map((item) => item.name).join(", "),
-        supplierId,
-        warehouseId,
-        quantity: summary.quantity,
-        variants: [],
-        items: normalizedItems,
-        source: "Purchase Return Product",
-        purchase_price: summary.purchase_price,
-        sale_price: summary.sale_price,
-        productId: normalizedItems[0]?.productId || null,
-        status: finalStatus || "---",
-        note: finalStatus === "Approved" ? null : note || null,
-        date,
-      },
-      { transaction: t },
-    );
+    const results = [];
+    for (const normalizedItem of normalizedItems) {
+      const result = await PurchaseReturnProduct.create(
+        {
+          name: normalizedItem.name,
+          supplierId,
+          warehouseId,
+          quantity: normalizedItem.quantity,
+          variants: normalizedItem.variants,
+          items: [],
+          source: "Purchase Return Product",
+          purchase_price: normalizedItem.purchase_price,
+          sale_price: normalizedItem.sale_price,
+          productId: normalizedItem.productId,
+          status: finalStatus || "---",
+          note: finalStatus === "Approved" ? null : note || null,
+          date,
+        },
+        { transaction: t },
+      );
+      results.push(result);
+    }
+    const result = results[0];
 
     const users = await User.findAll({
       attributes: ["Id", "role"],
@@ -784,26 +788,30 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
       normalizedItems.push(await normalizeReturnItem(item, t));
     }
 
-    const summary = summarizeReturnItems(normalizedItems);
-    const data = {
-      name: normalizedItems.map((item) => item.name).join(", "),
-      quantity: summary.quantity,
-      variants: [],
-      items: normalizedItems,
-      purchase_price: summary.purchase_price,
-      sale_price: summary.sale_price,
-      supplierId,
-      warehouseId,
-      productId: normalizedItems[0]?.productId || null,
-      note: finalStatus === "Approved" ? null : newNote || null,
-      status: finalStatus,
-      date: inputDateStr || undefined,
-    };
+    // Delete the old single bulk row and create separate rows per item
+    await PurchaseReturnProduct.destroy({ where: { Id: id }, transaction: t });
 
-    const [updatedCount] = await PurchaseReturnProduct.update(data, {
-      where: { Id: id },
-      transaction: t,
-    });
+    for (const normalizedItem of normalizedItems) {
+      await PurchaseReturnProduct.create(
+        {
+          name: normalizedItem.name,
+          supplierId,
+          warehouseId,
+          quantity: normalizedItem.quantity,
+          variants: normalizedItem.variants,
+          items: [],
+          source: "Purchase Return Product",
+          purchase_price: normalizedItem.purchase_price,
+          sale_price: normalizedItem.sale_price,
+          productId: normalizedItem.productId,
+          note: finalStatus === "Approved" ? null : newNote || null,
+          status: finalStatus,
+          date: inputDateStr || undefined,
+        },
+        { transaction: t },
+      );
+    }
+    const updatedCount = normalizedItems.length;
 
     const users = await User.findAll({
       attributes: ["Id", "role"],

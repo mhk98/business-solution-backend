@@ -216,26 +216,30 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
       normalizedItems.push(await moveDamageProductItem(item, t));
     }
 
-    const summary = summarizeItems(normalizedItems);
-    const result = await DamageProduct.create(
-      {
-        name: normalizedItems.map((item) => item.name).join(", "),
-        supplierId,
-        warehouseId,
-        quantity: summary.quantity,
-        variants: [],
-        items: normalizedItems,
-        source: "Damage Product",
-        batchId: batchId || null,
-        purchase_price: summary.purchase_price,
-        sale_price: summary.sale_price,
-        productId: normalizedItems[0]?.productId || null,
-        status: finalStatus || "---",
-        note: finalStatus === "Approved" ? null : note || null,
-        date,
-      },
-      { transaction: t },
-    );
+    const results = [];
+    for (const normalizedItem of normalizedItems) {
+      const result = await DamageProduct.create(
+        {
+          name: normalizedItem.name,
+          supplierId,
+          warehouseId,
+          quantity: normalizedItem.quantity,
+          variants: normalizedItem.variants,
+          items: [],
+          source: "Damage Product",
+          batchId: batchId || null,
+          purchase_price: normalizedItem.purchase_price,
+          sale_price: normalizedItem.sale_price,
+          productId: normalizedItem.productId,
+          status: finalStatus || "---",
+          note: finalStatus === "Approved" ? null : note || null,
+          date,
+        },
+        { transaction: t },
+      );
+      results.push(result);
+    }
+    const result = results[0];
 
     const users = await User.findAll({
       attributes: ["Id", "role"],
