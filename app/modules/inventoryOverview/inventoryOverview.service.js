@@ -267,6 +267,52 @@ const findRows = async (Model, where = {}, label, include = []) => {
   }));
 };
 
+const parseRowVariants = (row) => {
+  if (Array.isArray(row.variants)) return row.variants;
+  try { return JSON.parse(row.variants || "[]"); } catch { return []; }
+};
+
+// ReceivedProduct stores unit prices (purchase_price = unit price, must × quantity).
+// All other sources store pre-computed totals in purchase_price/sale_price.
+const SOURCE_STORES_UNIT_PRICE = "Received Product";
+
+const calcRowPurchaseValue = (row) => {
+  const variants = parseRowVariants(row);
+
+  if (variants.length) {
+    const hasVariantPrices = variants.some((v) => n(v?.purchase_price) > 0);
+    if (hasVariantPrices) {
+      // Variants carry unit prices (ReceivedProduct style)
+      return variants.reduce((sum, v) => sum + n(v?.quantity) * n(v?.purchase_price), 0);
+    }
+    // Variants have no prices → row.purchase_price is already the total
+    return n(row.purchase_price);
+  }
+
+  if (row.source === SOURCE_STORES_UNIT_PRICE) {
+    return n(row.quantity) * n(row.purchase_price);
+  }
+  // All other sources store total in purchase_price
+  return n(row.purchase_price);
+};
+
+const calcRowSaleValue = (row) => {
+  const variants = parseRowVariants(row);
+
+  if (variants.length) {
+    const hasVariantPrices = variants.some((v) => n(v?.sale_price) > 0);
+    if (hasVariantPrices) {
+      return variants.reduce((sum, v) => sum + n(v?.quantity) * n(v?.sale_price), 0);
+    }
+    return n(row.sale_price);
+  }
+
+  if (row.source === SOURCE_STORES_UNIT_PRICE) {
+    return n(row.quantity) * n(row.sale_price);
+  }
+  return n(row.sale_price);
+};
+
 const getInventoryOverviewListFromDB = async (filters) => {
   const { from, to, name, source, totalQuantity: requestedTotalQuantity } = filters;
 
@@ -295,6 +341,8 @@ const getInventoryOverviewListFromDB = async (filters) => {
     return (b.Id || 0) - (a.Id || 0);
   });
   const totalQuantity = all.reduce((sum, row) => sum + n(row.quantity), 0);
+  const totalPurchaseValue = all.reduce((sum, row) => sum + calcRowPurchaseValue(row), 0);
+  const totalSaleValue = all.reduce((sum, row) => sum + calcRowSaleValue(row), 0);
 
   const paged = all.slice(skip, skip + limit);
 
@@ -303,7 +351,7 @@ const getInventoryOverviewListFromDB = async (filters) => {
       from: from || null,
       to: to || null,
       name: name || null,
-      source: source || null, // Return category in the meta
+      source: source || null,
       requestedTotalQuantity:
         requestedTotalQuantity === undefined ||
         requestedTotalQuantity === null ||
@@ -314,6 +362,8 @@ const getInventoryOverviewListFromDB = async (filters) => {
       limit,
       count: all.length,
       totalQuantity,
+      totalPurchaseValue,
+      totalSaleValue,
       totalPages: Math.max(1, Math.ceil(all.length / limit)),
     },
     data: paged,
