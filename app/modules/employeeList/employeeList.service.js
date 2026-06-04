@@ -128,7 +128,9 @@ const attachAdvanceSummary = async (employee, transaction) => {
   if (!employee) return employee;
 
   const plainEmployee =
-    typeof employee.get === "function" ? employee.get({ plain: true }) : employee;
+    typeof employee.get === "function"
+      ? employee.get({ plain: true })
+      : employee;
   const advanceSummary = await getEmployeeAdvanceSummary(
     plainEmployee,
     transaction,
@@ -142,10 +144,14 @@ const attachAdvanceSummary = async (employee, transaction) => {
 
 const attachAdvanceSummaries = async (employees, transaction) => {
   const plainEmployees = employees.map((employee) =>
-    typeof employee.get === "function" ? employee.get({ plain: true }) : employee,
+    typeof employee.get === "function"
+      ? employee.get({ plain: true })
+      : employee,
   );
   const allEmployeeIds = [
-    ...new Set(plainEmployees.flatMap((employee) => getEmployeeLedgerIds(employee))),
+    ...new Set(
+      plainEmployees.flatMap((employee) => getEmployeeLedgerIds(employee)),
+    ),
   ];
 
   if (!allEmployeeIds.length) {
@@ -200,14 +206,21 @@ const attachAdvanceSummaries = async (employees, transaction) => {
 
 const buildEmployeeData = (payload = {}, currentStatus) => {
   const inputStatus = String(payload.status || "").trim();
-  const inputDateStr = String(payload.date || payload.joiningDate || "").slice(0, 10);
+  const inputDateStr = String(payload.date || payload.joiningDate || "").slice(
+    0,
+    10,
+  );
   const todayStr = new Date().toISOString().slice(0, 10);
   const note = String(payload.note || "").trim();
 
   const finalStatus =
     inputStatus ||
     currentStatus ||
-    (inputDateStr && inputDateStr !== todayStr ? "Pending" : note ? "Pending" : "Active");
+    (inputDateStr && inputDateStr !== todayStr
+      ? "Pending"
+      : note
+        ? "Pending"
+        : "Active");
 
   return {
     name: payload.name,
@@ -236,7 +249,9 @@ const buildEmployeeData = (payload = {}, currentStatus) => {
 };
 
 const normalizeEmployeeStatus = (value) => {
-  const status = String(value || "").trim().toLowerCase();
+  const status = String(value || "")
+    .trim()
+    .toLowerCase();
 
   if (status === "active") return "Active";
   if (status === "deactive" || status === "inactive") return "Deactive";
@@ -316,7 +331,9 @@ const getAllFromDB = async (filters, options) => {
     deletedAt: { [Op.is]: null },
   });
 
-  const whereConditions = andConditions.length ? { [Op.and]: andConditions } : {};
+  const whereConditions = andConditions.length
+    ? { [Op.and]: andConditions }
+    : {};
 
   const result = await EmployeeList.findAll({
     where: whereConditions,

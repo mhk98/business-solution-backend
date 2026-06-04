@@ -213,12 +213,14 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
     status,
     date,
     userId,
-    supplierId,
-    warehouseId,
+    supplierId: rawSupplierId,
+    warehouseId: rawWarehouseId,
     batchId,
     actorRole,
     file,
   } = payload;
+  const supplierId = Number(rawSupplierId) || null;
+  const warehouseId = Number(rawWarehouseId) || null;
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const inputDateStr = String(date || "").slice(0, 10);
@@ -405,10 +407,12 @@ const insertIntoDB = async (data, file) => {
     weight,
     userId,
     bookId,
-    supplierId,
-    warehouseId,
+    supplierId: rawSupplierId,
+    warehouseId: rawWarehouseId,
     batchId,
   } = data;
+  const supplierId = Number(rawSupplierId) || null;
+  const warehouseId = Number(rawWarehouseId) || null;
 
   console.log("ReceivedProduct", data);
 
@@ -599,12 +603,14 @@ const insertBulkIntoDB = async (data, file, preparedItems = null) => {
     status,
     note,
     userId,
-    supplierId,
-    warehouseId,
+    supplierId: rawBulkSupplierId,
+    warehouseId: rawBulkWarehouseId,
     batchId,
     warrantyValue,
     warrantyUnit,
   } = data;
+  const supplierId = Number(rawBulkSupplierId) || null;
+  const warehouseId = Number(rawBulkWarehouseId) || null;
 
   const finalStatus = String(status || "").trim() || "Active";
 
@@ -950,15 +956,17 @@ const updateOneFromDB = async (id, payload) => {
     sku,
     weight,
     userId,
-    supplierId,
+    supplierId: rawUpdateSupplierId,
     bookId,
-    warehouseId,
+    warehouseId: rawUpdateWarehouseId,
     purchase_price,
     sale_price,
     variants,
     actorRole,
     file,
   } = payload;
+  const supplierId = Number(rawUpdateSupplierId) || null;
+  const warehouseId = Number(rawUpdateWarehouseId) || null;
 
   const productData = await Product.findOne({
     where: { Id: productId },
