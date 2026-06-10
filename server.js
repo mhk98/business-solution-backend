@@ -33,21 +33,37 @@ app.use(
    CORS
 ======================== */
 
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
-  : ["http://localhost:5173"];
+const DEFAULT_ALLOWED_ORIGINS = [
+  "http://localhost:5173",
+  "https://kafelamart.digitalever.com.bd",
+  "https://www.kafelamart.digitalever.com.bd",
+  "https://shifa.digitalever.com.bd",
+  "https://www.shifa.digitalever.com.bd",
+];
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // allow requests with no origin (e.g. mobile apps, curl, Postman)
-      if (!origin) return callback(null, true);
-      if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-  }),
+const ALLOWED_ORIGINS = new Set(
+  (process.env.ALLOWED_ORIGINS || DEFAULT_ALLOWED_ORIGINS.join(","))
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter(Boolean),
 );
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // allow requests with no origin (e.g. mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+
+    const normalizedOrigin = origin.replace(/\/+$/, "");
+    if (ALLOWED_ORIGINS.has(normalizedOrigin)) return callback(null, true);
+
+    return callback(null, false);
+  },
+  credentials: true,
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 /* ========================
    RATE LIMITING
@@ -55,7 +71,7 @@ app.use(
 
 // Strict limiter for auth endpoints
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 5 * 60 * 1000, // 5 minutes
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,

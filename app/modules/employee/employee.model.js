@@ -22,6 +22,20 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: false,
       },
+      joining_date: {
+        type: DataTypes.DATEONLY,
+        allowNull: true,
+      },
+      pre_joining_days: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      payable_days: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 30,
+      },
       userId: {
         type: DataTypes.INTEGER(10),
         allowNull: true,

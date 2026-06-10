@@ -1316,6 +1316,20 @@ const ensureEmployeeColumns = async () => {
     type: DataTypes.INTEGER(10),
     allowNull: true,
   });
+  await maybeAddColumn("joining_date", {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+  });
+  await maybeAddColumn("pre_joining_days", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("payable_days", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 30,
+  });
   await maybeAddColumn("departmentId", {
     type: DataTypes.INTEGER(10),
     allowNull: true,
@@ -1441,6 +1455,18 @@ const ensureKPIColumns = async () => {
     allowNull: true,
   });
   await maybeAddColumn("userId", {
+    type: DataTypes.INTEGER(10),
+    allowNull: true,
+  });
+  await maybeAddColumn("departmentId", {
+    type: DataTypes.INTEGER(10),
+    allowNull: true,
+  });
+  await maybeAddColumn("designationId", {
+    type: DataTypes.INTEGER(10),
+    allowNull: true,
+  });
+  await maybeAddColumn("teamId", {
     type: DataTypes.INTEGER(10),
     allowNull: true,
   });

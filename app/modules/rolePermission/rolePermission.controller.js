@@ -2,6 +2,19 @@ const catchAsync = require("../../../shared/catchAsync");
 const sendResponse = require("../../../shared/sendResponse");
 const RolePermissionService = require("./rolePermission.service");
 
+const getMyRolePermissions = catchAsync(async (req, res) => {
+  const result = await RolePermissionService.getRolePermissionByRole(
+    req.user.role,
+  );
+
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "My role permissions fetched successfully",
+    data: result,
+  });
+});
+
 const getAllRolePermissions = catchAsync(async (req, res) => {
   const result = await RolePermissionService.getAllRolePermissions();
 
@@ -41,6 +54,7 @@ const updateRolePermissions = catchAsync(async (req, res) => {
 });
 
 module.exports = {
+  getMyRolePermissions,
   getAllRolePermissions,
   getRolePermissionByRole,
   updateRolePermissions,

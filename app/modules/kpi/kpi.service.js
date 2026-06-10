@@ -759,8 +759,16 @@ const getEmployeeOptions = async (filters = {}, options = {}, actor = {}) => {
   });
   const { searchTerm, status } = filters;
 
+  const EXCLUDED_ROLES = [
+    ENUM_USER_ROLE.SUPER_ADMIN,
+    ENUM_USER_ROLE.ADMIN,
+    ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.INVENTOR,
+    ENUM_USER_ROLE.MARKETER,
+  ];
+
   const andConditions = [
-    { role: { [Op.eq]: ENUM_USER_ROLE.EMPLOYEE } },
+    { role: { [Op.notIn]: EXCLUDED_ROLES } },
     { deletedAt: { [Op.is]: null } },
   ];
 

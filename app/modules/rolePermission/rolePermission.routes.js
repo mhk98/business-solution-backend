@@ -5,6 +5,12 @@ const requireRoles = require("../../middlewares/requireRoles");
 const RolePermissionController = require("./rolePermission.controller");
 
 router.get(
+  "/self",
+  auth(),
+  RolePermissionController.getMyRolePermissions,
+);
+
+router.get(
   "/",
   auth(),
   requireRoles(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),

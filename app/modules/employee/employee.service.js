@@ -19,7 +19,14 @@ const employeeInclude = [
   {
     model: EmployeeList,
     as: "employeeProfile",
-    attributes: ["Id", "name", "employee_id", "employeeCode", "designationId"],
+    attributes: [
+      "Id",
+      "name",
+      "employee_id",
+      "employeeCode",
+      "designationId",
+      "joiningDate",
+    ],
     required: false,
   },
   {
@@ -117,6 +124,9 @@ const insertIntoDB = async (payload) => {
   const {
     name,
     employee_id,
+    joining_date,
+    pre_joining_days,
+    payable_days,
     bookId,
     basic_salary,
     incentive,
@@ -152,6 +162,9 @@ const insertIntoDB = async (payload) => {
     const data = {
       name,
       employee_id,
+      joining_date,
+      pre_joining_days,
+      payable_days,
       basic_salary,
       incentive,
       holiday_payment,
@@ -337,6 +350,9 @@ const updateOneFromDB = async (id, payload) => {
   const {
     name,
     employee_id,
+    joining_date,
+    pre_joining_days,
+    payable_days,
     basic_salary,
     incentive,
     holiday_payment,
@@ -408,6 +424,9 @@ const updateOneFromDB = async (id, payload) => {
   const data = {
     name,
     employee_id,
+    joining_date,
+    pre_joining_days,
+    payable_days,
     basic_salary,
     incentive,
     holiday_payment,
