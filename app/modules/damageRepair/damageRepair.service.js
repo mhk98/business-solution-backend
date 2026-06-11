@@ -887,19 +887,6 @@ const updateOneFromDB = async (id, data) => {
       throw new ApiError(400, "DamageStock.productId missing (Products.Id)");
     }
 
-    await syncDamageReparingStock(
-      {
-        productId: oldCatalogProductId,
-        name: existing.name,
-        quantityDelta: -qty,
-        purchasePriceDelta: -Number(existing.purchase_price || 0),
-        salePriceDelta: -Number(existing.sale_price || 0),
-        variants: existingVariants,
-        date: existing.date,
-      },
-      t,
-    );
-
     let received = oldStock;
     if (Number(receivedId) !== oldProductId) {
       received = await findDamageStockByReference(rid, t);
@@ -930,6 +917,22 @@ const updateOneFromDB = async (id, data) => {
     const catalogProductId = Number(received.productId);
     if (!catalogProductId) {
       throw new ApiError(400, "DamageStock.productId missing (Products.Id)");
+    }
+    const productChanged = catalogProductId !== oldCatalogProductId;
+
+    if (productChanged) {
+      await syncDamageReparingStock(
+        {
+          productId: oldCatalogProductId,
+          name: existing.name,
+          quantityDelta: -qty,
+          purchasePriceDelta: -Number(existing.purchase_price || 0),
+          salePriceDelta: -Number(existing.sale_price || 0),
+          variants: existingVariants,
+          date: existing.date,
+        },
+        t,
+      );
     }
 
     const hasProductVariations = await productHasVariations(
@@ -988,18 +991,82 @@ const updateOneFromDB = async (id, data) => {
       { where: { Id: received.Id }, transaction: t },
     );
 
-    await syncDamageReparingStock(
-      {
-        productId: catalogProductId,
-        name: received.name,
-        quantityDelta: nextQty,
-        purchasePriceDelta: deductPurchase,
-        salePriceDelta: deductSale,
-        variants: selectedVariants,
-        date: inputDateStr || date,
-      },
-      t,
-    );
+    if (productChanged) {
+      await syncDamageReparingStock(
+        {
+          productId: catalogProductId,
+          name: received.name,
+          quantityDelta: nextQty,
+          purchasePriceDelta: deductPurchase,
+          salePriceDelta: deductSale,
+          variants: selectedVariants,
+          date: inputDateStr || date,
+        },
+        t,
+      );
+    } else {
+      const repairingStock = await findDamageReparingStockByProductId(
+        catalogProductId,
+        t,
+      );
+      const nextRepairingVariants =
+        existingVariants.length || selectedVariants.length
+          ? mergeVariants(
+              subtractVariants(repairingStock?.variants, existingVariants),
+              selectedVariants,
+            )
+          : repairingStock?.variants || [];
+      const nextRepairingQty = hasVariantRows(nextRepairingVariants)
+        ? getVariantQuantityTotal(nextRepairingVariants)
+        : Number(repairingStock?.quantity || 0) - qty + nextQty;
+
+      if (nextRepairingQty < 0) {
+        throw new ApiError(400, "DamageReparingStock balance cannot be negative");
+      }
+
+      if (repairingStock) {
+        await repairingStock.update(
+          {
+            name: received.name || repairingStock.name,
+            date: inputDateStr || date || repairingStock.date,
+            quantity: nextRepairingQty,
+            purchase_price: Math.max(
+              0,
+              Number(repairingStock.purchase_price || 0) -
+                Number(existing.purchase_price || 0) +
+                Number(deductPurchase || 0),
+            ),
+            sale_price: Math.max(
+              0,
+              Number(repairingStock.sale_price || 0) -
+                Number(existing.sale_price || 0) +
+                Number(deductSale || 0),
+            ),
+            variants: nextRepairingVariants,
+          },
+          { transaction: t },
+        );
+      } else if (nextRepairingQty > 0) {
+        await DamageReparingStock.create(
+          {
+            productId: catalogProductId,
+            name: received.name,
+            quantity: nextRepairingQty,
+            purchase_price: Math.max(
+              0,
+              Number(deductPurchase || 0) - Number(existing.purchase_price || 0),
+            ),
+            sale_price: Math.max(
+              0,
+              Number(deductSale || 0) - Number(existing.sale_price || 0),
+            ),
+            variants: nextRepairingVariants,
+            date: inputDateStr || date,
+          },
+          { transaction: t },
+        );
+      }
+    }
 
     // await DamageStock.update(
     //   {

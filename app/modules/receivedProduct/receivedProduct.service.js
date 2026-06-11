@@ -58,6 +58,18 @@ const getBulkItems = (data = {}) => {
   }));
 };
 
+const syncProductStockId = async (productData, stockId, transaction) => {
+  if (!productData || !stockId) return;
+
+  if (Number(productData.stockId || 0) === Number(stockId)) return;
+
+  await Product.update(
+    { stockId },
+    { where: { Id: productData.Id }, transaction },
+  );
+  productData.stockId = stockId;
+};
+
 const applyReceivedItemToInventory = async (item, productData, transaction) => {
   const incomingVariants = parseVariants(item.variants);
   const quantity = toNumber(item.quantity);
@@ -82,12 +94,7 @@ const applyReceivedItemToInventory = async (item, productData, transaction) => {
       { transaction },
     );
 
-    if (!productData.stockId) {
-      await Product.update(
-        { stockId: inv.Id },
-        { where: { Id: productId }, transaction },
-      );
-    }
+    await syncProductStockId(productData, inv.Id, transaction);
 
     return;
   }
@@ -106,12 +113,7 @@ const applyReceivedItemToInventory = async (item, productData, transaction) => {
     { transaction },
   );
 
-  if (!productData.stockId) {
-    await Product.update(
-      { stockId: stock.Id },
-      { where: { Id: productId }, transaction },
-    );
-  }
+  await syncProductStockId(productData, stock.Id, transaction);
 };
 
 const removeReceivedItemFromInventory = async (item, transaction) => {
@@ -291,10 +293,10 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
         const productData = productMap.get(productId);
         const quantity = toNumber(item.quantity);
 
-        if (quantity <= 0) {
+        if (quantity < 0) {
           throw new ApiError(
             400,
-            "Quantity must be greater than 0 for every item",
+            "Quantity cannot be negative for every item",
           );
         }
 
@@ -503,15 +505,7 @@ const insertIntoDB = async (data, file) => {
         { transaction: t },
       );
 
-      if (!productData.stockId) {
-        await Product.update(
-          { stockId: inv.Id },
-          {
-            where: { Id: productId },
-            transaction: t,
-          },
-        );
-      }
+      await syncProductStockId(productData, inv.Id, t);
     } else {
       const stock = await InventoryMaster.create(
         {
@@ -527,15 +521,7 @@ const insertIntoDB = async (data, file) => {
         { transaction: t },
       );
 
-      if (!productData.stockId) {
-        await Product.update(
-          { stockId: stock.Id },
-          {
-            where: { Id: productId },
-            transaction: t,
-          },
-        );
-      }
+      await syncProductStockId(productData, stock.Id, t);
     }
 
     // =========================
@@ -642,10 +628,10 @@ const insertBulkIntoDB = async (data, file, preparedItems = null) => {
       const incomingVariants = parseVariants(item.variants);
       const quantity = toNumber(item.quantity);
 
-      if (quantity <= 0) {
+      if (quantity < 0) {
         throw new ApiError(
           400,
-          "Quantity must be greater than 0 for every item",
+          "Quantity cannot be negative for every item",
         );
       }
 

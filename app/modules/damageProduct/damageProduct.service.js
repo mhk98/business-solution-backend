@@ -1052,55 +1052,45 @@ const updateOneFromDB = async (id, payload) => {
       oldCatalogProductId,
       t,
     );
-    if (oldDamageStock) {
-      const rolledBackDamageQty = Number(oldDamageStock.quantity || 0) - qty;
-      if (rolledBackDamageQty < 0) {
+    const targetCatalogProductId = Number(targetInv.productId);
+    const productChanged = targetCatalogProductId !== oldCatalogProductId;
+
+    if (!productChanged && oldDamageStock) {
+      const nextDamageVariants =
+        existingVariants.length || incomingVariants.length
+          ? mergeVariants(
+              subtractVariants(oldDamageStock.variants, existingVariants),
+              incomingVariants,
+            )
+          : oldDamageStock.variants;
+      const nextDamageQty = hasVariantRows(nextDamageVariants)
+        ? getVariantQuantityTotal(nextDamageVariants)
+        : Number(oldDamageStock.quantity || 0) - qty + nextQty;
+
+      if (nextDamageQty < 0) {
         throw new ApiError(400, "DamageStock cannot be negative");
       }
 
       await oldDamageStock.update(
         {
-          quantity: rolledBackDamageQty,
-          variants: subtractVariants(oldDamageStock.variants, existingVariants),
+          quantity: nextDamageQty,
+          variants: nextDamageVariants,
           purchase_price: Math.max(
             0,
             Number(oldDamageStock.purchase_price || 0) -
-              Number(existing.purchase_price || 0),
+              Number(existing.purchase_price || 0) +
+              Number(data.purchase_price || 0),
           ),
           sale_price: Math.max(
             0,
             Number(oldDamageStock.sale_price || 0) -
-              Number(existing.sale_price || 0),
+              Number(existing.sale_price || 0) +
+              Number(data.sale_price || 0),
           ),
         },
         { transaction: t },
       );
-    }
-
-    const targetCatalogProductId = Number(targetInv.productId);
-    let targetDamageStock = oldDamageStock;
-    if (targetCatalogProductId !== oldCatalogProductId) {
-      targetDamageStock = await findDamageStockByProductId(
-        targetCatalogProductId,
-        t,
-      );
-    }
-
-    if (targetDamageStock) {
-      await targetDamageStock.update(
-        {
-          quantity: Number(targetDamageStock.quantity || 0) + nextQty,
-          variants: mergeVariants(targetDamageStock.variants, incomingVariants),
-          purchase_price:
-            Number(targetDamageStock.purchase_price || 0) +
-            Number(data.purchase_price || 0),
-          sale_price:
-            Number(targetDamageStock.sale_price || 0) +
-            Number(data.sale_price || 0),
-        },
-        { transaction: t },
-      );
-    } else {
+    } else if (!productChanged) {
       await DamageStock.create(
         {
           productId: targetCatalogProductId,
@@ -1112,6 +1102,71 @@ const updateOneFromDB = async (id, payload) => {
         },
         { transaction: t },
       );
+    } else {
+      if (oldDamageStock) {
+        const rolledBackDamageVariants = subtractVariants(
+          oldDamageStock.variants,
+          existingVariants,
+        );
+        const rolledBackDamageQty = hasVariantRows(rolledBackDamageVariants)
+          ? getVariantQuantityTotal(rolledBackDamageVariants)
+          : Number(oldDamageStock.quantity || 0) - qty;
+
+        if (rolledBackDamageQty < 0) {
+          throw new ApiError(400, "DamageStock cannot be negative");
+        }
+
+        await oldDamageStock.update(
+          {
+            quantity: rolledBackDamageQty,
+            variants: rolledBackDamageVariants,
+            purchase_price: Math.max(
+              0,
+              Number(oldDamageStock.purchase_price || 0) -
+                Number(existing.purchase_price || 0),
+            ),
+            sale_price: Math.max(
+              0,
+              Number(oldDamageStock.sale_price || 0) -
+                Number(existing.sale_price || 0),
+            ),
+          },
+          { transaction: t },
+        );
+      }
+
+      let targetDamageStock = await findDamageStockByProductId(
+        targetCatalogProductId,
+        t,
+      );
+
+      if (targetDamageStock) {
+        await targetDamageStock.update(
+          {
+            quantity: Number(targetDamageStock.quantity || 0) + nextQty,
+            variants: mergeVariants(targetDamageStock.variants, incomingVariants),
+            purchase_price:
+              Number(targetDamageStock.purchase_price || 0) +
+              Number(data.purchase_price || 0),
+            sale_price:
+              Number(targetDamageStock.sale_price || 0) +
+              Number(data.sale_price || 0),
+          },
+          { transaction: t },
+        );
+      } else {
+        await DamageStock.create(
+          {
+            productId: targetCatalogProductId,
+            name: targetInv.name,
+            quantity: nextQty,
+            variants: incomingVariants,
+            purchase_price: Number(data.purchase_price || 0),
+            sale_price: Number(data.sale_price || 0),
+          },
+          { transaction: t },
+        );
+      }
     }
 
     await targetInv.update(

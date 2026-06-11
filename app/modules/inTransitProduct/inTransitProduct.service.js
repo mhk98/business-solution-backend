@@ -69,6 +69,45 @@ const normalizeItemVariants = (item = {}) => {
   ];
 };
 
+const getVariantPriceTotal = (variants = [], field) =>
+  parseVariants(variants).reduce(
+    (total, variant) =>
+      total + toNumber(variant?.quantity) * toNumber(variant?.[field]),
+    0,
+  );
+
+const resolveMovementPrices = (
+  inventory,
+  quantity,
+  variants,
+  purchasePrice,
+  salePrice,
+) => {
+  const providedPurchasePrice = toNumber(purchasePrice);
+  const providedSalePrice = toNumber(salePrice);
+  const variantPurchasePrice = getVariantPriceTotal(variants, "purchase_price");
+  const variantSalePrice = getVariantPriceTotal(variants, "sale_price");
+
+  if (providedPurchasePrice > 0 && providedSalePrice > 0) {
+    return {
+      purchase_price: providedPurchasePrice,
+      sale_price: providedSalePrice,
+    };
+  }
+
+  const unitPurchasePrice = toNumber(inventory?.purchase_price);
+  const unitSalePrice = toNumber(inventory?.sale_price);
+
+  return {
+    purchase_price:
+      providedPurchasePrice ||
+      variantPurchasePrice ||
+      toNumber(quantity) * unitPurchasePrice,
+    sale_price:
+      providedSalePrice || variantSalePrice || toNumber(quantity) * unitSalePrice,
+  };
+};
+
 const summarizeItems = (items = []) => ({
   quantity: items.reduce((total, item) => total + toNumber(item.quantity), 0),
   purchase_price: items.reduce(
@@ -151,15 +190,22 @@ const moveItemFromInventory = async (item, transaction) => {
     { transaction },
   );
 
+  const movementPrices = resolveMovementPrices(
+    inventory,
+    returnQty,
+    incomingVariants,
+    item.purchase_price,
+    customSalePrice !== null ? customSalePrice : item.sale_price,
+  );
+
   return {
     receivedId: rid,
     productId: Number(inventory.Id),
     name: inventory.name,
     quantity: returnQty,
     variants: incomingVariants,
-    purchase_price: toNumber(item.purchase_price),
-    sale_price:
-      customSalePrice !== null ? customSalePrice : toNumber(item.sale_price),
+    purchase_price: movementPrices.purchase_price,
+    sale_price: movementPrices.sale_price,
   };
 };
 
@@ -252,6 +298,14 @@ const insertIntoDB = async (data) => {
       throw new ApiError(400, "InventoryMaster.Id missing");
     }
 
+    const movementPrices = resolveMovementPrices(
+      inventory,
+      returnQty,
+      incomingVariants,
+      purchase_price,
+      customSalePrice !== null ? customSalePrice : sale_price,
+    );
+
     const result = await InTransitProduct.create(
       {
         name: inventory.name,
@@ -261,9 +315,8 @@ const insertIntoDB = async (data) => {
         variants: incomingVariants,
         source: "In Transit Product",
         batchId: batchId || null,
-        purchase_price: Number(purchase_price),
-        sale_price:
-          customSalePrice !== null ? customSalePrice : Number(sale_price),
+        purchase_price: movementPrices.purchase_price,
+        sale_price: movementPrices.sale_price,
         productId: inventoryId,
         status: finalStatus || "---",
         note: finalStatus === "Approved" ? null : note || null,
@@ -1003,13 +1056,20 @@ const updateOneFromDB = async (id, payload) => {
       ? subtractVariants(targetInv.variants, incomingVariants)
       : targetInv.variants;
 
+    const movementPrices = resolveMovementPrices(
+      targetInv,
+      nextQty,
+      incomingVariants,
+      purchase_price,
+      customSalePrice !== null ? customSalePrice : sale_price,
+    );
+
     const data = {
       name: targetInv.name,
       quantity: nextQty,
       variants: incomingVariants,
-      purchase_price: Number(purchase_price || 0),
-      sale_price:
-        customSalePrice !== null ? customSalePrice : Number(sale_price || 0),
+      purchase_price: movementPrices.purchase_price,
+      sale_price: movementPrices.sale_price,
       supplierId,
       warehouseId,
       productId: targetInv.Id,
