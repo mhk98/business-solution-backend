@@ -10,6 +10,7 @@ const mergeVariants = require("../../../shared/mergeVariants");
 const parseVariants = require("../../../shared/parseVariants");
 const subtractVariants = require("../../../shared/subtractVariants");
 const {
+  buildSyncedInventoryStockPayload,
   getInventoryDisplayQuantity,
   getVariantQuantityTotal,
   hasVariantRows,
@@ -1170,10 +1171,10 @@ const updateOneFromDB = async (id, payload) => {
     }
 
     await targetInv.update(
-      {
+      buildSyncedInventoryStockPayload({
         quantity: reducedQty,
         variants: updatedVariants,
-      },
+      }),
       { transaction: t },
     );
 

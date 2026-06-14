@@ -1396,6 +1396,46 @@ const ensureEmployeeWorkReportColumns = async () => {
     allowNull: false,
     defaultValue: 0,
   });
+  await maybeAddColumn("entryUpdate", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("returnSheetReceived", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("exchangePrint", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("missingProblemParcelFollowup", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("holdParcelReceived", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("csProblemSolve", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("pendingAssign", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("completedPendingAssign", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
 };
 
 const ensureDailyWorkReportTaskColumns = async () => {

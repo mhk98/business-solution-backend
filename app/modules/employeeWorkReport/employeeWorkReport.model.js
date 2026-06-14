@@ -78,6 +78,46 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
         defaultValue: 0,
       },
+      entryUpdate: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      returnSheetReceived: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      exchangePrint: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      missingProblemParcelFollowup: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      holdParcelReceived: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      csProblemSolve: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      pendingAssign: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      completedPendingAssign: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
       ideskGiven: {
         type: DataTypes.INTEGER(10),
         allowNull: false,

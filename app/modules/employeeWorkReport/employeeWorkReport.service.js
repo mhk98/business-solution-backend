@@ -5,7 +5,6 @@ const db = require("../../../models");
 const {
   EmployeeWorkReportNumericFields,
   EmployeeWorkReportSaleTypes,
-  EmployeeWorkReportSearchableFields,
 } = require("./employeeWorkReport.constants");
 
 const EmployeeWorkReport = db.employeeWorkReport;
@@ -121,6 +120,110 @@ const getEmployeeProfile = async (userId) => {
   });
 };
 
+const buildTextSearchCondition = (field, tokens) => ({
+  [Op.and]: tokens.map((token) => ({
+    [field]: { [Op.like]: `%${token}%` },
+  })),
+});
+
+const buildReportSearchCondition = async (searchTerm) => {
+  const normalizedSearchTerm = String(searchTerm || "").trim();
+  if (!normalizedSearchTerm) return null;
+
+  const tokens = normalizedSearchTerm.split(/\s+/).filter(Boolean);
+  const likeTerm = `%${normalizedSearchTerm}%`;
+
+  const [matchedUsers, matchedEmployees] = await Promise.all([
+    User.findAll({
+      where: {
+        [Op.or]: [
+          { FirstName: { [Op.like]: likeTerm } },
+          { LastName: { [Op.like]: likeTerm } },
+          { Email: { [Op.like]: likeTerm } },
+          buildTextSearchCondition("FirstName", tokens),
+          buildTextSearchCondition("LastName", tokens),
+          buildTextSearchCondition("Email", tokens),
+        ],
+      },
+      attributes: ["Id"],
+      raw: true,
+    }),
+    EmployeeList.findAll({
+      where: {
+        [Op.or]: [
+          { name: { [Op.like]: likeTerm } },
+          { employeeCode: { [Op.like]: likeTerm } },
+          { email: { [Op.like]: likeTerm } },
+          buildTextSearchCondition("name", tokens),
+          buildTextSearchCondition("employeeCode", tokens),
+          buildTextSearchCondition("email", tokens),
+        ],
+      },
+      attributes: ["Id", "userId"],
+      raw: true,
+    }),
+  ]);
+
+  const userIds = [
+    ...new Set([
+      ...matchedUsers.map((row) => Number(row.Id)).filter(Boolean),
+      ...matchedEmployees.map((row) => Number(row.userId)).filter(Boolean),
+    ]),
+  ];
+  const employeeIds = [
+    ...new Set(matchedEmployees.map((row) => Number(row.Id)).filter(Boolean)),
+  ];
+
+  const orConditions = [
+    buildTextSearchCondition("name", tokens),
+    { name: { [Op.like]: likeTerm } },
+  ];
+
+  if (userIds.length) {
+    orConditions.push({ userId: { [Op.in]: userIds } });
+  }
+  if (employeeIds.length) {
+    orConditions.push({ employeeId: { [Op.in]: employeeIds } });
+  }
+
+  return { [Op.or]: orConditions };
+};
+
+const buildEmployeeFilterCondition = async (employeeId) => {
+  const employee = await EmployeeList.findOne({
+    where: { Id: employeeId },
+    attributes: ["Id", "userId", "name", "employeeCode", "email"],
+    raw: true,
+  });
+
+  if (!employee) {
+    return { employeeId };
+  }
+
+  const orConditions = [{ employeeId: employee.Id }];
+
+  if (employee.userId) {
+    orConditions.push({ userId: employee.userId });
+  }
+  if (employee.name) {
+    orConditions.push({ name: employee.name });
+    orConditions.push(
+      buildTextSearchCondition(
+        "name",
+        employee.name.split(/\s+/).filter(Boolean),
+      ),
+    );
+  }
+  if (employee.email) {
+    orConditions.push({ name: employee.email });
+  }
+  if (employee.employeeCode) {
+    orConditions.push({ name: employee.employeeCode });
+  }
+
+  return { [Op.or]: orConditions };
+};
+
 const getDataById = async (id, actor) => {
   const where = { Id: id };
 
@@ -221,18 +324,7 @@ const getAllReports = async (filters = {}, options = {}, actor) => {
   }
 
   if (searchTerm && searchTerm.trim()) {
-    const normalizedSearchTerm = searchTerm.trim();
-    andConditions.push({
-      [Op.or]: [
-        ...EmployeeWorkReportSearchableFields.map((field) => ({
-          [field]: { [Op.like]: `%${normalizedSearchTerm}%` },
-        })),
-        { "$user.FirstName$": { [Op.like]: `%${normalizedSearchTerm}%` } },
-        { "$user.LastName$": { [Op.like]: `%${normalizedSearchTerm}%` } },
-        { "$user.Email$": { [Op.like]: `%${normalizedSearchTerm}%` } },
-        { "$employee.name$": { [Op.like]: `%${normalizedSearchTerm}%` } },
-      ],
-    });
+    andConditions.push(await buildReportSearchCondition(searchTerm));
   }
 
   if (reportDate) {
@@ -252,7 +344,7 @@ const getAllReports = async (filters = {}, options = {}, actor) => {
   }
 
   if (employeeId) {
-    andConditions.push({ employeeId });
+    andConditions.push(await buildEmployeeFilterCondition(employeeId));
   }
 
   const where = andConditions.length ? { [Op.and]: andConditions } : {};

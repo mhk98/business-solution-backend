@@ -1,5 +1,6 @@
 const LogisticWorkReportFilterableFields = [
   "searchTerm",
+  "name",
   "reportDate",
   "userId",
   "employeeId",

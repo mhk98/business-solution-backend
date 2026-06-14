@@ -47,10 +47,23 @@ const normalizeInventoryQuantityForDisplay = (row) => {
   };
 };
 
+const getSyncedInventoryQuantity = (quantity, variants) =>
+  hasVariantRows(variants)
+    ? getVariantQuantityTotal(variants)
+    : toFiniteNumber(quantity);
+
+const buildSyncedInventoryStockPayload = ({ quantity, variants, ...rest }) => ({
+  ...rest,
+  quantity: getSyncedInventoryQuantity(quantity, variants),
+  variants,
+});
+
 module.exports = {
   getVariantQuantityTotal,
   hasVariantRows,
   getInventoryDisplayQuantity,
   getInventoryStockBalance,
   normalizeInventoryQuantityForDisplay,
+  getSyncedInventoryQuantity,
+  buildSyncedInventoryStockPayload,
 };

@@ -58,6 +58,23 @@ const normalizeNumber = (value, fieldName) => {
   return numberValue;
 };
 
+const buildEmployeeFilter = async (employeeId) => {
+  if (!employeeId) return null;
+
+  const employee = await EmployeeList.findOne({
+    where: { Id: employeeId },
+    attributes: ["Id", "userId"],
+    raw: true,
+  });
+
+  const employeeConditions = [{ employeeId }];
+  if (employee?.userId) {
+    employeeConditions.push({ userId: employee.userId });
+  }
+
+  return { [Op.or]: employeeConditions };
+};
+
 const buildPayload = (payload = {}, fallbackDate, fallbackName) => {
   const data = {
     reportDate: normalizeDate(payload.reportDate, fallbackDate),
@@ -174,7 +191,7 @@ const getMyReports = async (actor, filters, options) => {
 
 const getAllReports = async (filters = {}, options = {}, actor) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
-  const { searchTerm, reportDate, userId, employeeId, startDate, endDate } =
+  const { searchTerm, name, reportDate, userId, employeeId, startDate, endDate } =
     filters;
   const andConditions = [];
 
@@ -193,12 +210,19 @@ const getAllReports = async (filters = {}, options = {}, actor) => {
         { "$user.LastName$": { [Op.like]: `%${normalizedSearchTerm}%` } },
         { "$user.Email$": { [Op.like]: `%${normalizedSearchTerm}%` } },
         { "$employee.name$": { [Op.like]: `%${normalizedSearchTerm}%` } },
+        { "$employee.email$": { [Op.like]: `%${normalizedSearchTerm}%` } },
+        { "$employee.employeeCode$": { [Op.like]: `%${normalizedSearchTerm}%` } },
+        { "$employee.employee_id$": { [Op.like]: `%${normalizedSearchTerm}%` } },
       ],
     });
   }
 
   if (reportDate) {
     andConditions.push({ reportDate });
+  }
+
+  if (name && name.trim()) {
+    andConditions.push({ name: name.trim() });
   }
 
   if (startDate && endDate) {
@@ -213,8 +237,9 @@ const getAllReports = async (filters = {}, options = {}, actor) => {
     andConditions.push({ userId });
   }
 
-  if (employeeId) {
-    andConditions.push({ employeeId });
+  const employeeFilter = await buildEmployeeFilter(employeeId);
+  if (employeeFilter) {
+    andConditions.push(employeeFilter);
   }
 
   const where = andConditions.length ? { [Op.and]: andConditions } : {};
@@ -232,6 +257,7 @@ const getAllReports = async (filters = {}, options = {}, actor) => {
     limit,
     include: reportIncludes,
     order,
+    subQuery: false,
   });
 
   const count = await LogisticWorkReport.count({

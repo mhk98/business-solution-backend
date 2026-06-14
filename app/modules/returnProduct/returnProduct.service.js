@@ -9,6 +9,12 @@ const {
 const mergeVariants = require("../../../shared/mergeVariants");
 const parseVariants = require("../../../shared/parseVariants");
 const subtractVariants = require("../../../shared/subtractVariants");
+const {
+  buildSyncedInventoryStockPayload,
+} = require("../../../shared/variantQuantity");
+const {
+  assertInventoryMovementVariants,
+} = require("../../../shared/inventoryVariantGuard");
 const ReturnProduct = db.returnProduct;
 const Notification = db.notification;
 const User = db.user;
@@ -130,6 +136,11 @@ const moveItemFromInventory = async (item, transaction) => {
 
   const inventory = await findInventoryByRequestReference(rid, transaction);
   if (!inventory) throw new ApiError(404, "Received product not found");
+  assertInventoryMovementVariants({
+    inventory,
+    variants: incomingVariants,
+    quantity: returnQty,
+  });
 
   const oldQty = toNumber(inventory.quantity);
 
@@ -138,10 +149,10 @@ const moveItemFromInventory = async (item, transaction) => {
     : inventory.variants;
 
   await inventory.update(
-    {
+    buildSyncedInventoryStockPayload({
       quantity: oldQty + returnQty,
       variants: finalVariants,
-    },
+    }),
     { transaction },
   );
 
@@ -165,15 +176,20 @@ const restoreItemsToInventory = async (items = [], transaction) => {
     );
 
     if (!inventory) throw new ApiError(404, "Received product not found");
+    assertInventoryMovementVariants({
+      inventory,
+      variants: item.variants,
+      quantity: item.quantity,
+    });
 
     await inventory.update(
-      {
+      buildSyncedInventoryStockPayload({
         quantity: toNumber(inventory.quantity) - toNumber(item.quantity),
         variants: subtractVariants(
           inventory.variants,
           parseVariants(item.variants),
         ),
-      },
+      }),
       { transaction },
     );
   }
@@ -227,6 +243,11 @@ const insertIntoDB = async (data) => {
     const inventory = await findInventoryByRequestReference(rid, t);
 
     if (!inventory) throw new ApiError(404, "Received product not found");
+    assertInventoryMovementVariants({
+      inventory,
+      variants: incomingVariants,
+      quantity: returnQty,
+    });
 
     const oldQty = Number(inventory.quantity || 0);
     // if (oldQty < returnQty) {
@@ -271,12 +292,12 @@ const insertIntoDB = async (data) => {
       ? mergeVariants(inventory.variants, incomingVariants)
       : inventory.variants;
     await InventoryMaster.update(
-      {
+      buildSyncedInventoryStockPayload({
         quantity: finalQuantity,
         variants: finalVariants,
         // purchase_price: Number(inventory.purchase_price * finalQuantity),
         // sale_price: Number(inventory.sale_price * finalQuantity),
-      },
+      }),
       { where: { Id: inventory.Id }, transaction: t },
     );
 
@@ -520,6 +541,11 @@ const deleteIdFromDB = async (id) => {
     );
 
     if (!received) throw new ApiError(404, "Received product not found");
+    assertInventoryMovementVariants({
+      inventory: received,
+      variants: ret.variants,
+      quantity: qty,
+    });
 
     const finalQuantity = Number(received.quantity || 0) - qty;
     const retVariants = parseVariants(ret.variants);
@@ -529,12 +555,12 @@ const deleteIdFromDB = async (id) => {
 
     // 3) stock ফিরিয়ে নেওয়া হবে InventoryMaster থেকে
     await InventoryMaster.update(
-      {
+      buildSyncedInventoryStockPayload({
         quantity: finalQuantity,
         variants: finalVariants,
         // purchase_price: Number(received.purchase_price * finalQuantity),
         // sale_price: Number(received.sale_price * finalQuantity),
-      },
+      }),
       { where: { Id: received.Id }, transaction: t },
     );
 
@@ -973,34 +999,54 @@ const updateOneFromDB = async (id, payload) => {
 
     if (productChanged) {
       // undo old return from old product
+      assertInventoryMovementVariants({
+        inventory: oldInv,
+        variants: existingVariants,
+        quantity: oldQty,
+      });
       await oldInv.update(
-        {
+        buildSyncedInventoryStockPayload({
           quantity: toNumber(oldInv.quantity) - oldQty,
           variants: existingVariants.length
             ? subtractVariants(oldInv.variants, existingVariants)
             : oldInv.variants,
-        },
+        }),
         { transaction: t },
       );
 
       targetInv = await findInventoryByRequestReference(newProductId, t);
       if (!targetInv) throw new ApiError(404, "Product not found in inventory");
+      assertInventoryMovementVariants({
+        inventory: targetInv,
+        variants: incomingVariants,
+        quantity: nextQty,
+      });
 
       // apply new return to new product
       await targetInv.update(
-        {
+        buildSyncedInventoryStockPayload({
           quantity: toNumber(targetInv.quantity) + nextQty,
           variants: incomingVariants.length
             ? mergeVariants(targetInv.variants, incomingVariants)
             : targetInv.variants,
-        },
+        }),
         { transaction: t },
       );
     } else {
       const diff = nextQty - oldQty;
+      assertInventoryMovementVariants({
+        inventory: oldInv,
+        variants: incomingVariants.length ? incomingVariants : existingVariants,
+        quantity: incomingVariants.length ? nextQty : oldQty,
+      });
 
       let updatedVariants = oldInv.variants;
       if (existingVariants.length > 0 || incomingVariants.length > 0) {
+        assertInventoryMovementVariants({
+          inventory: oldInv,
+          variants: incomingVariants,
+          quantity: nextQty,
+        });
         // undo old return's contribution, then apply new return's contribution
         const withOldRemoved = existingVariants.length
           ? subtractVariants(oldInv.variants, existingVariants)
@@ -1011,10 +1057,10 @@ const updateOneFromDB = async (id, payload) => {
       }
 
       await oldInv.update(
-        {
+        buildSyncedInventoryStockPayload({
           quantity: toNumber(oldInv.quantity) + diff,
           variants: updatedVariants,
-        },
+        }),
         { transaction: t },
       );
     }

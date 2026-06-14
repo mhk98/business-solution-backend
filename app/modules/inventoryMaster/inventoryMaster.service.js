@@ -12,8 +12,22 @@ const {
 } = require("../../../shared/variantQuantity");
 
 const InventoryMaster = db.inventoryMaster;
+const Product = db.product;
+const Variation = db.variation;
 const Supplier = db.supplier;
 const Warehouse = db.warehouse;
+
+const productVariationInclude = {
+  model: Product,
+  attributes: ["Id", "name"],
+  include: [
+    {
+      model: Variation,
+      as: "variations",
+      attributes: ["Id", "size", "color", "weight", "unit"],
+    },
+  ],
+};
 
 const n = (value) => Number(value || 0);
 
@@ -76,6 +90,7 @@ const getAllFromDB = async (filters, options) => {
       where: whereConditions,
       offset: skip,
       limit,
+      include: [productVariationInclude],
       paranoid: true,
       order:
         options.sortBy && options.sortOrder
@@ -115,6 +130,7 @@ const getDataById = async (id) => {
     where: {
       Id: id,
     },
+    include: [productVariationInclude],
   });
 
   return normalizeInventoryQuantityForDisplay(result);
@@ -142,6 +158,7 @@ const updateOneFromDB = async (id, payload) => {
 
 const getAllFromDBWithoutQuery = async () => {
   const result = await InventoryMaster.findAll({
+    include: [productVariationInclude],
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });

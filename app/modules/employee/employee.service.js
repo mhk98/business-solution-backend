@@ -219,7 +219,7 @@ const insertIntoDB = async (payload) => {
           employeeId: payrollEmployeeId,
           paymentStatus: "CashOut",
           category: "salary",
-          amount: result.total_salary,
+          amount: result.net_salary,
           bookId: normalizeOptionalId(bookId),
           status: "Active",
           date: result.date || new Date(),

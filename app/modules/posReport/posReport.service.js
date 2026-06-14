@@ -6,6 +6,15 @@ const { PosReportSearchableFields } = require("./posReport.constants");
 const {
   resolveApprovalNotificationMessage,
 } = require("../../../shared/approvalNotification");
+const parseVariants = require("../../../shared/parseVariants");
+const mergeVariants = require("../../../shared/mergeVariants");
+const subtractVariants = require("../../../shared/subtractVariants");
+const {
+  buildSyncedInventoryStockPayload,
+} = require("../../../shared/variantQuantity");
+const {
+  assertInventoryMovementVariants,
+} = require("../../../shared/inventoryVariantGuard");
 const PosReport = db.posReport;
 const Notification = db.notification;
 const User = db.user;
@@ -40,21 +49,34 @@ const buildItemQuantityMap = (items = []) => {
   }, {});
 };
 
-const applyInventoryDeltaMap = async (deltaMap, transaction) => {
-  for (const [referenceIdString, diff] of Object.entries(deltaMap)) {
-    const referenceId = Number(referenceIdString);
-    const quantityDiff = Number(diff) || 0;
+const getItemReferenceId = (item = {}) =>
+  Number(item?.Id || item?.productId || item?.receivedId);
 
-    if (!referenceId || quantityDiff === 0) continue;
+const getItemQuantity = (item = {}) => Number(item?.qty ?? item?.quantity ?? 0) || 0;
+
+const applyPosItemMovement = async (items, transaction, direction = "sale") => {
+  for (const item of normalizeItems(items)) {
+    const referenceId = getItemReferenceId(item);
+    const quantity = getItemQuantity(item);
+
+    if (!referenceId || quantity <= 0) continue;
 
     const inventory = await findInventoryByReference(referenceId, transaction);
+    if (!inventory) throw new ApiError(404, `inventory product not found: ${referenceId}`);
 
-    if (!inventory) {
-      throw new ApiError(404, `inventory product not found: ${referenceId}`);
-    }
+    const itemVariants = parseVariants(item?.variants);
+    assertInventoryMovementVariants({
+      inventory,
+      variants: itemVariants,
+      quantity,
+      message: "Please select variants for this POS product",
+    });
 
     const currentQuantity = Number(inventory.quantity || 0);
-    const nextQuantity = currentQuantity - quantityDiff;
+    const isSale = direction === "sale";
+    const nextQuantity = isSale
+      ? currentQuantity - quantity
+      : currentQuantity + quantity;
 
     if (nextQuantity < 0) {
       throw new ApiError(
@@ -63,12 +85,18 @@ const applyInventoryDeltaMap = async (deltaMap, transaction) => {
       );
     }
 
-    await InventoryMaster.update(
-      { quantity: nextQuantity },
-      {
-        where: { Id: inventory.Id },
-        transaction,
-      },
+    const nextVariants = itemVariants.length
+      ? isSale
+        ? subtractVariants(inventory.variants, itemVariants)
+        : mergeVariants(inventory.variants, itemVariants)
+      : inventory.variants;
+
+    await inventory.update(
+      buildSyncedInventoryStockPayload({
+        quantity: nextQuantity,
+        variants: nextVariants,
+      }),
+      { transaction },
     );
   }
 };
@@ -182,7 +210,7 @@ const insertIntoDB = async (payload) => {
   const finalStatus = String(status || "").trim() || "Active";
 
   return await db.sequelize.transaction(async (t) => {
-    await applyInventoryDeltaMap(buildItemQuantityMap(items), t);
+    await applyPosItemMovement(items, t, "sale");
 
     // ✅ 2) PosReport create
     const result = await PosReport.create(
@@ -352,14 +380,8 @@ const deleteIdFromDB = async (id) => {
     if (!ret) throw new ApiError(404, "POS report not found");
 
     const existingItems = normalizeItems(ret.items);
-    const restoreMap = Object.entries(
-      buildItemQuantityMap(existingItems),
-    ).reduce((acc, [referenceId, qty]) => {
-      acc[referenceId] = -Number(qty || 0);
-      return acc;
-    }, {});
 
-    await applyInventoryDeltaMap(restoreMap, t);
+    await applyPosItemMovement(existingItems, t, "restore");
     await removeConfirmOrdersForPosReportItems(
       existingItems,
       ret.date,
@@ -532,22 +554,8 @@ const updateOneFromDB = async (id, data) => {
       finalStatus = inputStatus || finalStatus;
     }
 
-    const existingItemsMap = buildItemQuantityMap(existing.items);
-    const nextItemsMap = buildItemQuantityMap(items);
-    const allReferenceIds = new Set([
-      ...Object.keys(existingItemsMap),
-      ...Object.keys(nextItemsMap),
-    ]);
-
-    const deltaMap = {};
-    for (const referenceId of allReferenceIds) {
-      const nextQty = Number(nextItemsMap[referenceId] || 0);
-      const oldQty = Number(existingItemsMap[referenceId] || 0);
-      const diff = nextQty - oldQty;
-      if (diff !== 0) deltaMap[referenceId] = diff;
-    }
-
-    await applyInventoryDeltaMap(deltaMap, t);
+    await applyPosItemMovement(existing.items, t, "restore");
+    await applyPosItemMovement(items, t, "sale");
 
     return PosReport.update(
       {

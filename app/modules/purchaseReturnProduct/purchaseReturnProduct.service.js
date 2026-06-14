@@ -11,6 +11,12 @@ const {
 const mergeVariants = require("../../../shared/mergeVariants");
 const parseVariants = require("../../../shared/parseVariants");
 const subtractVariants = require("../../../shared/subtractVariants");
+const {
+  buildSyncedInventoryStockPayload,
+} = require("../../../shared/variantQuantity");
+const {
+  assertInventoryMovementVariants,
+} = require("../../../shared/inventoryVariantGuard");
 const PurchaseReturnProduct = db.purchaseReturnProduct;
 const Notification = db.notification;
 const User = db.user;
@@ -123,6 +129,11 @@ const normalizeReturnItem = async (item, transaction) => {
 
   const inventory = await findInventoryByRequestReference(receivedId, transaction);
   if (!inventory) throw new ApiError(404, "Product not found in inventory");
+  assertInventoryMovementVariants({
+    inventory,
+    variants: incomingVariants,
+    quantity: returnQty,
+  });
 
   const oldQty = Number(inventory.quantity || 0);
   if (oldQty < returnQty) {
@@ -144,10 +155,10 @@ const normalizeReturnItem = async (item, transaction) => {
     : inventory.variants;
 
   await inventory.update(
-    {
+    buildSyncedInventoryStockPayload({
       quantity: oldQty - returnQty,
       variants: finalVariants,
-    },
+    }),
     { transaction },
   );
 
@@ -173,12 +184,17 @@ const restoreReturnItemsToInventory = async (items = [], transaction) => {
     );
 
     if (!inventory) throw new ApiError(404, "inventory product not found");
+    assertInventoryMovementVariants({
+      inventory,
+      variants: item.variants,
+      quantity: qty,
+    });
 
     await inventory.update(
-      {
+      buildSyncedInventoryStockPayload({
         quantity: Number(inventory.quantity || 0) + qty,
         variants: mergeVariants(inventory.variants, parseVariants(item.variants)),
-      },
+      }),
       { transaction },
     );
   }
@@ -219,6 +235,11 @@ const insertIntoDB = async (data) => {
     const inventory = await findInventoryByRequestReference(rid, t);
 
     if (!inventory) throw new ApiError(404, "Product not found in inventory");
+    assertInventoryMovementVariants({
+      inventory,
+      variants: incomingVariants,
+      quantity: returnQty,
+    });
 
     const oldQty = Number(inventory.quantity || 0);
     if (oldQty < returnQty) {
@@ -259,12 +280,12 @@ const insertIntoDB = async (data) => {
       : inventory.variants;
 
     await inventory.update(
-      {
+      buildSyncedInventoryStockPayload({
         quantity: finalQuantity,
         variants: finalVariants,
         // purchase_price: inventory.purchase_price * finalQuantity,
         // sale_price: inventory.sale_price * finalQuantity,
-      },
+      }),
       { transaction: t },
     );
 
@@ -508,16 +529,21 @@ const deleteIdFromDB = async (id) => {
     );
 
     if (!inventory) throw new ApiError(404, "inventory product not found");
+    assertInventoryMovementVariants({
+      inventory,
+      variants: ret.variants,
+      quantity: qty,
+    });
 
     const finalQuantity = Number(inventory.quantity || 0) + qty;
     const finalVariants = mergeVariants(inventory.variants, ret.variants);
 
     // 3) stock ফিরিয়ে দাও
     await InventoryMaster.update(
-      {
+      buildSyncedInventoryStockPayload({
         quantity: finalQuantity,
         variants: finalVariants,
-      },
+      }),
       { where: { Id: inventory.Id }, transaction: t },
     );
 
@@ -947,12 +973,17 @@ const updateOneFromDB = async (id, payload) => {
     });
 
     if (!oldInv) throw new ApiError(404, "Old inventory product not found");
+    assertInventoryMovementVariants({
+      inventory: oldInv,
+      variants: existingVariants,
+      quantity: qty,
+    });
 
     await oldInv.update(
-      {
+      buildSyncedInventoryStockPayload({
         quantity: Number(oldInv.quantity || 0) + qty,
         variants: mergeVariants(oldInv.variants, existingVariants),
-      },
+      }),
       { transaction: t },
     );
 
@@ -962,6 +993,11 @@ const updateOneFromDB = async (id, payload) => {
     }
 
     if (!targetInv) throw new ApiError(404, "Product not found in inventory");
+    assertInventoryMovementVariants({
+      inventory: targetInv,
+      variants: incomingVariants,
+      quantity: nextQty,
+    });
 
     const reducedQty = Number(targetInv.quantity || 0) - nextQty;
     if (reducedQty < 0) {
@@ -992,10 +1028,10 @@ const updateOneFromDB = async (id, payload) => {
     };
 
     await targetInv.update(
-      {
+      buildSyncedInventoryStockPayload({
         quantity: reducedQty,
         variants: updatedVariants,
-      },
+      }),
       { transaction: t },
     );
 
