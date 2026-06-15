@@ -50,9 +50,12 @@ const buildItemQuantityMap = (items = []) => {
 };
 
 const getItemReferenceId = (item = {}) =>
-  Number(item?.Id || item?.productId || item?.receivedId);
+  Number(item?.inventoryId || item?.Id || item?.receivedId);
 
 const getItemQuantity = (item = {}) => Number(item?.qty ?? item?.quantity ?? 0) || 0;
+
+const getItemProductId = (item = {}, inventory = null) =>
+  Number(item?.productId || inventory?.productId || 0);
 
 const applyPosItemMovement = async (items, transaction, direction = "sale") => {
   for (const item of normalizeItems(items)) {
@@ -110,12 +113,17 @@ const removeConfirmOrdersForPosReportItems = async (
   const normalizedItems = normalizeItems(items);
 
   for (const item of normalizedItems) {
-    const productId = Number(item?.Id) || 0;
+    const referenceId = getItemReferenceId(item);
     const qty = Number(item?.qty) || 0;
     const totalPrice = Number(item?.total ?? (Number(item?.price) || 0) * qty);
     const itemName = String(item?.name || "").trim();
 
-    if (!productId || qty <= 0) continue;
+    if (!referenceId || qty <= 0) continue;
+
+    const inventory = await findInventoryByReference(referenceId, transaction);
+    const productId = getItemProductId(item, inventory);
+
+    if (!productId) continue;
 
     const whereConditions = {
       productId,
@@ -236,12 +244,22 @@ const insertIntoDB = async (payload) => {
     if (items.length > 0) {
       const cart = [];
       for (const it of items) {
-        const productId = Number(it.Id) || 0;
+        const inventoryId = getItemReferenceId(it);
         const qty = Number(it.qty) || 0;
         const unitPrice = Number(it.price) || 0;
         const itemName = (it.name && String(it.name).trim()) || "N/A"; // fallback
 
         if (qty <= 0) continue;
+
+        const inventory = await findInventoryByReference(inventoryId, t);
+        const productId = getItemProductId(it, inventory);
+
+        if (!productId) {
+          throw new ApiError(
+            400,
+            `Product reference missing for inventory_id=${inventoryId}`,
+          );
+        }
 
         cart.push({
           name: itemName,

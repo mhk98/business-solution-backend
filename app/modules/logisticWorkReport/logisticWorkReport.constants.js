@@ -17,6 +17,14 @@ const LogisticWorkReportNumericFields = [
   "cancelResend",
   "incomingReceive",
   "incomingSolve",
+  "entryUpdate",
+  "returnSheetReceived",
+  "exchangePrint",
+  "missingProblemParcelFollowup",
+  "holdParcelReceived",
+  "csProblemSolve",
+  "pendingAssign",
+  "completedPendingAssign",
 ];
 
 module.exports = {

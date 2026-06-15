@@ -1338,6 +1338,11 @@ const ensureEmployeeColumns = async () => {
     type: DataTypes.INTEGER(10),
     allowNull: true,
   });
+  await maybeAddColumn("festival_bonus", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
 };
 
 const ensureDailyWorkReportColumns = async () => {
@@ -1396,46 +1401,33 @@ const ensureEmployeeWorkReportColumns = async () => {
     allowNull: false,
     defaultValue: 0,
   });
-  await maybeAddColumn("entryUpdate", {
+};
+
+const ensureLogisticWorkReportColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.logisticWorkReport.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  const maybeAddColumn = async (columnName, definition) => {
+    if (!tableDefinition[columnName]) {
+      await queryInterface.addColumn(tableName, columnName, definition);
+    }
+  };
+
+  const numericColumn = () => ({
     type: DataTypes.INTEGER(10),
     allowNull: false,
     defaultValue: 0,
   });
-  await maybeAddColumn("returnSheetReceived", {
-    type: DataTypes.INTEGER(10),
-    allowNull: false,
-    defaultValue: 0,
-  });
-  await maybeAddColumn("exchangePrint", {
-    type: DataTypes.INTEGER(10),
-    allowNull: false,
-    defaultValue: 0,
-  });
-  await maybeAddColumn("missingProblemParcelFollowup", {
-    type: DataTypes.INTEGER(10),
-    allowNull: false,
-    defaultValue: 0,
-  });
-  await maybeAddColumn("holdParcelReceived", {
-    type: DataTypes.INTEGER(10),
-    allowNull: false,
-    defaultValue: 0,
-  });
-  await maybeAddColumn("csProblemSolve", {
-    type: DataTypes.INTEGER(10),
-    allowNull: false,
-    defaultValue: 0,
-  });
-  await maybeAddColumn("pendingAssign", {
-    type: DataTypes.INTEGER(10),
-    allowNull: false,
-    defaultValue: 0,
-  });
-  await maybeAddColumn("completedPendingAssign", {
-    type: DataTypes.INTEGER(10),
-    allowNull: false,
-    defaultValue: 0,
-  });
+
+  await maybeAddColumn("entryUpdate", numericColumn());
+  await maybeAddColumn("returnSheetReceived", numericColumn());
+  await maybeAddColumn("exchangePrint", numericColumn());
+  await maybeAddColumn("missingProblemParcelFollowup", numericColumn());
+  await maybeAddColumn("holdParcelReceived", numericColumn());
+  await maybeAddColumn("csProblemSolve", numericColumn());
+  await maybeAddColumn("pendingAssign", numericColumn());
+  await maybeAddColumn("completedPendingAssign", numericColumn());
 };
 
 const ensureDailyWorkReportTaskColumns = async () => {
@@ -2330,6 +2322,7 @@ db.sequelize
     await ensureEmployeeListColumns();
     await ensureEmployeeColumns();
     await ensureEmployeeWorkReportColumns();
+    await ensureLogisticWorkReportColumns();
     await ensureDailyWorkReportColumns();
     await ensureDailyWorkReportTaskColumns();
     await ensureKPIColumns();
