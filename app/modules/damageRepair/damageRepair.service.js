@@ -319,7 +319,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
   const warehouseId = data.warehouseId ?? items[0]?.warehouseId;
   const date = data.date ?? items[0]?.date;
   const note = data.note ?? items[0]?.note;
-  const batchId = data.batchId ?? items[0]?.batchId;
+  const batchId = data.batchId ?? items[0]?.batchId ?? `batch-${Date.now()}`;
   const finalStatus = String(data.status ?? items[0]?.status ?? "").trim() || "Active";
 
   return db.sequelize.transaction(async (t) => {
@@ -405,6 +405,7 @@ const insertIntoDB = async (data) => {
     userId,
     supplierId,
     warehouseId,
+    batchId,
   } = data;
 
   console.log("Damage", data);
@@ -468,6 +469,7 @@ const insertIntoDB = async (data) => {
         supplierId,
         warehouseId,
         source: "Damage Repair",
+        batchId: batchId || `batch-${Date.now()}`,
         remarks: received.remarks,
         quantity: returnQty,
         variants: selectedVariants,

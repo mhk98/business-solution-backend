@@ -83,6 +83,12 @@ const applyReceivedItemToInventory = async (item, productData, transaction) => {
   const purchasePrice = toNumber(item.purchase_price);
   const salePrice = toNumber(item.sale_price);
 
+  assertInventoryMovementVariants({
+    inventory: { variants: incomingVariants },
+    variants: incomingVariants,
+    quantity,
+  });
+
   const inv = await InventoryMaster.findOne({
     where: { productId },
     transaction,
@@ -530,6 +536,12 @@ const insertIntoDB = async (data, file) => {
 
       await syncProductStockId(productData, inv.Id, t);
     } else {
+      assertInventoryMovementVariants({
+        inventory: { variants: incomingVariants },
+        variants: incomingVariants,
+        quantity,
+      });
+
       const stock = await InventoryMaster.create(
         buildSyncedInventoryStockPayload({
           productId,
@@ -1092,9 +1104,9 @@ const updateOneFromDB = async (id, payload) => {
       const quantityDiff = nextQty - qty;
       const nextInventoryQty = toNumber(oldInv.quantity) + quantityDiff;
 
-      // if (nextInventoryQty < 0) {
-      //   throw new ApiError(400, "Inventory cannot be negative");
-      // }
+      if (nextInventoryQty < 0) {
+        throw new ApiError(400, "Inventory cannot be negative");
+      }
 
       const nextInventoryVariants = mergeVariants(
         subtractVariants(oldInv.variants, existingVariants),

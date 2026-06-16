@@ -182,9 +182,14 @@ const restoreItemsToInventory = async (items = [], transaction) => {
       quantity: item.quantity,
     });
 
+    const nextQuantity = toNumber(inventory.quantity) - toNumber(item.quantity);
+    if (nextQuantity < 0) {
+      throw new ApiError(400, "Inventory cannot be negative");
+    }
+
     await inventory.update(
       buildSyncedInventoryStockPayload({
-        quantity: toNumber(inventory.quantity) - toNumber(item.quantity),
+        quantity: nextQuantity,
         variants: subtractVariants(
           inventory.variants,
           parseVariants(item.variants),
@@ -548,6 +553,10 @@ const deleteIdFromDB = async (id) => {
     });
 
     const finalQuantity = Number(received.quantity || 0) - qty;
+    if (finalQuantity < 0) {
+      throw new ApiError(400, "Inventory cannot be negative");
+    }
+
     const retVariants = parseVariants(ret.variants);
     const finalVariants = retVariants.length
       ? subtractVariants(received.variants, retVariants)
@@ -1004,9 +1013,14 @@ const updateOneFromDB = async (id, payload) => {
         variants: existingVariants,
         quantity: oldQty,
       });
+      const oldInventoryQuantity = toNumber(oldInv.quantity) - oldQty;
+      if (oldInventoryQuantity < 0) {
+        throw new ApiError(400, "Inventory cannot be negative");
+      }
+
       await oldInv.update(
         buildSyncedInventoryStockPayload({
-          quantity: toNumber(oldInv.quantity) - oldQty,
+          quantity: oldInventoryQuantity,
           variants: existingVariants.length
             ? subtractVariants(oldInv.variants, existingVariants)
             : oldInv.variants,
@@ -1056,9 +1070,14 @@ const updateOneFromDB = async (id, payload) => {
           : withOldRemoved;
       }
 
+      const nextInventoryQuantity = toNumber(oldInv.quantity) + diff;
+      if (nextInventoryQuantity < 0) {
+        throw new ApiError(400, "Inventory cannot be negative");
+      }
+
       await oldInv.update(
         buildSyncedInventoryStockPayload({
-          quantity: toNumber(oldInv.quantity) + diff,
+          quantity: nextInventoryQuantity,
           variants: updatedVariants,
         }),
         { transaction: t },

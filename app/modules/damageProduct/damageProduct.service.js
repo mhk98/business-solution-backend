@@ -96,14 +96,22 @@ const summarizeItems = (items = []) => ({
 const getVariantKey = (variant = {}) =>
   `${String(variant.size || "")}__${String(variant.color || "")}`;
 
-const validateVariantStock = (inventoryVariants, requestedVariants) => {
+const validateVariantStock = (inventoryVariants, requestedVariants, quantity) => {
+  const movementVariants = parseVariants(requestedVariants);
+  if (
+    movementVariants.length &&
+    getVariantQuantityTotal(movementVariants) !== Number(quantity || 0)
+  ) {
+    throw new ApiError(400, "Variant quantity must match total quantity");
+  }
+
   const stockMap = new Map();
 
   parseVariants(inventoryVariants).forEach((variant) => {
     stockMap.set(getVariantKey(variant), Number(variant.quantity || 0));
   });
 
-  parseVariants(requestedVariants).forEach((variant) => {
+  movementVariants.forEach((variant) => {
     const requestedQty = Number(variant.quantity || 0);
     const availableQty = Number(stockMap.get(getVariantKey(variant)) || 0);
 
@@ -128,7 +136,7 @@ const moveDamageProductItem = async (item, transaction) => {
 
   const oldQty = getInventoryDisplayQuantity(inventory);
   if (incomingVariants.length) {
-    validateVariantStock(inventory.variants, incomingVariants);
+    validateVariantStock(inventory.variants, incomingVariants, returnQty);
   } else if (oldQty < returnQty) {
     throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
   }
@@ -208,7 +216,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
   const warehouseId = data.warehouseId ?? items[0]?.warehouseId;
   const date = data.date ?? items[0]?.date;
   const note = data.note ?? items[0]?.note;
-  const batchId = data.batchId ?? items[0]?.batchId;
+  const batchId = data.batchId ?? items[0]?.batchId ?? `batch-${Date.now()}`;
   const finalStatus = String(data.status ?? items[0]?.status ?? "").trim() || "Active";
 
   return db.sequelize.transaction(async (t) => {
@@ -277,6 +285,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
     return result;
   });
 };
+
 
 // const insertIntoDB = async (data) => {
 //   const { quantity, productId } = data;
@@ -351,6 +360,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
 //   });
 // };
 
+
 const insertIntoDB = async (data) => {
   const bulkItems = getBulkItems(data);
   if (bulkItems.length) {
@@ -367,6 +377,7 @@ const insertIntoDB = async (data) => {
     userId,
     supplierId,
     warehouseId,
+    batchId,
   } = data;
 
   console.log("Damage", data);
@@ -389,7 +400,7 @@ const insertIntoDB = async (data) => {
 
     const oldQty = getInventoryDisplayQuantity(inventory);
     if (incomingVariants.length) {
-      validateVariantStock(inventory.variants, incomingVariants);
+      validateVariantStock(inventory.variants, incomingVariants, returnQty);
     } else if (oldQty < returnQty) {
       throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
     }
@@ -424,6 +435,7 @@ const insertIntoDB = async (data) => {
         quantity: returnQty,
         variants: incomingVariants,
         source: "Damage Product",
+        batchId: batchId || `batch-${Date.now()}`,
         purchase_price: inventory.purchase_price * returnQty,
         sale_price: inventory.sale_price * returnQty,
         productId: inventoryId,
@@ -1018,7 +1030,7 @@ const updateOneFromDB = async (id, payload) => {
 
     const availableQty = getInventoryDisplayQuantity(targetInv);
     if (incomingVariants.length) {
-      validateVariantStock(targetInv.variants, incomingVariants);
+      validateVariantStock(targetInv.variants, incomingVariants, nextQty);
     } else if (availableQty < nextQty) {
       throw new ApiError(400, `Not enough stock. Available: ${availableQty}`);
     }

@@ -1,5 +1,32 @@
 const validator = require("validator");
 const bcrypt = require("bcryptjs");
+const ApiError = require("../../../error/ApiError");
+
+const assertNonNegativeQuantity = (quantity) => {
+  if (quantity !== undefined && quantity !== null && Number(quantity) < 0) {
+    throw new ApiError(400, "Inventory cannot be negative");
+  }
+};
+
+const parseVariants = (variants) => {
+  if (Array.isArray(variants)) return variants;
+  if (typeof variants !== "string") return [];
+
+  try {
+    const parsed = JSON.parse(variants);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const assertNonNegativeVariants = (variants) => {
+  parseVariants(variants).forEach((variant) => {
+    if (Number(variant?.quantity || 0) < 0) {
+      throw new ApiError(400, "Inventory variant cannot be negative");
+    }
+  });
+};
 
 module.exports = (sequelize, DataTypes) => {
   const InventoryMaster = sequelize.define(
@@ -69,6 +96,26 @@ module.exports = (sequelize, DataTypes) => {
     {
       timestamps: true,
       paranoid: true, // Soft delete enabled
+      hooks: {
+        beforeValidate: (inventory) => {
+          assertNonNegativeQuantity(inventory.quantity);
+          assertNonNegativeVariants(inventory.variants);
+        },
+        beforeBulkUpdate: (options) => {
+          if (
+            options?.attributes &&
+            Object.prototype.hasOwnProperty.call(options.attributes, "quantity")
+          ) {
+            assertNonNegativeQuantity(options.attributes.quantity);
+          }
+          if (
+            options?.attributes &&
+            Object.prototype.hasOwnProperty.call(options.attributes, "variants")
+          ) {
+            assertNonNegativeVariants(options.attributes.variants);
+          }
+        },
+      },
     },
   );
 

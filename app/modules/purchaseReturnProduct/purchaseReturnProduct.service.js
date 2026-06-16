@@ -16,6 +16,7 @@ const {
 } = require("../../../shared/variantQuantity");
 const {
   assertInventoryMovementVariants,
+  assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
 const PurchaseReturnProduct = db.purchaseReturnProduct;
 const Notification = db.notification;
@@ -134,6 +135,10 @@ const normalizeReturnItem = async (item, transaction) => {
     variants: incomingVariants,
     quantity: returnQty,
   });
+  assertInventoryVariantStock({
+    inventory,
+    variants: incomingVariants,
+  });
 
   const oldQty = Number(inventory.quantity || 0);
   if (oldQty < returnQty) {
@@ -239,6 +244,10 @@ const insertIntoDB = async (data) => {
       inventory,
       variants: incomingVariants,
       quantity: returnQty,
+    });
+    assertInventoryVariantStock({
+      inventory,
+      variants: incomingVariants,
     });
 
     const oldQty = Number(inventory.quantity || 0);
@@ -997,6 +1006,10 @@ const updateOneFromDB = async (id, payload) => {
       inventory: targetInv,
       variants: incomingVariants,
       quantity: nextQty,
+    });
+    assertInventoryVariantStock({
+      inventory: targetInv,
+      variants: incomingVariants,
     });
 
     const reducedQty = Number(targetInv.quantity || 0) - nextQty;

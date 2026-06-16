@@ -16,6 +16,7 @@ const {
 } = require("../../../shared/variantQuantity");
 const {
   assertInventoryMovementVariants,
+  assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
 const InTransitProduct = db.inTransitProduct;
 const Notification = db.notification;
@@ -183,11 +184,15 @@ const moveItemFromInventory = async (item, transaction) => {
     variants: incomingVariants,
     quantity: returnQty,
   });
+  assertInventoryVariantStock({
+    inventory,
+    variants: incomingVariants,
+  });
 
   const oldQty = toNumber(inventory.quantity);
-  // if (oldQty < returnQty) {
-  //   throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
-  // }
+  if (oldQty < returnQty) {
+    throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
+  }
 
   const finalVariants = incomingVariants.length
     ? subtractVariants(inventory.variants, incomingVariants)
@@ -302,9 +307,13 @@ const insertIntoDB = async (data) => {
       variants: incomingVariants,
       quantity: returnQty,
     });
-    // if (oldQty < returnQty) {
-    //   throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
-    // }
+    assertInventoryVariantStock({
+      inventory,
+      variants: incomingVariants,
+    });
+    if (oldQty < returnQty) {
+      throw new ApiError(400, `Not enough stock. Available: ${oldQty}`);
+    }
 
     // const perUnitPurchase =
     //   oldQty > 0 ? Number(inventory.purchase_price || 0) / oldQty : 0;
@@ -1076,6 +1085,10 @@ const updateOneFromDB = async (id, payload) => {
       inventory: targetInv,
       variants: incomingVariants,
       quantity: nextQty,
+    });
+    assertInventoryVariantStock({
+      inventory: targetInv,
+      variants: incomingVariants,
     });
 
     const reducedQty = Number(targetInv.quantity || 0) - nextQty;
