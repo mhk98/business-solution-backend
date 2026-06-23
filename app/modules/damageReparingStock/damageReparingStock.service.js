@@ -8,6 +8,12 @@ const {
 const parseVariants = require("../../../shared/parseVariants");
 
 const DamageReparingStock = db.damageReparingStock;
+const DamageStock = db.damageStock;
+const DamageRepair = db.damageRepair;
+const DamageRepaired = db.damageRepaired;
+
+const getVariantKey = (variant) =>
+  `${String(variant?.size || "").trim()}__${String(variant?.color || "").trim()}`;
 
 const getVariantQuantityTotal = (variants) =>
   parseVariants(variants).reduce(
@@ -26,6 +32,119 @@ const assertQuantityMatchesExistingVariants = (row, nextQuantity) => {
       "Quantity must match existing variant quantity total",
     );
   }
+};
+
+const mergeMissingHistoricalVariants = (currentVariants, historicalVariants) => {
+  const map = new Map();
+
+  parseVariants(currentVariants).forEach((variant) => {
+    const key = getVariantKey(variant);
+    if (key === "__") return;
+
+    map.set(key, {
+      ...variant,
+      size: variant.size || "",
+      color: variant.color || "",
+      quantity: Number(variant.quantity || 0),
+    });
+  });
+
+  parseVariants(historicalVariants).forEach((variant) => {
+    const key = getVariantKey(variant);
+    if (key === "__" || map.has(key)) return;
+
+    map.set(key, {
+      ...variant,
+      size: variant.size || "",
+      color: variant.color || "",
+      quantity: 0,
+    });
+  });
+
+  return Array.from(map.values());
+};
+
+const addHistoricalZeroVariants = async (rows) => {
+  const rowList = Array.isArray(rows) ? rows : [];
+  if (!rowList.length) return rows;
+
+  const repairingStockIds = rowList.map((row) => row.Id).filter(Boolean);
+  const productIds = rowList.map((row) => row.productId).filter(Boolean);
+
+  const damageStockRows = await DamageStock.findAll({
+    where: {
+      deletedAt: { [Op.is]: null },
+      productId: { [Op.in]: productIds.length ? productIds : [0] },
+    },
+    attributes: ["Id", "productId"],
+    paranoid: true,
+  });
+  const catalogProductByDamageStockId = new Map(
+    damageStockRows.map((row) => [Number(row.Id), Number(row.productId)]),
+  );
+  const damageStockIds = [...catalogProductByDamageStockId.keys()];
+
+  const [repairRows, repairedRows] = await Promise.all([
+    DamageRepair.findAll({
+      where: {
+        deletedAt: { [Op.is]: null },
+        productId: { [Op.in]: damageStockIds.length ? damageStockIds : [0] },
+      },
+      attributes: ["productId", "variants"],
+      paranoid: true,
+    }),
+    DamageRepaired.findAll({
+      where: {
+        deletedAt: { [Op.is]: null },
+        productId: { [Op.in]: repairingStockIds.length ? repairingStockIds : [0] },
+      },
+      attributes: ["productId", "variants", "items"],
+      paranoid: true,
+    }),
+  ]);
+
+  const historyByProductId = new Map();
+  const historyByRepairingStockId = new Map();
+
+  repairRows.forEach((row) => {
+    const key = catalogProductByDamageStockId.get(Number(row.productId));
+    if (!key) return;
+    if (!historyByProductId.has(key)) historyByProductId.set(key, []);
+    historyByProductId.get(key).push(...parseVariants(row.variants));
+  });
+
+  repairedRows.forEach((row) => {
+    const key = Number(row.productId);
+    if (!historyByRepairingStockId.has(key)) {
+      historyByRepairingStockId.set(key, []);
+    }
+    historyByRepairingStockId.get(key).push(...parseVariants(row.variants));
+
+    parseVariants(row.items).forEach((item) => {
+      const itemKey = Number(item.receivedId || item.productId);
+      if (!itemKey) return;
+      if (!historyByRepairingStockId.has(itemKey)) {
+        historyByRepairingStockId.set(itemKey, []);
+      }
+      historyByRepairingStockId.get(itemKey).push(...parseVariants(item.variants));
+    });
+  });
+
+  return rowList.map((row) => {
+    const plainRow = row?.toJSON ? row.toJSON() : row;
+    const historicalVariants = [
+      ...(historyByProductId.get(Number(plainRow.productId)) || []),
+      ...(historyByRepairingStockId.get(Number(plainRow.Id)) || []),
+    ];
+
+    return {
+      ...plainRow,
+      variants: mergeMissingHistoricalVariants(
+        plainRow.variants,
+        historicalVariants,
+      ),
+    };
+  });
 };
 
 const insertIntoDB = async (data) => {
@@ -92,6 +211,7 @@ const getAllFromDB = async (filters, options) => {
         ? [[options.sortBy, options.sortOrder.toUpperCase()]]
         : [["createdAt", "DESC"]],
   });
+  const dataWithHistoricalVariants = await addHistoricalZeroVariants(data);
 
   // ✅ total count + total quantity (same filters)
   const [count, totalQuantity] = await Promise.all([
@@ -106,7 +226,7 @@ const getAllFromDB = async (filters, options) => {
       page,
       limit,
     },
-    data,
+    data: dataWithHistoricalVariants,
   };
 };
 
@@ -156,6 +276,15 @@ const getAllFromDBWithoutQuery = async () => {
     order: [["createdAt", "DESC"]],
   });
 
+  return addHistoricalZeroVariants(result);
+};
+
+const getAllRawFromDBWithoutQuery = async () => {
+  const result = await DamageReparingStock.findAll({
+    paranoid: true,
+    order: [["createdAt", "DESC"]],
+  });
+
   return result;
 };
 
@@ -166,6 +295,7 @@ const DamageReparingStockService = {
   updateOneFromDB,
   getDataById,
   getAllFromDBWithoutQuery,
+  getAllRawFromDBWithoutQuery,
 };
 
 module.exports = DamageReparingStockService;

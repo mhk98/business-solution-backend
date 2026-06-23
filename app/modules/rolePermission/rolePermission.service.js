@@ -141,12 +141,20 @@ const includeNewSettingsChildren = (role, permissions = []) => {
     }
   });
 
+  if (permissionSet.has("logistic_work_reports")) {
+    permissionSet.add("logistic_update");
+  }
+
   return Array.from(permissionSet);
 };
 
 const getDefaultPermissionsForRole = (role) => {
   validateRole(role);
-  return uniq(DEFAULT_ROLE_MENU_PERMISSIONS[role] || []);
+  const permissions = new Set(DEFAULT_ROLE_MENU_PERMISSIONS[role] || []);
+  if (permissions.has("logistic_work_reports")) {
+    permissions.add("logistic_update");
+  }
+  return Array.from(permissions);
 };
 
 const getEffectiveMenuPermissions = async (role) => {

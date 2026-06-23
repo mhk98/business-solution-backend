@@ -13,7 +13,8 @@ const {
   buildSyncedInventoryStockPayload,
 } = require("../../../shared/variantQuantity");
 const {
-  assertInventoryMovementVariants,
+  assertCatalogInventoryMovementVariants,
+  assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
 const ReturnProduct = db.returnProduct;
 const Notification = db.notification;
@@ -136,10 +137,13 @@ const moveItemFromInventory = async (item, transaction) => {
 
   const inventory = await findInventoryByRequestReference(rid, transaction);
   if (!inventory) throw new ApiError(404, "Received product not found");
-  assertInventoryMovementVariants({
+  await assertCatalogInventoryMovementVariants({
+    db,
     inventory,
+    productId: inventory.productId,
     variants: incomingVariants,
     quantity: returnQty,
+    transaction,
   });
 
   const oldQty = toNumber(inventory.quantity);
@@ -176,10 +180,17 @@ const restoreItemsToInventory = async (items = [], transaction) => {
     );
 
     if (!inventory) throw new ApiError(404, "Received product not found");
-    assertInventoryMovementVariants({
+    await assertCatalogInventoryMovementVariants({
+      db,
       inventory,
+      productId: inventory.productId,
       variants: item.variants,
       quantity: item.quantity,
+      transaction,
+    });
+    assertInventoryVariantStock({
+      inventory,
+      variants: item.variants,
     });
 
     const nextQuantity = toNumber(inventory.quantity) - toNumber(item.quantity);
@@ -248,10 +259,13 @@ const insertIntoDB = async (data) => {
     const inventory = await findInventoryByRequestReference(rid, t);
 
     if (!inventory) throw new ApiError(404, "Received product not found");
-    assertInventoryMovementVariants({
+    await assertCatalogInventoryMovementVariants({
+      db,
       inventory,
+      productId: inventory.productId,
       variants: incomingVariants,
       quantity: returnQty,
+      transaction: t,
     });
 
     const oldQty = Number(inventory.quantity || 0);
@@ -546,10 +560,17 @@ const deleteIdFromDB = async (id) => {
     );
 
     if (!received) throw new ApiError(404, "Received product not found");
-    assertInventoryMovementVariants({
+    await assertCatalogInventoryMovementVariants({
+      db,
       inventory: received,
+      productId: received.productId,
       variants: ret.variants,
       quantity: qty,
+      transaction: t,
+    });
+    assertInventoryVariantStock({
+      inventory: received,
+      variants: ret.variants,
     });
 
     const finalQuantity = Number(received.quantity || 0) - qty;
@@ -1008,10 +1029,17 @@ const updateOneFromDB = async (id, payload) => {
 
     if (productChanged) {
       // undo old return from old product
-      assertInventoryMovementVariants({
+      await assertCatalogInventoryMovementVariants({
+        db,
         inventory: oldInv,
+        productId: oldInv.productId,
         variants: existingVariants,
         quantity: oldQty,
+        transaction: t,
+      });
+      assertInventoryVariantStock({
+        inventory: oldInv,
+        variants: existingVariants,
       });
       const oldInventoryQuantity = toNumber(oldInv.quantity) - oldQty;
       if (oldInventoryQuantity < 0) {
@@ -1030,10 +1058,13 @@ const updateOneFromDB = async (id, payload) => {
 
       targetInv = await findInventoryByRequestReference(newProductId, t);
       if (!targetInv) throw new ApiError(404, "Product not found in inventory");
-      assertInventoryMovementVariants({
+      await assertCatalogInventoryMovementVariants({
+        db,
         inventory: targetInv,
+        productId: targetInv.productId,
         variants: incomingVariants,
         quantity: nextQty,
+        transaction: t,
       });
 
       // apply new return to new product
@@ -1048,18 +1079,24 @@ const updateOneFromDB = async (id, payload) => {
       );
     } else {
       const diff = nextQty - oldQty;
-      assertInventoryMovementVariants({
+      await assertCatalogInventoryMovementVariants({
+        db,
         inventory: oldInv,
+        productId: oldInv.productId,
         variants: incomingVariants.length ? incomingVariants : existingVariants,
         quantity: incomingVariants.length ? nextQty : oldQty,
+        transaction: t,
       });
 
       let updatedVariants = oldInv.variants;
       if (existingVariants.length > 0 || incomingVariants.length > 0) {
-        assertInventoryMovementVariants({
+        await assertCatalogInventoryMovementVariants({
+          db,
           inventory: oldInv,
+          productId: oldInv.productId,
           variants: incomingVariants,
           quantity: nextQty,
+          transaction: t,
         });
         // undo old return's contribution, then apply new return's contribution
         const withOldRemoved = existingVariants.length

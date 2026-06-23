@@ -48,6 +48,16 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
         defaultValue: 0,
       },
+      notResponseGiven: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      notResponseReceived: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
       pendingReturnReceived: {
         type: DataTypes.INTEGER(10),
         allowNull: false,

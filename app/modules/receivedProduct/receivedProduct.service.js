@@ -15,7 +15,8 @@ const {
   buildSyncedInventoryStockPayload,
 } = require("../../../shared/variantQuantity");
 const {
-  assertInventoryMovementVariants,
+  assertCatalogInventoryMovementVariants,
+  assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
 
 const ReceivedProduct = db.receivedProduct;
@@ -83,10 +84,13 @@ const applyReceivedItemToInventory = async (item, productData, transaction) => {
   const purchasePrice = toNumber(item.purchase_price);
   const salePrice = toNumber(item.sale_price);
 
-  assertInventoryMovementVariants({
-    inventory: { variants: incomingVariants },
+  await assertCatalogInventoryMovementVariants({
+    db,
+    inventory: { productId, variants: [] },
+    productId,
     variants: incomingVariants,
     quantity,
+    transaction,
   });
 
   const inv = await InventoryMaster.findOne({
@@ -96,10 +100,13 @@ const applyReceivedItemToInventory = async (item, productData, transaction) => {
   });
 
   if (inv) {
-    assertInventoryMovementVariants({
+    await assertCatalogInventoryMovementVariants({
+      db,
       inventory: inv,
+      productId,
       variants: incomingVariants,
       quantity,
+      transaction,
     });
     const mergedVariants = mergeVariants(inv.variants, incomingVariants);
     await inv.update(
@@ -147,10 +154,17 @@ const removeReceivedItemFromInventory = async (item, transaction) => {
 
   if (!inv) return;
 
-  assertInventoryMovementVariants({
+  await assertCatalogInventoryMovementVariants({
+    db,
     inventory: inv,
+    productId,
     variants: item.variants,
     quantity,
+    transaction,
+  });
+  assertInventoryVariantStock({
+    inventory: inv,
+    variants: item.variants,
   });
 
   const nextQty = toNumber(inv.quantity) - quantity;
@@ -288,7 +302,17 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
     }
 
     if (preparedItems.length > 0) {
-      for (const item of oldItems) {
+      const itemsToRemove = oldItems.length
+        ? oldItems
+        : [
+            {
+              productId: existing.productId,
+              quantity: existing.quantity,
+              variants: existing.variants,
+            },
+          ];
+
+      for (const item of itemsToRemove) {
         await removeReceivedItemFromInventory(item, t);
       }
 
@@ -414,7 +438,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
 
 const insertIntoDB = async (data, file) => {
   const bulkItems = getBulkItems(data);
-  if (bulkItems.length > 1) {
+  if (bulkItems.length) {
     return insertBulkIntoDB(data, file, bulkItems);
   }
 
@@ -517,10 +541,13 @@ const insertIntoDB = async (data, file) => {
     });
 
     if (inv) {
-      assertInventoryMovementVariants({
+      await assertCatalogInventoryMovementVariants({
+        db,
         inventory: inv,
+        productId,
         variants: incomingVariants,
         quantity,
+        transaction: t,
       });
       const mergedVariants = mergeVariants(inv.variants, incomingVariants);
 
@@ -536,10 +563,13 @@ const insertIntoDB = async (data, file) => {
 
       await syncProductStockId(productData, inv.Id, t);
     } else {
-      assertInventoryMovementVariants({
-        inventory: { variants: incomingVariants },
+      await assertCatalogInventoryMovementVariants({
+        db,
+        inventory: { productId, variants: [] },
+        productId,
         variants: incomingVariants,
         quantity,
+        transaction: t,
       });
 
       const stock = await InventoryMaster.create(
@@ -957,7 +987,7 @@ const deleteIdFromDB = async (id, options = {}) => {
 
 const updateOneFromDB = async (id, payload) => {
   const incomingBulkItems = getBulkItems(payload);
-  if (incomingBulkItems.length > 1) {
+  if (incomingBulkItems.length) {
     return updateBulkOneFromDB(id, payload, incomingBulkItems);
   }
 
@@ -1096,10 +1126,13 @@ const updateOneFromDB = async (id, payload) => {
     }
 
     if (oldProductId === newProductId) {
-      assertInventoryMovementVariants({
+      await assertCatalogInventoryMovementVariants({
+        db,
         inventory: oldInv,
+        productId: newProductId,
         variants: incomingVariants,
         quantity: nextQty,
+        transaction: t,
       });
       const quantityDiff = nextQty - qty;
       const nextInventoryQty = toNumber(oldInv.quantity) + quantityDiff;
@@ -1132,10 +1165,17 @@ const updateOneFromDB = async (id, payload) => {
       }
 
       if (oldInv) {
-        assertInventoryMovementVariants({
+        await assertCatalogInventoryMovementVariants({
+          db,
           inventory: oldInv,
+          productId: oldProductId,
           variants: existingVariants,
           quantity: qty,
+          transaction: t,
+        });
+        assertInventoryVariantStock({
+          inventory: oldInv,
+          variants: existingVariants,
         });
         await oldInv.update(
           buildSyncedInventoryStockPayload({
@@ -1153,6 +1193,14 @@ const updateOneFromDB = async (id, payload) => {
       });
 
       if (!targetInv) {
+        await assertCatalogInventoryMovementVariants({
+          db,
+          inventory: { productId: newProductId, variants: [] },
+          productId: newProductId,
+          variants: incomingVariants,
+          quantity: nextQty,
+          transaction: t,
+        });
         await InventoryMaster.create(
           buildSyncedInventoryStockPayload({
             name: productData.name,
@@ -1167,10 +1215,13 @@ const updateOneFromDB = async (id, payload) => {
           { transaction: t },
         );
       } else {
-        assertInventoryMovementVariants({
+        await assertCatalogInventoryMovementVariants({
+          db,
           inventory: targetInv,
+          productId: newProductId,
           variants: incomingVariants,
           quantity: nextQty,
+          transaction: t,
         });
         const updatedVariants = mergeVariants(
           targetInv.variants,

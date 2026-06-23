@@ -35,6 +35,18 @@ router.get(
   InventoryMasterController.getLowStockProducts,
 );
 router.get(
+  "/audit/mismatches",
+  auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
+  requireMenuPermission("inventory"),
+  InventoryMasterController.getStockMismatchAudit,
+);
+router.post(
+  "/audit/fix/:productId",
+  auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
+  requireMenuPermission("inventory"),
+  InventoryMasterController.fixStockMismatch,
+);
+router.get(
   "/:id",
   auth(),
   requireMenuPermission("inventory"),

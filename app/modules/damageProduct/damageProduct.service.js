@@ -15,6 +15,10 @@ const {
   getVariantQuantityTotal,
   hasVariantRows,
 } = require("../../../shared/variantQuantity");
+const {
+  assertCatalogInventoryMovementVariants,
+  assertInventoryVariantStock,
+} = require("../../../shared/inventoryVariantGuard");
 const DamageProduct = db.damageProduct;
 const Notification = db.notification;
 const User = db.user;
@@ -133,6 +137,18 @@ const moveDamageProductItem = async (item, transaction) => {
 
   const inventory = await findInventoryByRequestReference(rid, transaction);
   if (!inventory) throw new ApiError(404, "inventory product not found");
+  await assertCatalogInventoryMovementVariants({
+    db,
+    inventory,
+    productId: inventory.productId,
+    variants: incomingVariants,
+    quantity: returnQty,
+    transaction,
+  });
+  assertInventoryVariantStock({
+    inventory,
+    variants: incomingVariants,
+  });
 
   const oldQty = getInventoryDisplayQuantity(inventory);
   if (incomingVariants.length) {
@@ -397,6 +413,18 @@ const insertIntoDB = async (data) => {
     const inventory = await findInventoryByRequestReference(rid, t);
 
     if (!inventory) throw new ApiError(404, "inventory product not found");
+    await assertCatalogInventoryMovementVariants({
+      db,
+      inventory,
+      productId: inventory.productId,
+      variants: incomingVariants,
+      quantity: returnQty,
+      transaction: t,
+    });
+    assertInventoryVariantStock({
+      inventory,
+      variants: incomingVariants,
+    });
 
     const oldQty = getInventoryDisplayQuantity(inventory);
     if (incomingVariants.length) {
@@ -1027,6 +1055,18 @@ const updateOneFromDB = async (id, payload) => {
     }
 
     if (!targetInv) throw new ApiError(404, "Product not found in inventory");
+    await assertCatalogInventoryMovementVariants({
+      db,
+      inventory: targetInv,
+      productId: targetInv.productId,
+      variants: incomingVariants,
+      quantity: nextQty,
+      transaction: t,
+    });
+    assertInventoryVariantStock({
+      inventory: targetInv,
+      variants: incomingVariants,
+    });
 
     const availableQty = getInventoryDisplayQuantity(targetInv);
     if (incomingVariants.length) {

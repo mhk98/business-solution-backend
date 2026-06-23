@@ -20,7 +20,8 @@ const n = (v) => Number(v || 0);
 const overviewSources = [
   {
     key: "totalReceivedProduct",
-    label: "Received Product",
+    label: "Purchase Product",
+    aliases: ["Received Product"],
     Model: ReceivedProduct,
     include: () => [
       {
@@ -33,7 +34,8 @@ const overviewSources = [
   },
   {
     key: "totalPurchaseReturnProduct",
-    label: "Purchase Return Product",
+    label: "Purchase Return",
+    aliases: ["Purchase Return Product"],
     Model: PurchaseReturnProduct,
     include: () => [
       {
@@ -53,7 +55,8 @@ const overviewSources = [
   },
   {
     key: "totalIntransitProduct",
-    label: "In Transit Product",
+    label: "Intransit Product",
+    aliases: ["In Transit Product"],
     Model: InTransitProduct,
     include: () => [
       {
@@ -73,7 +76,8 @@ const overviewSources = [
   },
   {
     key: "totalSalesReturnProduct",
-    label: "Sales Return Product",
+    label: "Sales Return",
+    aliases: ["Sales Return Product"],
     Model: ReturnProduct,
     include: () => [
       {
@@ -93,7 +97,8 @@ const overviewSources = [
   },
   {
     key: "totalConfirmOrder",
-    label: "Confirm Order",
+    label: "POS",
+    aliases: ["Confirm Order"],
     Model: ConfirmOrder,
     include: () => [
       {
@@ -223,9 +228,10 @@ const getSelectedSources = (source) => {
   const normalizedSource = String(source).trim().toLowerCase();
 
   return overviewSources.filter(
-    ({ label, key }) =>
+    ({ label, key, aliases = [] }) =>
       label.toLowerCase() === normalizedSource ||
-      key.toLowerCase() === normalizedSource,
+      key.toLowerCase() === normalizedSource ||
+      aliases.some((alias) => alias.toLowerCase() === normalizedSource),
   );
 };
 

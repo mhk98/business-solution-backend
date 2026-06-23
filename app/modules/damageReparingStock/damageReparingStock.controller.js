@@ -76,6 +76,16 @@ const getAllFromDBWithoutQuery = catchAsync(async (req, res) => {
   });
 });
 
+const getAllRawFromDBWithoutQuery = catchAsync(async (req, res) => {
+  const result = await DamageReparingStockService.getAllRawFromDBWithoutQuery();
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "DamageReparingStock raw data fetch!!",
+    data: result,
+  });
+});
+
 const DamageReparingStockController = {
   getAllFromDB,
   insertIntoDB,
@@ -83,6 +93,7 @@ const DamageReparingStockController = {
   updateOneFromDB,
   deleteIdFromDB,
   getAllFromDBWithoutQuery,
+  getAllRawFromDBWithoutQuery,
 };
 
 module.exports = DamageReparingStockController;

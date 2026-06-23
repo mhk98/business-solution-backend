@@ -11,6 +11,7 @@ const {
 const mergeVariants = require("../../../shared/mergeVariants");
 const parseVariants = require("../../../shared/parseVariants");
 const subtractVariants = require("../../../shared/subtractVariants");
+const subtractVariantsPreserveZero = require("../../../shared/subtractVariantsPreserveZero");
 const DamageRepaired = db.damageRepaired;
 const Notification = db.notification;
 const User = db.user;
@@ -122,7 +123,7 @@ const assertValidVariantSelection = ({
     const quantity = Number(variant?.quantity || 0);
     const availableQuantity = availableByVariant.get(getVariantKey(variant));
 
-    if (!availableQuantity) {
+    if (availableQuantity === undefined) {
       throw new ApiError(
         400,
         "Selected variant is not available in repairing stock",
@@ -186,7 +187,7 @@ const moveDamageRepairedItem = async (item, transaction) => {
   const deductPurchase = perUnitPurchase * returnQty;
   const deductSale = perUnitSale * returnQty;
 
-  const updatedRepairingVariants = subtractVariants(
+  const updatedRepairingVariants = subtractVariantsPreserveZero(
     damageRepairingStock.variants,
     incomingVariants,
   );
@@ -361,11 +362,10 @@ const insertIntoDB = async (data) => {
   const finalStatus = String(status || "").trim() || "Active";
 
   return await db.sequelize.transaction(async (t) => {
-    const damageRepairingStock = await DamageReparingStock.findOne({
-      where: { Id: rid },
-      transaction: t,
-      lock: t.LOCK.UPDATE,
-    });
+    const damageRepairingStock = await findDamageReparingStockByReference(
+      rid,
+      t,
+    );
 
     console.log("DamageRepairingStock", rid);
 
@@ -436,7 +436,7 @@ const insertIntoDB = async (data) => {
       );
     }
 
-    const updatedRepairingVariants = subtractVariants(
+    const updatedRepairingVariants = subtractVariantsPreserveZero(
       damageRepairingStock.variants,
       incomingVariants,
     );
@@ -986,7 +986,7 @@ const updateOneFromDB = async (id, data) => {
       { where: { Id: id }, transaction: t },
     );
 
-    const nextRepairingVariants = subtractVariants(
+    const nextRepairingVariants = subtractVariantsPreserveZero(
       targetDamageReparingStock.variants,
       incomingVariants,
     );

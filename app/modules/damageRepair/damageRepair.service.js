@@ -9,6 +9,10 @@ const {
 const mergeVariants = require("../../../shared/mergeVariants");
 const parseVariants = require("../../../shared/parseVariants");
 const subtractVariants = require("../../../shared/subtractVariants");
+const subtractVariantsPreserveZero = require("../../../shared/subtractVariantsPreserveZero");
+const {
+  productHasConfiguredVariations,
+} = require("../../../shared/inventoryVariantGuard");
 const DamageRepair = db.damageRepair;
 const Notification = db.notification;
 const User = db.user;
@@ -16,7 +20,6 @@ const Supplier = db.supplier;
 const Warehouse = db.warehouse;
 const DamageStock = db.damageStock;
 const DamageReparingStock = db.damageReparingStock;
-const Variation = db.variation;
 
 const findDamageStockByReference = async (receivedId, transaction) => {
   const byId = await DamageStock.findOne({
@@ -93,14 +96,7 @@ const summarizeItems = (items = []) => ({
 });
 
 const productHasVariations = async (productId, transaction) => {
-  if (!productId) return false;
-
-  const count = await Variation.count({
-    where: { productId },
-    transaction,
-  });
-
-  return count > 0;
+  return productHasConfiguredVariations(db, productId, transaction);
 };
 
 const assertValidVariantSelection = ({
@@ -132,7 +128,7 @@ const assertValidVariantSelection = ({
     const quantity = Number(variant?.quantity || 0);
     const availableQuantity = availableByVariant.get(getVariantKey(variant));
 
-    if (!availableQuantity) {
+    if (availableQuantity === undefined) {
       throw new ApiError(400, "Selected variant is not available in damage stock");
     }
 
@@ -192,7 +188,7 @@ const syncDamageReparingStock = async (
   const nextVariants =
     quantityDelta > 0
       ? mergeVariants(repairingStock.variants, variants)
-      : subtractVariants(repairingStock.variants, variants);
+      : subtractVariantsPreserveZero(repairingStock.variants, variants);
 
   const syncedQty = hasVariantRows(nextVariants)
     ? getVariantQuantityTotal(nextVariants)
@@ -896,7 +892,10 @@ const updateOneFromDB = async (id, data) => {
 
     if (!received) throw new ApiError(404, "Received product not found");
 
-    const availableQty = getStockQuantity(received);
+    const isSameDamageStock = Number(receivedId) === oldProductId;
+    const availableQty = isSameDamageStock
+      ? restoredOldQuantity
+      : getStockQuantity(received);
     if (availableQty < nextQty) {
       throw new ApiError(400, `Not enough stock. Available: ${availableQty}`);
     }
@@ -945,7 +944,9 @@ const updateOneFromDB = async (id, data) => {
 
     if (hasProductVariations) {
       assertValidVariantSelection({
-        availableVariants: received.variants,
+        availableVariants: isSameDamageStock
+          ? restoredOldVariants
+          : received.variants,
         incomingVariants: selectedVariants,
         quantity: nextQty,
       });
@@ -973,8 +974,13 @@ const updateOneFromDB = async (id, data) => {
 
     const updatedVariants = hasProductVariations
       ? selectedVariants.length
-        ? subtractVariants(received.variants, selectedVariants)
-        : received.variants
+        ? subtractVariants(
+            isSameDamageStock ? restoredOldVariants : received.variants,
+            selectedVariants,
+          )
+        : isSameDamageStock
+          ? restoredOldVariants
+          : received.variants
       : [];
     const stockQuantity = hasVariantRows(updatedVariants)
       ? getVariantQuantityTotal(updatedVariants)
@@ -1014,7 +1020,10 @@ const updateOneFromDB = async (id, data) => {
       const nextRepairingVariants =
         existingVariants.length || selectedVariants.length
           ? mergeVariants(
-              subtractVariants(repairingStock?.variants, existingVariants),
+              subtractVariantsPreserveZero(
+                repairingStock?.variants,
+                existingVariants,
+              ),
               selectedVariants,
             )
           : repairingStock?.variants || [];

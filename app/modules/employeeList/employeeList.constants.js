@@ -7,6 +7,7 @@ const EmployeeListFilterAbleFileds = [
   "employee_id",
   "userId",
   "departmentId",
+  "teamId",
   "designationId",
   "shiftId",
   "employmentType",

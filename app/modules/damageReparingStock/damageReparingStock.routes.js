@@ -14,6 +14,7 @@ router.post(
 );
 router.get("/", auth(), DamageReparingStockController.getAllFromDB);
 router.get("/all", auth(), DamageReparingStockController.getAllFromDBWithoutQuery);
+router.get("/all-raw", auth(), DamageReparingStockController.getAllRawFromDBWithoutQuery);
 router.get("/:id", auth(), DamageReparingStockController.getDataById);
 router.delete(
   "/:id",

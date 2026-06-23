@@ -59,6 +59,7 @@ const EmployeeListRoutes = require("../modules/employeeList/employeeList.routes"
 const DailyWorkReportRoutes = require("../modules/dailyWorkReport/dailyWorkReport.routes");
 const EmployeeWorkReportRoutes = require("../modules/employeeWorkReport/employeeWorkReport.routes");
 const LogisticWorkReportRoutes = require("../modules/logisticWorkReport/logisticWorkReport.routes");
+const LogisticUpdateRoutes = require("../modules/logisticUpdate/logisticUpdate.routes");
 const DepartmentRoutes = require("../modules/department/department.routes");
 const DesignationRoutes = require("../modules/designation/designation.routes");
 const TeamRoutes = require("../modules/team/team.routes");
@@ -97,6 +98,10 @@ const moduleRoutes = [
   {
     path: "/logistic-work-reports",
     route: LogisticWorkReportRoutes,
+  },
+  {
+    path: "/logistic-updates",
+    route: LogisticUpdateRoutes,
   },
   {
     path: "/role-permissions",

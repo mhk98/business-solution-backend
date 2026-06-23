@@ -15,7 +15,7 @@ const {
   buildSyncedInventoryStockPayload,
 } = require("../../../shared/variantQuantity");
 const {
-  assertInventoryMovementVariants,
+  assertCatalogInventoryMovementVariants,
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
 const PurchaseReturnProduct = db.purchaseReturnProduct;
@@ -130,10 +130,13 @@ const normalizeReturnItem = async (item, transaction) => {
 
   const inventory = await findInventoryByRequestReference(receivedId, transaction);
   if (!inventory) throw new ApiError(404, "Product not found in inventory");
-  assertInventoryMovementVariants({
+  await assertCatalogInventoryMovementVariants({
+    db,
     inventory,
+    productId: inventory.productId,
     variants: incomingVariants,
     quantity: returnQty,
+    transaction,
   });
   assertInventoryVariantStock({
     inventory,
@@ -189,10 +192,13 @@ const restoreReturnItemsToInventory = async (items = [], transaction) => {
     );
 
     if (!inventory) throw new ApiError(404, "inventory product not found");
-    assertInventoryMovementVariants({
+    await assertCatalogInventoryMovementVariants({
+      db,
       inventory,
+      productId: inventory.productId,
       variants: item.variants,
       quantity: qty,
+      transaction,
     });
 
     await inventory.update(
@@ -207,7 +213,7 @@ const restoreReturnItemsToInventory = async (items = [], transaction) => {
 
 const insertIntoDB = async (data) => {
   const bulkItems = getBulkItems(data);
-  if (bulkItems.length > 1) {
+  if (bulkItems.length) {
     return insertBulkIntoDB(data, bulkItems);
   }
 
@@ -240,10 +246,13 @@ const insertIntoDB = async (data) => {
     const inventory = await findInventoryByRequestReference(rid, t);
 
     if (!inventory) throw new ApiError(404, "Product not found in inventory");
-    assertInventoryMovementVariants({
+    await assertCatalogInventoryMovementVariants({
+      db,
       inventory,
+      productId: inventory.productId,
       variants: incomingVariants,
       quantity: returnQty,
+      transaction: t,
     });
     assertInventoryVariantStock({
       inventory,
@@ -538,10 +547,13 @@ const deleteIdFromDB = async (id) => {
     );
 
     if (!inventory) throw new ApiError(404, "inventory product not found");
-    assertInventoryMovementVariants({
+    await assertCatalogInventoryMovementVariants({
+      db,
       inventory,
+      productId: inventory.productId,
       variants: ret.variants,
       quantity: qty,
+      transaction: t,
     });
 
     const finalQuantity = Number(inventory.quantity || 0) + qty;
@@ -886,7 +898,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
 
 const updateOneFromDB = async (id, payload) => {
   const incomingBulkItems = getBulkItems(payload);
-  if (incomingBulkItems.length > 1) {
+  if (incomingBulkItems.length) {
     return updateBulkOneFromDB(id, payload, incomingBulkItems);
   }
 
@@ -982,10 +994,13 @@ const updateOneFromDB = async (id, payload) => {
     });
 
     if (!oldInv) throw new ApiError(404, "Old inventory product not found");
-    assertInventoryMovementVariants({
+    await assertCatalogInventoryMovementVariants({
+      db,
       inventory: oldInv,
+      productId: oldInv.productId,
       variants: existingVariants,
       quantity: qty,
+      transaction: t,
     });
 
     await oldInv.update(
@@ -1002,10 +1017,13 @@ const updateOneFromDB = async (id, payload) => {
     }
 
     if (!targetInv) throw new ApiError(404, "Product not found in inventory");
-    assertInventoryMovementVariants({
+    await assertCatalogInventoryMovementVariants({
+      db,
       inventory: targetInv,
+      productId: targetInv.productId,
       variants: incomingVariants,
       quantity: nextQty,
+      transaction: t,
     });
     assertInventoryVariantStock({
       inventory: targetInv,

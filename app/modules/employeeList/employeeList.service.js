@@ -13,6 +13,7 @@ const {
 const EmployeeList = db.employeeList;
 const User = db.user;
 const Department = db.department;
+const Team = db.team;
 const Designation = db.designation;
 const Shift = db.shift;
 const LedgerHistory = db.ledgerHistory;
@@ -37,6 +38,12 @@ const employeeIncludes = [
     model: Department,
     as: "department",
     attributes: ["Id", "name", "code", "status"],
+    required: false,
+  },
+  {
+    model: Team,
+    as: "team",
+    attributes: ["Id", "name", "code", "departmentId", "status"],
     required: false,
   },
   {
@@ -230,6 +237,7 @@ const buildEmployeeData = (payload = {}, currentStatus) => {
     email: payload.email || null,
     phone: payload.phone || null,
     departmentId: normalizeOptionalForeignKey(payload.departmentId),
+    teamId: normalizeOptionalForeignKey(payload.teamId),
     designationId: normalizeOptionalForeignKey(payload.designationId),
     shiftId: normalizeOptionalForeignKey(payload.shiftId),
     reportingManagerId: normalizeOptionalForeignKey(payload.reportingManagerId),

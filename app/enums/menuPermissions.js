@@ -75,6 +75,7 @@ const MENU_PERMISSIONS = {
   DAILY_WORK_REPORTS: "daily_work_reports",
   CS_WORK_REPORTS: "cs_work_reports",
   LOGISTIC_WORK_REPORTS: "logistic_work_reports",
+  LOGISTIC_UPDATE: "logistic_update",
   PAYROLL_MANAGEMENT: "payroll_management",
   PAYSLIP: "payslip",
   EMPLOYEE_PROFILE: "employee_profile",

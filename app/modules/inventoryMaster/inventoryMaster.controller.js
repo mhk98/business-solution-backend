@@ -84,6 +84,32 @@ const getLowStockProducts = catchAsync(async (req, res) => {
   });
 });
 
+const getStockMismatchAudit = catchAsync(async (req, res) => {
+  const result = await InventoryMasterService.getStockMismatchAuditFromDB(
+    req.query,
+  );
+
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Stock mismatch audit fetched!!",
+    data: result,
+  });
+});
+
+const fixStockMismatch = catchAsync(async (req, res) => {
+  const result = await InventoryMasterService.fixStockMismatchFromDB(
+    req.params.productId,
+  );
+
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Stock mismatch fixed!!",
+    data: result,
+  });
+});
+
 const InventoryMasterController = {
   getAllFromDB,
   insertIntoDB,
@@ -92,6 +118,8 @@ const InventoryMasterController = {
   deleteIdFromDB,
   getAllFromDBWithoutQuery,
   getLowStockProducts,
+  getStockMismatchAudit,
+  fixStockMismatch,
 };
 
 module.exports = InventoryMasterController;

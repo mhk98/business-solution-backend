@@ -15,6 +15,7 @@ const PRIVILEGED_ROLES = new Set(["superAdmin", "admin"]);
 const TOTAL_ASSIGN_SOURCE_FIELDS = [
   "failedGiven",
   "pendingGiven",
+  "notResponseGiven",
   "leadGiven",
   "ideskGiven",
   "callDone",
@@ -23,6 +24,7 @@ const TOTAL_ASSIGN_SOURCE_FIELDS = [
 const TOTAL_ORDER_SOURCE_FIELDS = [
   "failedReceived",
   "pendingReceived",
+  "notResponseReceived",
   "pendingReturnReceived",
   "leadReceived",
   "crossReceived",

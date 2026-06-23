@@ -275,6 +275,10 @@ db.logisticWorkReport =
     db.sequelize,
     DataTypes,
   );
+db.logisticUpdate = require("../app/modules/logisticUpdate/logisticUpdate.model")(
+  db.sequelize,
+  DataTypes,
+);
 
 db.department = require("../app/modules/department/department.model")(
   db.sequelize,
@@ -697,6 +701,15 @@ db.logisticWorkReport.belongsTo(db.employeeList, {
   as: "employee",
 });
 
+db.user.hasMany(db.logisticUpdate, {
+  foreignKey: "userId",
+  as: "logisticUpdates",
+});
+db.logisticUpdate.belongsTo(db.user, {
+  foreignKey: "userId",
+  as: "user",
+});
+
 db.user.hasMany(db.userLogHistory, {
   foreignKey: "userId",
   as: "activityLogs",
@@ -777,6 +790,15 @@ db.department.hasMany(db.employeeList, {
 db.employeeList.belongsTo(db.department, {
   foreignKey: "departmentId",
   as: "department",
+});
+
+db.team.hasMany(db.employeeList, {
+  foreignKey: "teamId",
+  as: "employees",
+});
+db.employeeList.belongsTo(db.team, {
+  foreignKey: "teamId",
+  as: "team",
 });
 
 db.designation.hasMany(db.employeeList, {
@@ -1123,6 +1145,8 @@ db.damageRepaired.belongsTo(db.supplier, {
   as: "supplier",
 });
 
+require("../shared/registerInventoryReconcileHooks")(db);
+
 // =====================
 // Assets relations
 // =====================
@@ -1263,6 +1287,10 @@ const ensureEmployeeListColumns = async () => {
     type: DataTypes.INTEGER(10),
     allowNull: true,
   });
+  await maybeAddColumn("teamId", {
+    type: DataTypes.INTEGER(10),
+    allowNull: true,
+  });
   await maybeAddColumn("designationId", {
     type: DataTypes.INTEGER(10),
     allowNull: true,
@@ -1397,6 +1425,16 @@ const ensureEmployeeWorkReportColumns = async () => {
     defaultValue: 0,
   });
   await maybeAddColumn("crossReceived", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("notResponseGiven", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("notResponseReceived", {
     type: DataTypes.INTEGER(10),
     allowNull: false,
     defaultValue: 0,

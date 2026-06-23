@@ -544,6 +544,8 @@ const updateOneFromDB = async (id, data) => {
   const todayStr = new Date().toISOString().slice(0, 10);
   const inputDateStr = String(date || "").slice(0, 10);
 
+  let finalStatusForNotification = String(status || "").trim();
+
   const result = await db.sequelize.transaction(async (t) => {
     const existing = await PosReport.findOne({
       where: { Id: id },
@@ -571,6 +573,8 @@ const updateOneFromDB = async (id, data) => {
     } else {
       finalStatus = inputStatus || finalStatus;
     }
+
+    finalStatusForNotification = finalStatus;
 
     await applyPosItemMovement(existing.items, t, "restore");
     await applyPosItemMovement(items, t, "sale");
@@ -608,10 +612,10 @@ const updateOneFromDB = async (id, data) => {
 
   if (users.length) {
     const message = resolveApprovalNotificationMessage({
-      status: finalStatus,
+      status: finalStatusForNotification,
       note,
       date,
-      approvedMessage: "Received product request approved",
+      approvedMessage: "POS report request approved",
       fallbackMessage: "Please approved my request",
     });
 

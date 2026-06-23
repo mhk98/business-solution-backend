@@ -22,6 +22,8 @@ const EmployeeWorkReportNumericFields = [
   "failedReceived",
   "pendingGiven",
   "pendingReceived",
+  "notResponseGiven",
+  "notResponseReceived",
   "pendingReturnReceived",
   "leadGiven",
   "leadReceived",
