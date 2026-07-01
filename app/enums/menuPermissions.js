@@ -16,6 +16,7 @@ const MENU_PERMISSIONS = {
   PROFIT_LOSS_USER: "profit_loss_user",
   MANUFACTURE: "manufacture",
   ITEM: "item",
+  ITEM_REQUISITION: "item_requisition",
   MANUFACTURE_STOCK: "manufacture_stock",
   MANUFACTURE_MENU: "manufacture_menu",
   STOCK_ADJUSTMENT: "stock_adjustment",

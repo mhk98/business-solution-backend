@@ -20,6 +20,38 @@ const Item = db.item;
 const ItemMaster = db.itemMaster;
 const Supplier = db.supplier;
 
+const parseVariantPayload = (value) => {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  if (typeof value !== "string") return null;
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const buildVariantKey = (variant) => {
+  const normalized = parseVariantPayload(variant);
+  if (!normalized) return null;
+
+  const entries = Object.entries(normalized)
+    .map(([key, value]) => [key, String(value || "").trim()])
+    .filter(([, value]) => value)
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  if (!entries.length) return null;
+  return entries.map(([key, value]) => `${key}:${value}`).join("|");
+};
+
+const buildStockWhere = ({ itemId, productId, variantKey }) => ({
+  itemId,
+  productId: productId || null,
+  variantKey: variantKey || null,
+});
+
 const getStockDirectionMultiplier = (stock) => {
   return String(stock || "").trim() === "In" ? 1 : -1;
 };
@@ -32,39 +64,55 @@ const reconcileItemMasterStockAdjustment = async (
   const previousEffects = new Map();
   const nextEffects = new Map();
 
+  const makeEffectKey = (adjustment) =>
+    JSON.stringify({
+      itemId: Number(adjustment?.itemId || 0),
+      productId: Number(adjustment?.productId || 0) || null,
+      variantKey: adjustment?.variantKey || null,
+    });
+
   if (previousAdjustment?.itemId && previousAdjustment?.unitValue > 0) {
-    previousEffects.set(
-      Number(previousAdjustment.itemId),
-      getStockDirectionMultiplier(previousAdjustment.stock) *
+    previousEffects.set(makeEffectKey(previousAdjustment), {
+      adjustment: previousAdjustment,
+      value:
+        getStockDirectionMultiplier(previousAdjustment.stock) *
         toNumber(previousAdjustment.unitValue),
-    );
+    });
   }
 
   if (nextAdjustment?.itemId && nextAdjustment?.unitValue > 0) {
-    nextEffects.set(
-      Number(nextAdjustment.itemId),
-      getStockDirectionMultiplier(nextAdjustment.stock) *
+    nextEffects.set(makeEffectKey(nextAdjustment), {
+      adjustment: nextAdjustment,
+      value:
+        getStockDirectionMultiplier(nextAdjustment.stock) *
         toNumber(nextAdjustment.unitValue),
-    );
+    });
   }
 
   const itemIds = new Set([...previousEffects.keys(), ...nextEffects.keys()]);
 
-  for (const itemId of itemIds) {
-    const previousEffect = toNumber(previousEffects.get(itemId));
-    const nextEffect = toNumber(nextEffects.get(itemId));
+  for (const itemKey of itemIds) {
+    const previousEntry = previousEffects.get(itemKey);
+    const nextEntry = nextEffects.get(itemKey);
+    const effectAdjustment =
+      nextEntry?.adjustment || previousEntry?.adjustment || {};
+    const previousEffect = toNumber(previousEntry?.value);
+    const nextEffect = toNumber(nextEntry?.value);
     const delta = nextEffect - previousEffect;
 
     if (!delta) continue;
 
     const stockRow = await ItemMaster.findOne({
-      where: { itemId },
+      where: buildStockWhere(effectAdjustment),
       transaction,
       lock: transaction.LOCK.UPDATE,
     });
 
     if (!stockRow) {
-      throw new ApiError(404, `ItemMaster not found for itemId ${itemId}`);
+      throw new ApiError(
+        404,
+        `ItemMaster not found for itemId ${effectAdjustment.itemId}`,
+      );
     }
 
     const currentStockPayload = toBaseStockPayload(
@@ -82,14 +130,27 @@ const reconcileItemMasterStockAdjustment = async (
 };
 
 const insertIntoDB = async (payload) => {
-  const { itemId, unit, unitValue, date, note, status, stock, supplierId } =
-    payload;
+  const {
+    itemId,
+    productId,
+    variant,
+    variantKey,
+    unit,
+    unitValue,
+    date,
+    note,
+    status,
+    stock,
+    supplierId,
+  } = payload;
 
   const itemData = await Item.findOne({ where: { Id: itemId } });
   if (!itemData) throw new ApiError(404, "Item not found");
 
   const normalizedPayload = toBaseStockPayload(unit, unitValue);
   const totalUnitValue = normalizedPayload.unitValue;
+  const normalizedVariant = parseVariantPayload(variant);
+  const normalizedVariantKey = variantKey || buildVariantKey(normalizedVariant);
 
   if (totalUnitValue <= 0) {
     throw new ApiError(400, "unitValue must be greater than 0");
@@ -100,7 +161,10 @@ const insertIntoDB = async (payload) => {
   return db.sequelize.transaction(async (t) => {
     const StockAdjustmentData = {
       itemId,
+      productId: productId || null,
       name: itemData.name,
+      variant: normalizedVariant,
+      variantKey: normalizedVariantKey,
       unit: normalizedPayload.unit,
       unitValue: totalUnitValue,
       date,
@@ -111,7 +175,11 @@ const insertIntoDB = async (payload) => {
     };
 
     const stockRow = await ItemMaster.findOne({
-      where: { itemId },
+      where: buildStockWhere({
+        itemId,
+        productId,
+        variantKey: normalizedVariantKey,
+      }),
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
@@ -131,7 +199,10 @@ const insertIntoDB = async (payload) => {
       await stockRow.update(
         {
           itemId,
+          productId: productId || stockRow.productId || null,
           name: itemData.name,
+          variant: normalizedVariant,
+          variantKey: normalizedVariantKey,
           unitValue: stock === "In" ? plusQuantity : minusQuantity,
           unit: currentStockPayload.isWeightUnit
             ? "Gram"
@@ -140,6 +211,22 @@ const insertIntoDB = async (payload) => {
         },
         { transaction: t },
       );
+    } else if (stock === "In") {
+      await ItemMaster.create(
+        {
+          itemId,
+          productId: productId || null,
+          name: itemData.name,
+          variant: normalizedVariant,
+          variantKey: normalizedVariantKey,
+          unitValue: totalUnitValue,
+          unit: normalizedPayload.unit,
+          stock,
+        },
+        { transaction: t },
+      );
+    } else {
+      throw new ApiError(404, `ItemMaster not found for itemId ${itemId}`);
     }
 
     return StockAdjustment.create(StockAdjustmentData, { transaction: t });
@@ -227,6 +314,8 @@ const updateOneFromDB = async (id, payload) => {
     itemId,
     productId,
     name,
+    variant,
+    variantKey,
     unit,
     unitValue,
     cost,
@@ -245,7 +334,10 @@ const updateOneFromDB = async (id, payload) => {
     attributes: [
       "Id",
       "itemId",
+      "productId",
       "name",
+      "variant",
+      "variantKey",
       "unit",
       "unitValue",
       "date",
@@ -286,6 +378,12 @@ const updateOneFromDB = async (id, payload) => {
         );
   const totalUnitValue = normalizedPayload.unitValue;
   const nextItemId = itemId || existing.itemId;
+  const nextProductId =
+    productId === "" || productId == null ? existing.productId : productId;
+  const nextVariant =
+    variant === undefined ? parseVariantPayload(existing.variant) : parseVariantPayload(variant);
+  const nextVariantKey =
+    variantKey === undefined ? existing.variantKey : variantKey || buildVariantKey(nextVariant);
   const nextStock = stock === "" || stock == null ? existing.stock : stock;
   const nextSupplierId =
     supplierId === "" || supplierId == null ? existing.supplierId : supplierId;
@@ -304,9 +402,11 @@ const updateOneFromDB = async (id, payload) => {
 
   const data = {
     itemId: nextItemId || undefined,
-    productId: productId || undefined,
+    productId: nextProductId || null,
     name:
       itemData?.name || (name === "" || name == null ? existing.name : name),
+    variant: nextVariant,
+    variantKey: nextVariantKey,
     unit: normalizedPayload.unit,
     unitValue: totalUnitValue,
     supplierId: nextSupplierId,
@@ -325,12 +425,16 @@ const updateOneFromDB = async (id, payload) => {
     await reconcileItemMasterStockAdjustment(
       {
         itemId: existing.itemId,
+        productId: existing.productId,
+        variantKey: existing.variantKey,
         unitValue: toBaseStockPayload(existing.unit, existing.unitValue)
           .unitValue,
         stock: existing.stock,
       },
       {
         itemId: nextItemId,
+        productId: nextProductId,
+        variantKey: nextVariantKey,
         unitValue: totalUnitValue,
         stock: nextStock,
       },

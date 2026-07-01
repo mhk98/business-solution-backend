@@ -765,6 +765,8 @@ const getEmployeeOptions = async (filters = {}, options = {}, actor = {}) => {
     ENUM_USER_ROLE.ACCOUNTANT,
     ENUM_USER_ROLE.INVENTOR,
     ENUM_USER_ROLE.MARKETER,
+    ENUM_USER_ROLE.LEADER,
+    ENUM_USER_ROLE.HR,
   ];
 
   const andConditions = [

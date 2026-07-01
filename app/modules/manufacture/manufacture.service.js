@@ -15,6 +15,38 @@ const Item = db.item;
 const Supplier = db.supplier;
 const ItemMaster = db.itemMaster;
 
+const parseVariantPayload = (value) => {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  if (typeof value !== "string") return null;
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const buildVariantKey = (variant) => {
+  const normalized = parseVariantPayload(variant);
+  if (!normalized) return null;
+
+  const entries = Object.entries(normalized)
+    .map(([key, value]) => [key, String(value || "").trim()])
+    .filter(([, value]) => value)
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  if (!entries.length) return null;
+  return entries.map(([key, value]) => `${key}:${value}`).join("|");
+};
+
+const buildStockWhere = ({ itemId, productId, variantKey }) => ({
+  itemId,
+  productId: productId || null,
+  variantKey: variantKey || null,
+});
+
 const normalizeUnitPayload = (unit, unitValue) => {
   return toBaseStockPayload(unit, unitValue);
 };
@@ -30,6 +62,8 @@ const insertIntoDB = async (payload) => {
     note,
     status,
     supplierId,
+    variant,
+    variantKey,
   } = payload;
 
   const itemData = await Item.findOne({ where: { Id: itemId } });
@@ -38,6 +72,8 @@ const insertIntoDB = async (payload) => {
   const normalizedPayload = normalizeUnitPayload(unit, unitValue);
   const totalUnitValue = normalizedPayload.unitValue;
   const totalCost = toNumber(cost);
+  const normalizedVariant = parseVariantPayload(variant);
+  const normalizedVariantKey = variantKey || buildVariantKey(normalizedVariant);
 
   if (totalUnitValue <= 0) {
     throw new ApiError(400, "unitValue must be greater than 0");
@@ -52,6 +88,8 @@ const insertIntoDB = async (payload) => {
       itemId,
       productId: productId || null,
       name: itemData.name,
+      variant: normalizedVariant,
+      variantKey: normalizedVariantKey,
       unit: normalizedPayload.unit,
       unitValue: totalUnitValue,
       cost: totalCost,
@@ -64,7 +102,11 @@ const insertIntoDB = async (payload) => {
     };
 
     const stockRow = await ItemMaster.findOne({
-      where: { itemId },
+      where: buildStockWhere({
+        itemId,
+        productId,
+        variantKey: normalizedVariantKey,
+      }),
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
@@ -80,6 +122,8 @@ const insertIntoDB = async (payload) => {
           itemId,
           productId: productId || stockRow.productId || null,
           name: itemData.name,
+          variant: normalizedVariant,
+          variantKey: normalizedVariantKey,
           unit: currentStockPayload.isWeightUnit
             ? "Gram"
             : normalizedPayload.unit,
@@ -95,6 +139,8 @@ const insertIntoDB = async (payload) => {
           itemId,
           productId: productId || null,
           name: itemData.name,
+          variant: normalizedVariant,
+          variantKey: normalizedVariantKey,
           unit: normalizedPayload.unit,
           unitValue: totalUnitValue,
           // unitCost: calculatedUnitCost,
@@ -185,7 +231,7 @@ const deleteIdFromDB = async (id) => {
   return db.sequelize.transaction(async (t) => {
     const existing = await Manufacture.findOne({
       where: { Id: id },
-      attributes: ["Id", "itemId", "productId"],
+      attributes: ["Id", "itemId", "productId", "variantKey"],
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
@@ -196,6 +242,7 @@ const deleteIdFromDB = async (id) => {
       where: {
         itemId: existing.itemId,
         productId: existing.productId || null,
+        variantKey: existing.variantKey || null,
       },
       transaction: t,
     });
@@ -220,6 +267,8 @@ const updateOneFromDB = async (id, payload) => {
     status,
     supplierId,
     userId,
+    variant,
+    variantKey,
   } = payload;
 
   const existing = await Manufacture.findOne({
@@ -234,6 +283,8 @@ const updateOneFromDB = async (id, payload) => {
       "cost",
       "note",
       "status",
+      "variant",
+      "variantKey",
     ],
   });
 
@@ -257,12 +308,18 @@ const updateOneFromDB = async (id, payload) => {
   const nextItemId = itemId || existing.itemId;
   const nextProductId =
     productId === "" || productId == null ? existing.productId : productId;
+  const nextVariant =
+    variant === undefined ? parseVariantPayload(existing.variant) : parseVariantPayload(variant);
+  const nextVariantKey =
+    variantKey === undefined ? existing.variantKey : variantKey || buildVariantKey(nextVariant);
   const nextName = name === "" || name == null ? existing.name : name;
 
   const data = {
     itemId: nextItemId,
     productId: nextProductId,
     name: nextName,
+    variant: nextVariant,
+    variantKey: nextVariantKey,
     unit: normalizedPayload.unit,
     unitValue: totalUnitValue,
     cost: nextTotalCost,
@@ -274,6 +331,8 @@ const updateOneFromDB = async (id, payload) => {
   };
 
   const oldItemId = existing.itemId;
+  const oldProductId = existing.productId || null;
+  const oldVariantKey = existing.variantKey || null;
   const existingBasePayload = toBaseStockPayload(
     existing.unit,
     existing.unitValue,
@@ -282,7 +341,11 @@ const updateOneFromDB = async (id, payload) => {
 
   const updatedCount = await db.sequelize.transaction(async (t) => {
     const oldStockRow = await ItemMaster.findOne({
-      where: { itemId: oldItemId },
+      where: buildStockWhere({
+        itemId: oldItemId,
+        productId: oldProductId,
+        variantKey: oldVariantKey,
+      }),
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
@@ -308,9 +371,17 @@ const updateOneFromDB = async (id, payload) => {
     }
 
     let targetStockRow = oldStockRow;
-    if (Number(oldItemId) !== Number(nextItemId)) {
+    if (
+      Number(oldItemId) !== Number(nextItemId) ||
+      Number(oldProductId || 0) !== Number(nextProductId || 0) ||
+      String(oldVariantKey || "") !== String(nextVariantKey || "")
+    ) {
       targetStockRow = await ItemMaster.findOne({
-        where: { itemId: nextItemId },
+        where: buildStockWhere({
+          itemId: nextItemId,
+          productId: nextProductId,
+          variantKey: nextVariantKey,
+        }),
         transaction: t,
         lock: t.LOCK.UPDATE,
       });
@@ -325,6 +396,8 @@ const updateOneFromDB = async (id, payload) => {
           itemId: nextItemId,
           productId: nextProductId || null,
           name: nextName,
+          variant: nextVariant,
+          variantKey: nextVariantKey,
           unit: normalizedPayload.unit,
           unitValue: totalUnitValue,
           // unitCost: nextUnitCost,
@@ -344,6 +417,8 @@ const updateOneFromDB = async (id, payload) => {
           itemId: nextItemId,
           productId: nextProductId || targetStockRow.productId || null,
           name: nextName,
+          variant: nextVariant,
+          variantKey: nextVariantKey,
           unit: targetStockPayload.isWeightUnit
             ? "Gram"
             : normalizedPayload.unit,

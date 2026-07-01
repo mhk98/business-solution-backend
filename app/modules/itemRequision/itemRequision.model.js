@@ -1,6 +1,6 @@
 module.exports = (sequelize, DataTypes) => {
-  const Manufacture = sequelize.define(
-    "Manufacture",
+  const ItemRequisition = sequelize.define(
+    "ItemRequisition",
     {
       Id: {
         type: DataTypes.INTEGER(10),
@@ -8,7 +8,6 @@ module.exports = (sequelize, DataTypes) => {
         autoIncrement: true,
         allowNull: false,
       },
-
       name: {
         type: DataTypes.STRING,
         allowNull: false,
@@ -16,39 +15,58 @@ module.exports = (sequelize, DataTypes) => {
           notEmpty: true,
         },
       },
-      variant: {
-        type: DataTypes.JSON,
-        allowNull: true,
-      },
-      variantKey: {
-        type: DataTypes.STRING,
-        allowNull: true,
-      },
-      unit: {
-        type: DataTypes.STRING,
-        defaultValue: "Pcs",
-        allowNull: true,
-      },
-      unitValue: {
-        type: DataTypes.DECIMAL(10, 2),
-        allowNull: true,
-        defaultValue: 0,
-      },
-      cost: {
-        type: DataTypes.DECIMAL(10, 2),
-        defaultValue: 0,
+      itemId: {
+        type: DataTypes.INTEGER(10),
         allowNull: false,
       },
-      date: {
-        type: DataTypes.DATEONLY,
+      bookId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
+      paymentMode: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      bankName: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      bankAccount: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      quantity: {
+        type: DataTypes.INTEGER(10),
+        defaultValue: 0,
+        allowNull: true,
+      },
+      amount: {
+        type: DataTypes.INTEGER(10),
+        defaultValue: 0,
+        allowNull: true,
+      },
+      procurement: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      remarks: {
+        type: DataTypes.STRING,
         allowNull: true,
       },
       note: {
-        type: DataTypes.TEXT,
+        type: DataTypes.STRING,
         allowNull: true,
       },
       status: {
         type: DataTypes.STRING,
+        allowNull: true,
+      },
+      file: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      date: {
+        type: DataTypes.DATEONLY,
         allowNull: true,
       },
       deletedAt: {
@@ -62,5 +80,5 @@ module.exports = (sequelize, DataTypes) => {
     },
   );
 
-  return Manufacture;
+  return ItemRequisition;
 };

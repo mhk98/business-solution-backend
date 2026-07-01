@@ -16,6 +16,14 @@ module.exports = (sequelize, DataTypes) => {
           notEmpty: true,
         },
       },
+      variant: {
+        type: DataTypes.JSON,
+        allowNull: true,
+      },
+      variantKey: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
       unitValue: {
         type: DataTypes.DECIMAL(10, 2),
         allowNull: true,

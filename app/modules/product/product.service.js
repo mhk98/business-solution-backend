@@ -185,6 +185,48 @@ const syncProductNameReferences = async (
   );
 };
 
+const attachDeleteRestriction = async (rows, transaction) => {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+
+  const products = rows.map((row) =>
+    typeof row?.get === "function" ? row.get({ plain: true }) : row,
+  );
+  const productIds = products.map((product) => Number(product.Id)).filter(Boolean);
+  const stockIds = products
+    .map((product) => Number(product.stockId))
+    .filter(Boolean);
+
+  if (!productIds.length && !stockIds.length) return products;
+
+  const inventoryRows = await InventoryMaster.findAll({
+    attributes: ["Id", "productId"],
+    where: {
+      [Op.or]: [
+        { productId: { [Op.in]: productIds } },
+        { Id: { [Op.in]: stockIds } },
+      ],
+    },
+    transaction,
+  });
+
+  const restrictedProductIds = new Set();
+  const restrictedStockIds = new Set();
+
+  inventoryRows.forEach((row) => {
+    const productId = Number(row.productId);
+    const stockId = Number(row.Id);
+    if (productId) restrictedProductIds.add(productId);
+    if (stockId) restrictedStockIds.add(stockId);
+  });
+
+  return products.map((product) => ({
+    ...product,
+    isDeleteRestricted:
+      restrictedProductIds.has(Number(product.Id)) ||
+      restrictedStockIds.has(Number(product.stockId)),
+  }));
+};
+
 const insertIntoDB = async (data) => {
   const { name, size, color, sku } = data;
 
@@ -281,9 +323,11 @@ const getAllFromDB = async (filters, options) => {
 
   const count = await Product.count({ where: whereConditions });
 
+  const rows = await attachDeleteRestriction(result);
+
   return {
     meta: { count, page, limit },
-    data: result,
+    data: rows,
   };
 };
 
@@ -304,13 +348,42 @@ const getDataById = async (id) => {
 };
 
 const deleteIdFromDB = async (id) => {
-  const result = await Product.destroy({
-    where: {
-      Id: id,
-    },
-  });
+  return db.sequelize.transaction(async (transaction) => {
+    const product = await Product.findOne({
+      where: { Id: id },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
 
-  return result;
+    if (!product) throw new ApiError(404, "Product not found");
+
+    const inventoryWhere = {
+      [Op.or]: [{ productId: id }],
+    };
+
+    if (product.stockId) {
+      inventoryWhere[Op.or].push({ Id: product.stockId });
+    }
+
+    const inventoryCount = await InventoryMaster.count({
+      where: inventoryWhere,
+      transaction,
+    });
+
+    if (inventoryCount || product.stockId) {
+      throw new ApiError(
+        400,
+        "This product cannot be deleted because it exists in inventory/stock",
+      );
+    }
+
+    return Product.destroy({
+      where: {
+        Id: id,
+      },
+      transaction,
+    });
+  });
 };
 
 const updateOneFromDB = async (id, payload) => {
@@ -380,11 +453,17 @@ const updateOneFromDB = async (id, payload) => {
 
 const getAllFromDBWithoutQuery = async () => {
   const result = await Product.findAll({
+    include: [
+      {
+        model: db.variation,
+        as: "variations",
+      },
+    ],
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });
 
-  return result;
+  return attachDeleteRestriction(result);
 };
 
 const getReceivedDataById = async (id) => {

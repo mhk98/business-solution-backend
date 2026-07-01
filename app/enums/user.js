@@ -6,6 +6,7 @@ exports.ENUM_USER_ROLE = {
   LEADER: "leader",
   INVENTOR: "inventor",
   ACCOUNTANT: "accountant",
+  HR: "hr",
   LOGISTICS: "logistics",
   UP: "up",
   CS: "cs",

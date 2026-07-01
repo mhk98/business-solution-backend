@@ -16,6 +16,22 @@ module.exports = (sequelize, DataTypes) => {
           notEmpty: true,
         },
       },
+      itemId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
+      productId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
+      variant: {
+        type: DataTypes.JSON,
+        allowNull: true,
+      },
+      variantKey: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
       unit: {
         type: DataTypes.STRING,
         defaultValue: "Pcs",

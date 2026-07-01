@@ -396,6 +396,11 @@ db.purchaseRequisition =
     db.sequelize,
     DataTypes,
   );
+db.itemRequisition =
+  require("../app/modules/itemRequision/itemRequision.model")(
+    db.sequelize,
+    DataTypes,
+  );
 
 db.assetsRequisition =
   require("../app/modules/assetsRequisition/assetsRequisition.model")(
@@ -468,6 +473,10 @@ db.stockAdjustment.belongsTo(db.supplier, {
   foreignKey: "supplierId",
   as: "supplier",
 });
+db.item.hasMany(db.stockAdjustment, { foreignKey: "itemId" });
+db.stockAdjustment.belongsTo(db.item, { foreignKey: "itemId" });
+db.product.hasMany(db.stockAdjustment, { foreignKey: "productId" });
+db.stockAdjustment.belongsTo(db.product, { foreignKey: "productId" });
 
 // db.item.hasMany(db.mixer, { foreignKey: "itemId" });
 // db.mixer.belongsTo(db.item, { foreignKey: "itemId", as: "item" });
@@ -1039,6 +1048,19 @@ db.asset.hasMany(db.purchaseRequisition, { foreignKey: "assetId" });
 db.purchaseRequisition.belongsTo(db.asset, {
   foreignKey: "assetId",
   as: "asset",
+});
+
+// ---- ItemRequisition
+db.item.hasMany(db.itemRequisition, { foreignKey: "itemId" });
+db.itemRequisition.belongsTo(db.item, {
+  foreignKey: "itemId",
+  as: "item",
+});
+
+db.supplier.hasMany(db.itemRequisition, { foreignKey: "supplierId" });
+db.itemRequisition.belongsTo(db.supplier, {
+  foreignKey: "supplierId",
+  as: "supplier",
 });
 
 // ---- ReceivedProduct
@@ -1900,6 +1922,46 @@ const ensurePurchaseRequisitionAssetColumns = async () => {
   }
 };
 
+const ensureManufactureVariantColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const modelKeys = ["manufacture", "stockAdjustment", "itemMaster"];
+
+  for (const modelKey of modelKeys) {
+    const tableName = db[modelKey].getTableName();
+    const tableDefinition = await queryInterface.describeTable(tableName);
+
+    if (modelKey === "stockAdjustment") {
+      if (!tableDefinition.itemId) {
+        await queryInterface.addColumn(tableName, "itemId", {
+          type: DataTypes.INTEGER(10),
+          allowNull: true,
+        });
+      }
+
+      if (!tableDefinition.productId) {
+        await queryInterface.addColumn(tableName, "productId", {
+          type: DataTypes.INTEGER(10),
+          allowNull: true,
+        });
+      }
+    }
+
+    if (!tableDefinition.variant) {
+      await queryInterface.addColumn(tableName, "variant", {
+        type: DataTypes.JSON,
+        allowNull: true,
+      });
+    }
+
+    if (!tableDefinition.variantKey) {
+      await queryInterface.addColumn(tableName, "variantKey", {
+        type: DataTypes.STRING,
+        allowNull: true,
+      });
+    }
+  }
+};
+
 const ensurePettyCashColumns = async (modelKey) => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db[modelKey].getTableName();
@@ -2415,6 +2477,7 @@ db.sequelize
     await ensurePurchaseRequisitionAssetColumns();
     await ensurePurchaseRequisitionItemsColumn();
     await ensurePurchaseReturnProductItemsColumn();
+    await ensureManufactureVariantColumns();
     await Promise.all(
       ["pettyCash", "pettyCashRequisition"].map((modelKey) =>
         ensurePettyCashColumns(modelKey),

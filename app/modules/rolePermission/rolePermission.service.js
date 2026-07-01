@@ -10,10 +10,19 @@ const RolePermission = db.rolePermission;
 
 const validRoles = Object.values(ENUM_USER_ROLE);
 const validMenuPermissionSet = new Set(ALL_MENU_PERMISSIONS);
+const roleAliases = validRoles.reduce((acc, role) => {
+  acc[String(role).toLowerCase()] = role;
+  return acc;
+}, {});
 
 const uniq = (items = []) => [...new Set(items)];
 
-const isValidRole = (role) => validRoles.includes(role);
+const normalizeRole = (role, fallbackRole = null) => {
+  if (role == null || role === "") return fallbackRole;
+  return roleAliases[String(role).trim().toLowerCase()] || role;
+};
+
+const isValidRole = (role) => validRoles.includes(normalizeRole(role));
 
 // Legacy permission keys used by older UI versions.
 // Backend routes currently guard with "department_designation", so we treat these as equivalent.
@@ -75,9 +84,11 @@ const normalizeMenuPermissions = (menuPermissions) => {
 };
 
 const validateRole = (role) => {
-  if (!isValidRole(role)) {
+  const normalizedRole = normalizeRole(role);
+  if (!validRoles.includes(normalizedRole)) {
     throw new ApiError(400, "Invalid role");
   }
+  return normalizedRole;
 };
 
 const validateMenuPermissions = (menuPermissions) => {
@@ -149,8 +160,8 @@ const includeNewSettingsChildren = (role, permissions = []) => {
 };
 
 const getDefaultPermissionsForRole = (role) => {
-  validateRole(role);
-  const permissions = new Set(DEFAULT_ROLE_MENU_PERMISSIONS[role] || []);
+  const normalizedRole = validateRole(role);
+  const permissions = new Set(DEFAULT_ROLE_MENU_PERMISSIONS[normalizedRole] || []);
   if (permissions.has("logistic_work_reports")) {
     permissions.add("logistic_update");
   }
@@ -158,20 +169,22 @@ const getDefaultPermissionsForRole = (role) => {
 };
 
 const getEffectiveMenuPermissions = async (role) => {
-  validateRole(role);
+  const normalizedRole = validateRole(
+    normalizeRole(role, ENUM_USER_ROLE.USER),
+  );
 
   const record = await RolePermission.findOne({
-    where: { role },
+    where: { role: normalizedRole },
   });
 
   if (!record) {
     // Fallback to configured defaults when no explicit role-permission record exists.
     // This keeps the UI navigable out of the box and prevents empty permission sets.
-    return validateMenuPermissions(getDefaultPermissionsForRole(role));
+    return validateMenuPermissions(getDefaultPermissionsForRole(normalizedRole));
   }
 
   return validateMenuPermissions(
-    includeNewSettingsChildren(role, record.menuPermissions || []),
+    includeNewSettingsChildren(normalizedRole, record.menuPermissions || []),
   );
 };
 
@@ -187,22 +200,23 @@ const getAllRolePermissions = async () => {
 };
 
 const getRolePermissionByRole = async (role) => {
+  const normalizedRole = validateRole(role);
   return {
-    role,
-    menuPermissions: await getEffectiveMenuPermissions(role),
+    role: normalizedRole,
+    menuPermissions: await getEffectiveMenuPermissions(normalizedRole),
   };
 };
 
 const updateRolePermissions = async (role, menuPermissions) => {
-  validateRole(role);
+  const normalizedRole = validateRole(role);
   const normalizedPermissions = validateMenuPermissions(menuPermissions);
 
   await RolePermission.upsert({
-    role,
+    role: normalizedRole,
     menuPermissions: normalizedPermissions,
   });
 
-  return getRolePermissionByRole(role);
+  return getRolePermissionByRole(normalizedRole);
 };
 
 const hasMenuPermission = (userPermissions = [], requiredPermission) => {
@@ -227,6 +241,7 @@ module.exports = {
   getDefaultPermissionsForRole,
   validateMenuPermissions,
   validateRole,
+  normalizeRole,
   isValidRole,
   hasMenuPermission,
   validRoles,
