@@ -22,6 +22,8 @@ const OverviewRoutes = require("../modules/overview/overview.routes");
 const AssetsDamageRoutes = require("../modules/assetsDamage/assetsDamage.routes");
 const SupplierRoutes = require("../modules/supplier/supplier.routes");
 const LoanRoutes = require("../modules/loan/loan.routes");
+const OwnerRoutes = require("../modules/owner/owner.routes");
+const OwnerTransactionRoutes = require("../modules/ownerTransaction/ownerTransaction.routes");
 const CategoryRoutes = require("../modules/category/category.routes");
 const BankAccountRoutes = require("../modules/bankAccount/bankAccount.routes");
 const DamageProductRoutes = require("../modules/damageProduct/damageProduct.routes");
@@ -280,6 +282,14 @@ const moduleRoutes = [
   {
     path: "/loan",
     route: LoanRoutes,
+  },
+  {
+    path: "/owner",
+    route: OwnerRoutes,
+  },
+  {
+    path: "/owner-transaction",
+    route: OwnerTransactionRoutes,
   },
   {
     path: "/supplier-history",

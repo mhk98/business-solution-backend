@@ -134,6 +134,13 @@ const includeNewSettingsChildren = (role, permissions = []) => {
     permissionSet.add("loan");
   }
 
+  if (
+    defaults.includes("owner_transaction") &&
+    !permissionSet.has("owner_transaction")
+  ) {
+    permissionSet.add("owner_transaction");
+  }
+
   [
     "cod_change",
     "cod_charge",

@@ -48,6 +48,7 @@ const MENU_PERMISSIONS = {
   PETTY_CASH_REQUISITION: "petty_cash_requisition",
   PETTY_CASH: "petty_cash",
   LOAN: "loan",
+  OWNER_TRANSACTION: "owner_transaction",
   CREDIT_LEDGER: "credit_ledger",
   NOTIFICATIONS: "notifications",
   NOTICE: "notice",
