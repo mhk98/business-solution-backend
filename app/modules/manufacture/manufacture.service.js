@@ -51,6 +51,89 @@ const normalizeUnitPayload = (unit, unitValue) => {
   return toBaseStockPayload(unit, unitValue);
 };
 
+const adjustStockBalance = async ({
+  Model,
+  stockLabel,
+  itemId,
+  productId,
+  name,
+  variant,
+  variantKey,
+  unit,
+  unitValue,
+  cost = 0,
+  delta,
+  transaction,
+  createOnPositive = false,
+  ignoreMissingOnNegative = false,
+}) => {
+  if (!delta) return null;
+
+  const stockRow = await Model.findOne({
+    where: buildStockWhere({ itemId, productId, variantKey }),
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+
+  if (!stockRow) {
+    if (createOnPositive && delta > 0) {
+      return Model.create(
+        {
+          itemId,
+          productId: productId || null,
+          name,
+          variant,
+          variantKey: variantKey || null,
+          unit,
+          unitValue: delta,
+          cost: toNumber(cost),
+        },
+        { transaction },
+      );
+    }
+
+    if (ignoreMissingOnNegative && delta < 0) {
+      return null;
+    }
+
+    throw new ApiError(404, `${stockLabel} not found for selected item`);
+  }
+
+  const currentStockPayload = toBaseStockPayload(
+    stockRow.unit,
+    stockRow.unitValue,
+  );
+  const nextQuantity = currentStockPayload.unitValue + delta;
+
+  if (nextQuantity < 0) {
+    throw new ApiError(400, `${stockLabel} cannot be negative`);
+  }
+
+  const currentCost = toNumber(stockRow.cost);
+  const currentUnitCost =
+    currentStockPayload.unitValue > 0
+      ? currentCost / currentStockPayload.unitValue
+      : 0;
+  const nextCost =
+    delta > 0
+      ? currentCost + toNumber(cost)
+      : Math.max(0, currentCost + delta * currentUnitCost);
+
+  return stockRow.update(
+    {
+      itemId,
+      productId: productId || stockRow.productId || null,
+      name,
+      variant,
+      variantKey: variantKey || null,
+      unit: currentStockPayload.isWeightUnit ? "Gram" : unit,
+      unitValue: nextQuantity,
+      cost: nextCost,
+    },
+    { transaction },
+  );
+};
+
 const insertIntoDB = async (payload) => {
   const {
     itemId,
@@ -101,55 +184,21 @@ const insertIntoDB = async (payload) => {
       status: finalStatus,
     };
 
-    const stockRow = await ItemMaster.findOne({
-      where: buildStockWhere({
-        itemId,
-        productId,
-        variantKey: normalizedVariantKey,
-      }),
+    await adjustStockBalance({
+      Model: ItemMaster,
+      stockLabel: "Item stock",
+      itemId,
+      productId,
+      name: itemData.name,
+      variant: normalizedVariant,
+      variantKey: normalizedVariantKey,
+      unit: normalizedPayload.unit,
+      unitValue: totalUnitValue,
+      cost: totalCost,
+      delta: totalUnitValue,
       transaction: t,
-      lock: t.LOCK.UPDATE,
+      createOnPositive: true,
     });
-
-    if (stockRow) {
-      const currentStockPayload = toBaseStockPayload(
-        stockRow.unit,
-        stockRow.unitValue,
-      );
-      const nextQuantity = currentStockPayload.unitValue + totalUnitValue;
-      await stockRow.update(
-        {
-          itemId,
-          productId: productId || stockRow.productId || null,
-          name: itemData.name,
-          variant: normalizedVariant,
-          variantKey: normalizedVariantKey,
-          unit: currentStockPayload.isWeightUnit
-            ? "Gram"
-            : normalizedPayload.unit,
-          unitValue: nextQuantity,
-          // unitCost: calculatedUnitCost,
-          cost: nextQuantity * calculatedUnitCost,
-        },
-        { transaction: t },
-      );
-    } else {
-      await ItemMaster.create(
-        {
-          itemId,
-          productId: productId || null,
-          name: itemData.name,
-          variant: normalizedVariant,
-          variantKey: normalizedVariantKey,
-          unit: normalizedPayload.unit,
-          unitValue: totalUnitValue,
-          // unitCost: calculatedUnitCost,
-
-          cost: totalCost,
-        },
-        { transaction: t },
-      );
-    }
 
     return Manufacture.create(manufactureData, { transaction: t });
   });
@@ -231,19 +280,43 @@ const deleteIdFromDB = async (id) => {
   return db.sequelize.transaction(async (t) => {
     const existing = await Manufacture.findOne({
       where: { Id: id },
-      attributes: ["Id", "itemId", "productId", "variantKey"],
+      attributes: [
+        "Id",
+        "itemId",
+        "productId",
+        "name",
+        "variant",
+        "variantKey",
+        "unit",
+        "unitValue",
+        "cost",
+      ],
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
 
     if (!existing) return 0;
 
-    await ItemMaster.destroy({
-      where: {
-        itemId: existing.itemId,
-        productId: existing.productId || null,
-        variantKey: existing.variantKey || null,
-      },
+    const existingBasePayload = toBaseStockPayload(
+      existing.unit,
+      existing.unitValue,
+    );
+    const oldUnitValue = existingBasePayload.unitValue;
+    const oldCost = toNumber(existing.cost);
+    const oldVariant = parseVariantPayload(existing.variant);
+
+    await adjustStockBalance({
+      Model: ItemMaster,
+      stockLabel: "Item stock",
+      itemId: existing.itemId,
+      productId: existing.productId || null,
+      name: existing.name,
+      variant: oldVariant,
+      variantKey: existing.variantKey || null,
+      unit: existingBasePayload.unit,
+      unitValue: oldUnitValue,
+      cost: oldCost,
+      delta: -oldUnitValue,
       transaction: t,
     });
 
@@ -338,97 +411,40 @@ const updateOneFromDB = async (id, payload) => {
     existing.unitValue,
   );
   const oldUnitValue = existingBasePayload.unitValue;
+  const oldCost = toNumber(existing.cost);
+  const oldVariant = parseVariantPayload(existing.variant);
 
   const updatedCount = await db.sequelize.transaction(async (t) => {
-    const oldStockRow = await ItemMaster.findOne({
-      where: buildStockWhere({
-        itemId: oldItemId,
-        productId: oldProductId,
-        variantKey: oldVariantKey,
-      }),
+    await adjustStockBalance({
+      Model: ItemMaster,
+      stockLabel: "Item stock",
+      itemId: oldItemId,
+      productId: oldProductId,
+      name: existing.name,
+      variant: oldVariant,
+      variantKey: oldVariantKey,
+      unit: existingBasePayload.unit,
+      unitValue: oldUnitValue,
+      cost: oldCost,
+      delta: -oldUnitValue,
       transaction: t,
-      lock: t.LOCK.UPDATE,
     });
 
-    if (oldStockRow) {
-      const oldStockPayload = toBaseStockPayload(
-        oldStockRow.unit,
-        oldStockRow.unitValue,
-      );
-      const reducedQuantity = oldStockPayload.unitValue - oldUnitValue;
-
-      // if (reducedQuantity < 0) {
-      //   throw new ApiError(400, "Item stock cannot be negative");
-      // }
-
-      await oldStockRow.update(
-        {
-          unitValue: reducedQuantity,
-          cost: reducedQuantity * toNumber(oldStockRow.unitCost),
-        },
-        { transaction: t },
-      );
-    }
-
-    let targetStockRow = oldStockRow;
-    if (
-      Number(oldItemId) !== Number(nextItemId) ||
-      Number(oldProductId || 0) !== Number(nextProductId || 0) ||
-      String(oldVariantKey || "") !== String(nextVariantKey || "")
-    ) {
-      targetStockRow = await ItemMaster.findOne({
-        where: buildStockWhere({
-          itemId: nextItemId,
-          productId: nextProductId,
-          variantKey: nextVariantKey,
-        }),
-        transaction: t,
-        lock: t.LOCK.UPDATE,
-      });
-    }
-
-    const nextUnitCost =
-      totalUnitValue > 0 ? nextTotalCost / totalUnitValue : 0;
-
-    if (!targetStockRow) {
-      await ItemMaster.create(
-        {
-          itemId: nextItemId,
-          productId: nextProductId || null,
-          name: nextName,
-          variant: nextVariant,
-          variantKey: nextVariantKey,
-          unit: normalizedPayload.unit,
-          unitValue: totalUnitValue,
-          // unitCost: nextUnitCost,
-          cost: nextTotalCost,
-        },
-        { transaction: t },
-      );
-    } else {
-      const targetStockPayload = toBaseStockPayload(
-        targetStockRow.unit,
-        targetStockRow.unitValue,
-      );
-      const mergedQuantity = targetStockPayload.unitValue + totalUnitValue;
-
-      await targetStockRow.update(
-        {
-          itemId: nextItemId,
-          productId: nextProductId || targetStockRow.productId || null,
-          name: nextName,
-          variant: nextVariant,
-          variantKey: nextVariantKey,
-          unit: targetStockPayload.isWeightUnit
-            ? "Gram"
-            : normalizedPayload.unit,
-          unitValue: mergedQuantity,
-          // unitCost: nextUnitCost,
-          cost: mergedQuantity * nextUnitCost,
-        },
-        { transaction: t },
-      );
-    }
+    await adjustStockBalance({
+      Model: ItemMaster,
+      stockLabel: "Item stock",
+      itemId: nextItemId,
+      productId: nextProductId,
+      name: nextName,
+      variant: nextVariant,
+      variantKey: nextVariantKey,
+      unit: normalizedPayload.unit,
+      unitValue: totalUnitValue,
+      cost: nextTotalCost,
+      delta: totalUnitValue,
+      transaction: t,
+      createOnPositive: true,
+    });
 
     const [count] = await Manufacture.update(data, {
       where: { Id: id },

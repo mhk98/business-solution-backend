@@ -192,9 +192,9 @@ const insertIntoDB = async (payload) => {
       const plusQuantity = currentStockPayload.unitValue + totalUnitValue;
       const minusQuantity = currentStockPayload.unitValue - totalUnitValue;
 
-      // if (stock === "Out" && minusQuantity < 0) {
-      //   throw new ApiError(400, "Item stock cannot be negative");
-      // }
+      if (stock === "Out" && minusQuantity < 0) {
+        throw new ApiError(400, "Item stock cannot be negative");
+      }
 
       await stockRow.update(
         {
@@ -306,7 +306,39 @@ const getDataById = async (id) => {
 };
 
 const deleteIdFromDB = async (id) => {
-  return StockAdjustment.destroy({ where: { Id: id } });
+  return db.sequelize.transaction(async (t) => {
+    const existing = await StockAdjustment.findOne({
+      where: { Id: id },
+      attributes: [
+        "Id",
+        "itemId",
+        "productId",
+        "variantKey",
+        "unit",
+        "unitValue",
+        "stock",
+      ],
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+
+    if (!existing) return 0;
+
+    await reconcileItemMasterStockAdjustment(
+      {
+        itemId: existing.itemId,
+        productId: existing.productId,
+        variantKey: existing.variantKey,
+        unitValue: toBaseStockPayload(existing.unit, existing.unitValue)
+          .unitValue,
+        stock: existing.stock,
+      },
+      null,
+      t,
+    );
+
+    return StockAdjustment.destroy({ where: { Id: id }, transaction: t });
+  });
 };
 
 const updateOneFromDB = async (id, payload) => {

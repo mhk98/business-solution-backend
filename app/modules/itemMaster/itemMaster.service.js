@@ -73,16 +73,15 @@ const getAllFromDB = async (filters, options) => {
         : [["createdAt", "DESC"]],
   });
 
-  // ✅ total count + total quantity (same filters)
-  // const [count, totalQuantity] = await Promise.all([
-  //   ItemMaster.count({ where: whereConditions }),
-  //   ItemMaster.sum("quantity", { where: whereConditions }),
-  // ]);
+  const [count, totalQuantity] = await Promise.all([
+    ItemMaster.count({ where: whereConditions }),
+    ItemMaster.sum("unitValue", { where: whereConditions }),
+  ]);
 
   return {
     meta: {
-      // count, // total filtered records
-      // totalQuantity: totalQuantity || 0, // total filtered quantity
+      count,
+      totalQuantity: totalQuantity || 0,
       page,
       limit,
     },

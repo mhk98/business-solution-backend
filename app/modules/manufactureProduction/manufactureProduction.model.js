@@ -1,16 +1,12 @@
 module.exports = (sequelize, DataTypes) => {
-  const Mixer = sequelize.define(
-    "Mixer",
+  const ManufactureProduction = sequelize.define(
+    "ManufactureProduction",
     {
       Id: {
         type: DataTypes.INTEGER(10),
         primaryKey: true,
         autoIncrement: true,
         allowNull: false,
-      },
-      itemId: {
-        type: DataTypes.INTEGER(10),
-        allowNull: true,
       },
       name: {
         type: DataTypes.STRING,
@@ -21,9 +17,25 @@ module.exports = (sequelize, DataTypes) => {
       },
       manufacturerId: {
         type: DataTypes.INTEGER(10),
-        allowNull: true,
+        allowNull: false,
       },
       manufacturerName: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      itemId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+      },
+      productId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
+      variant: {
+        type: DataTypes.JSON,
+        allowNull: true,
+      },
+      variantKey: {
         type: DataTypes.STRING,
         allowNull: true,
       },
@@ -37,12 +49,13 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
         defaultValue: 0,
       },
+      cost: {
+        type: DataTypes.DECIMAL(10, 2),
+        defaultValue: 0,
+        allowNull: false,
+      },
       date: {
         type: DataTypes.DATEONLY,
-        allowNull: true,
-      },
-      combo: {
-        type: DataTypes.STRING,
         allowNull: true,
       },
       note: {
@@ -64,5 +77,5 @@ module.exports = (sequelize, DataTypes) => {
     },
   );
 
-  return Mixer;
+  return ManufactureProduction;
 };

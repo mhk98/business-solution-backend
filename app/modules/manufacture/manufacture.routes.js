@@ -11,36 +11,36 @@ const router = require("express").Router();
 router.post(
   "/create",
   auth(),
-  requireMenuPermission("manufacture_menu"),
+  requireMenuPermission("item_purchase"),
   applyApprovalWorkflow({ modelKey: "manufacture", entityLabel: "Manufacture" }),
   ManufactureController.insertIntoDB,
 );
-router.get("/", auth(), requireMenuPermission("manufacture_menu"), ManufactureController.getAllFromDB);
+router.get("/", auth(), requireMenuPermission("item_purchase"), ManufactureController.getAllFromDB);
 router.get(
   "/all",
   auth(),
-  requireMenuPermission("manufacture_menu"),
+  requireMenuPermission("item_purchase"),
   ManufactureController.getAllFromDBWithoutQuery,
 );
-router.get("/:id", auth(), requireMenuPermission("manufacture_menu"), ManufactureController.getDataById);
+router.get("/:id", auth(), requireMenuPermission("item_purchase"), ManufactureController.getDataById);
 router.delete(
   "/:id",
   auth(),
-  requireMenuPermission("manufacture_menu"),
+  requireMenuPermission("item_purchase"),
   applyApprovalWorkflow({ modelKey: "manufacture", entityLabel: "Manufacture" }),
   ManufactureController.deleteIdFromDB,
 );
 router.put(
   "/:id",
   auth(),
-  requireMenuPermission("manufacture_menu"),
+  requireMenuPermission("item_purchase"),
   applyApprovalWorkflow({ modelKey: "manufacture", entityLabel: "Manufacture" }),
   ManufactureController.updateOneFromDB,
 );
 router.post(
   "/:id/approve",
   auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
-  requireMenuPermission("manufacture_menu"),
+  requireMenuPermission("item_purchase"),
   approvePendingWorkflow({ modelKey: "manufacture", entityLabel: "Manufacture" }),
 );
 

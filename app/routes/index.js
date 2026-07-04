@@ -50,6 +50,9 @@ const InventoryOverviewRoutes = require("../modules/inventoryOverview/inventoryO
 const DamageStockRoutes = require("../modules/damageStock/damageStock.routes");
 const SupplierHistoryRoutes = require("../modules/supplierHistory/supplierHistory.routes");
 const ManufactureRoutes = require("../modules/manufacture/manufacture.routes");
+const ManufactureStockRoutes = require("../modules/manufactureStock/manufactureStock.routes");
+const ManufactureProductionRoutes = require("../modules/manufactureProduction/manufactureProduction.routes");
+const ManufacturerRoutes = require("../modules/manufacturer/manufacturer.routes");
 const MixerRoutes = require("../modules/mixer/mixer.routes");
 const ItemRoutes = require("../modules/item/item.routes");
 const ItemMasterRoutes = require("../modules/itemMaster/itemMaster.routes");
@@ -153,7 +156,19 @@ const moduleRoutes = [
   },
   {
     path: "/manufacture",
+    route: ManufactureProductionRoutes,
+  },
+  {
+    path: "/item-purchase",
     route: ManufactureRoutes,
+  },
+  {
+    path: "/manufacture-stock",
+    route: ManufactureStockRoutes,
+  },
+  {
+    path: "/manufacturer",
+    route: ManufacturerRoutes,
   },
   {
     path: "/stock-adjustment",

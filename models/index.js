@@ -37,6 +37,20 @@ db.manufacture = require("../app/modules/manufacture/manufacture.model")(
   db.sequelize,
   DataTypes,
 );
+db.manufactureStock =
+  require("../app/modules/manufactureStock/manufactureStock.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.manufactureProduction =
+  require("../app/modules/manufactureProduction/manufactureProduction.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.manufacturer = require("../app/modules/manufacturer/manufacturer.model")(
+  db.sequelize,
+  DataTypes,
+);
 db.stockAdjustment =
   require("../app/modules/stockAdjustment/stockAdjustment.model")(
     db.sequelize,
@@ -281,10 +295,11 @@ db.logisticWorkReport =
     db.sequelize,
     DataTypes,
   );
-db.logisticUpdate = require("../app/modules/logisticUpdate/logisticUpdate.model")(
-  db.sequelize,
-  DataTypes,
-);
+db.logisticUpdate =
+  require("../app/modules/logisticUpdate/logisticUpdate.model")(
+    db.sequelize,
+    DataTypes,
+  );
 
 db.department = require("../app/modules/department/department.model")(
   db.sequelize,
@@ -468,6 +483,32 @@ db.manufacture.belongsTo(db.item, { foreignKey: "itemId" });
 
 db.product.hasMany(db.manufacture, { foreignKey: "productId" });
 db.manufacture.belongsTo(db.product, { foreignKey: "productId" });
+
+db.item.hasMany(db.manufactureStock, { foreignKey: "itemId" });
+db.manufactureStock.belongsTo(db.item, { foreignKey: "itemId" });
+
+db.product.hasMany(db.manufactureStock, { foreignKey: "productId" });
+db.manufactureStock.belongsTo(db.product, { foreignKey: "productId" });
+
+db.item.hasMany(db.manufactureProduction, { foreignKey: "itemId" });
+db.manufactureProduction.belongsTo(db.item, { foreignKey: "itemId" });
+
+db.product.hasMany(db.manufactureProduction, { foreignKey: "productId" });
+db.manufactureProduction.belongsTo(db.product, { foreignKey: "productId" });
+
+db.manufacturer.hasMany(db.manufactureProduction, {
+  foreignKey: "manufacturerId",
+});
+db.manufactureProduction.belongsTo(db.manufacturer, {
+  foreignKey: "manufacturerId",
+});
+
+db.manufacturer.hasMany(db.manufactureStock, {
+  foreignKey: "manufacturerId",
+});
+db.manufactureStock.belongsTo(db.manufacturer, {
+  foreignKey: "manufacturerId",
+});
 
 db.supplier.hasMany(db.manufacture, { foreignKey: "supplierId" });
 db.manufacture.belongsTo(db.supplier, {
@@ -1948,13 +1989,22 @@ const ensurePurchaseRequisitionAssetColumns = async () => {
 
 const ensureManufactureVariantColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
-  const modelKeys = ["manufacture", "stockAdjustment", "itemMaster"];
+  const modelKeys = [
+    "manufacture",
+    "stockAdjustment",
+    "itemMaster",
+    "manufactureStock",
+  ];
 
   for (const modelKey of modelKeys) {
     const tableName = db[modelKey].getTableName();
     const tableDefinition = await queryInterface.describeTable(tableName);
 
-    if (modelKey === "stockAdjustment") {
+    if (
+      modelKey === "stockAdjustment" ||
+      modelKey === "itemMaster" ||
+      modelKey === "manufactureStock"
+    ) {
       if (!tableDefinition.itemId) {
         await queryInterface.addColumn(tableName, "itemId", {
           type: DataTypes.INTEGER(10),
@@ -1983,6 +2033,26 @@ const ensureManufactureVariantColumns = async () => {
         allowNull: true,
       });
     }
+  }
+};
+
+const ensureMixerManufacturerColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.mixer.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.manufacturerId) {
+    await queryInterface.addColumn(tableName, "manufacturerId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+
+  if (!tableDefinition.manufacturerName) {
+    await queryInterface.addColumn(tableName, "manufacturerName", {
+      type: DataTypes.STRING,
+      allowNull: true,
+    });
   }
 };
 
@@ -2502,6 +2572,7 @@ db.sequelize
     await ensurePurchaseRequisitionItemsColumn();
     await ensurePurchaseReturnProductItemsColumn();
     await ensureManufactureVariantColumns();
+    await ensureMixerManufacturerColumns();
     await Promise.all(
       ["pettyCash", "pettyCashRequisition"].map((modelKey) =>
         ensurePettyCashColumns(modelKey),
