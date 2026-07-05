@@ -1,48 +1,85 @@
 const router = require("express").Router();
 const { ENUM_USER_ROLE } = require("../../enums/user");
 const auth = require("../../middlewares/auth");
-const { requireMenuPermission } = require("../../middlewares/requireMenuPermission");
+const {
+  requireMenuPermission,
+} = require("../../middlewares/requireMenuPermission");
 const DepartmentController = require("./department.controller");
 
 router.post(
   "/create",
-  auth(),
+  auth(
+    ENUM_USER_ROLE.SUPER_ADMIN,
+    ENUM_USER_ROLE.ADMIN,
+    ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.HR,
+  ),
   requireMenuPermission("department_designation"),
   DepartmentController.insertIntoDB,
 );
 router.get(
   "/",
-  auth(),
+  auth(
+    ENUM_USER_ROLE.SUPER_ADMIN,
+    ENUM_USER_ROLE.ADMIN,
+    ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.HR,
+  ),
   requireMenuPermission("department_designation"),
   DepartmentController.getAllFromDB,
 );
 router.get(
   "/all",
-  auth(),
+  auth(
+    ENUM_USER_ROLE.SUPER_ADMIN,
+    ENUM_USER_ROLE.ADMIN,
+    ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.HR,
+  ),
   requireMenuPermission("department_designation"),
   DepartmentController.getAllFromDBWithoutQuery,
 );
 router.get(
   "/:id",
-  auth(),
+  auth(
+    ENUM_USER_ROLE.SUPER_ADMIN,
+    ENUM_USER_ROLE.ADMIN,
+    ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.HR,
+  ),
   requireMenuPermission("department_designation"),
   DepartmentController.getDataById,
 );
 router.put(
   "/:id",
-  auth(),
+  auth(
+    ENUM_USER_ROLE.SUPER_ADMIN,
+    ENUM_USER_ROLE.ADMIN,
+    ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.HR,
+  ),
   requireMenuPermission("department_designation"),
   DepartmentController.updateOneFromDB,
 );
 router.delete(
   "/:id",
-  auth(),
+  auth(
+    ENUM_USER_ROLE.SUPER_ADMIN,
+    ENUM_USER_ROLE.ADMIN,
+    ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.HR,
+  ),
   requireMenuPermission("department_designation"),
   DepartmentController.deleteIdFromDB,
 );
 router.post(
   "/:id/approve",
-  auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
+  auth(
+    ENUM_USER_ROLE.SUPER_ADMIN,
+    ENUM_USER_ROLE.ADMIN,
+    ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.HR,
+  ),
   requireMenuPermission("department_designation"),
   DepartmentController.approveOneFromDB,
 );

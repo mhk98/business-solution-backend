@@ -60,12 +60,49 @@ const getOutputQuantity = (combo, variants) => {
   return toNumber(combo);
 };
 
+const getOutputPriceSummary = (variants, purchasePrice = 0, salePrice = 0) => {
+  const normalizedVariants = normalizeOutputVariants(variants);
+
+  if (normalizedVariants.length) {
+    const quantity = normalizedVariants.reduce(
+      (total, variant) => total + toNumber(variant.quantity),
+      0,
+    );
+
+    if (!quantity) {
+      return { purchase_price: 0, sale_price: 0 };
+    }
+
+    return {
+      purchase_price:
+        normalizedVariants.reduce(
+          (total, variant) =>
+            total + toNumber(variant.quantity) * toNumber(variant.purchase_price),
+          0,
+        ) / quantity,
+      sale_price:
+        normalizedVariants.reduce(
+          (total, variant) =>
+            total + toNumber(variant.quantity) * toNumber(variant.sale_price),
+          0,
+        ) / quantity,
+    };
+  }
+
+  return {
+    purchase_price: toNumber(purchasePrice),
+    sale_price: toNumber(salePrice),
+  };
+};
+
 const buildMixerNote = (
   note,
   mixItems,
   manufacturer = {},
   variants = [],
   warehouseId = null,
+  packagingItems = [],
+  outputPrices = {},
 ) => {
   const displayNote = String(note || "").trim();
   const serializedVariants = normalizeOutputVariants(variants);
@@ -77,9 +114,18 @@ const buildMixerNote = (
         }))
         .filter((item) => item.manufactureId && item.unitValue > 0)
     : [];
+  const serializedPackagingItems = Array.isArray(packagingItems)
+    ? packagingItems
+        .map((item) => ({
+          itemMasterId: Number(item?.itemMasterId),
+          unitValue: toNumber(item?.unitValue),
+        }))
+        .filter((item) => item.itemMasterId && item.unitValue > 0)
+    : [];
 
   if (
     !serializedMixItems.length &&
+    !serializedPackagingItems.length &&
     !serializedVariants.length &&
     !manufacturer?.manufacturerId &&
     !warehouseId
@@ -89,6 +135,7 @@ const buildMixerNote = (
 
   return `${displayNote}${MIXER_META_PREFIX}${JSON.stringify({
     mixItems: serializedMixItems,
+    packagingItems: serializedPackagingItems,
     manufacturerId: manufacturer?.manufacturerId
       ? Number(manufacturer.manufacturerId)
       : null,
@@ -96,6 +143,8 @@ const buildMixerNote = (
     stockSource: manufacturer?.manufacturerId ? "manufactureStock" : "itemMaster",
     variants: serializedVariants,
     warehouseId: warehouseId ? Number(warehouseId) : null,
+    purchase_price: toNumber(outputPrices.purchase_price),
+    sale_price: toNumber(outputPrices.sale_price),
   })}`;
 };
 
@@ -107,6 +156,7 @@ const parseMixerNote = (note = "") => {
     return {
       displayNote: rawNote.trim(),
       mixItems: [],
+      packagingItems: [],
     };
   }
 
@@ -126,25 +176,39 @@ const parseMixerNote = (note = "") => {
           }))
           .filter((item) => item.manufactureId && item.unitValue > 0)
       : [];
+    const packagingItems = Array.isArray(parsedMeta?.packagingItems)
+      ? parsedMeta.packagingItems
+          .map((item) => ({
+            itemMasterId: Number(item?.itemMasterId),
+            unitValue: toNumber(item?.unitValue),
+          }))
+          .filter((item) => item.itemMasterId && item.unitValue > 0)
+      : [];
 
     return {
       displayNote,
       mixItems,
+      packagingItems,
       manufacturerId,
       manufacturerName: parsedMeta?.manufacturerName || null,
       stockSource: parsedMeta?.stockSource || null,
       variants: normalizeOutputVariants(parsedMeta?.variants),
       warehouseId: parsedMeta?.warehouseId ? Number(parsedMeta.warehouseId) : null,
+      purchase_price: toNumber(parsedMeta?.purchase_price),
+      sale_price: toNumber(parsedMeta?.sale_price),
     };
   } catch (error) {
     return {
       displayNote: rawNote.trim(),
       mixItems: [],
+      packagingItems: [],
       manufacturerId: null,
       manufacturerName: null,
       stockSource: null,
       variants: [],
       warehouseId: null,
+      purchase_price: 0,
+      sale_price: 0,
     };
   }
 };
@@ -183,6 +247,21 @@ const aggregateMixItems = (mixItems = []) => {
     if (!manufactureId || unitValue <= 0) continue;
 
     totals.set(manufactureId, toNumber(totals.get(manufactureId)) + unitValue);
+  }
+
+  return totals;
+};
+
+const aggregatePackagingItems = (packagingItems = []) => {
+  const totals = new Map();
+
+  for (const item of packagingItems) {
+    const itemMasterId = Number(item?.itemMasterId);
+    const unitValue = toNumber(item?.unitValue);
+
+    if (!itemMasterId || unitValue <= 0) continue;
+
+    totals.set(itemMasterId, toNumber(totals.get(itemMasterId)) + unitValue);
   }
 
   return totals;
@@ -370,12 +449,15 @@ const getStoredStockContext = async (mixerRecord, transaction) => {
 
   return {
     mixItems,
+    packagingItems: parsed.packagingItems || [],
     manufacturerId: parsed.manufacturerId || mixerRecord?.manufacturerId || null,
     manufacturerName:
       parsed.manufacturerName || mixerRecord?.manufacturerName || null,
     stockSource: parsed.stockSource || null,
     variants: parsed.variants || [],
     warehouseId: parsed.warehouseId || null,
+    purchase_price: parsed.purchase_price || 0,
+    sale_price: parsed.sale_price || 0,
     combo: mixerRecord?.combo,
     productId: mixerRecord?.productId,
   };
@@ -397,6 +479,8 @@ const buildMixerReceivedProductPayload = ({
   productData,
   quantity,
   variants,
+  purchasePrice,
+  salePrice,
   date,
   note,
   warehouseId,
@@ -405,8 +489,8 @@ const buildMixerReceivedProductPayload = ({
   quantity,
   source: "Mixer",
   batchId: `mixer-${mixerId}`,
-  purchase_price: 0,
-  sale_price: 0,
+  purchase_price: toNumber(purchasePrice),
+  sale_price: toNumber(salePrice),
   productId: Number(productData.Id),
   sku: productData.sku || "",
   weight: productData.weight || 0,
@@ -423,6 +507,8 @@ const syncMixerReceivedProduct = async ({
   productData,
   quantity,
   variants,
+  purchasePrice,
+  salePrice,
   date,
   note,
   warehouseId,
@@ -435,6 +521,8 @@ const syncMixerReceivedProduct = async ({
     productData,
     quantity,
     variants,
+    purchasePrice,
+    salePrice,
     date,
     note,
     warehouseId,
@@ -466,6 +554,8 @@ const addMixerOutputToInventory = async (
   productData,
   combo,
   variants,
+  purchasePrice,
+  salePrice,
   transaction,
 ) => {
   const productId = Number(productData?.Id || 0);
@@ -494,8 +584,8 @@ const addMixerOutputToInventory = async (
       buildSyncedInventoryStockPayload({
         quantity: toNumber(inv.quantity) + quantity,
         variants: mergeVariants(inv.variants, outputVariants),
-        purchase_price: toNumber(inv.purchase_price),
-        sale_price: toNumber(inv.sale_price),
+        purchase_price: toNumber(purchasePrice),
+        sale_price: toNumber(salePrice),
       }),
       { transaction },
     );
@@ -521,8 +611,8 @@ const addMixerOutputToInventory = async (
       name: productData.name,
       quantity,
       variants: outputVariants,
-      purchase_price: 0,
-      sale_price: 0,
+      purchase_price: toNumber(purchasePrice),
+      sale_price: toNumber(salePrice),
     }),
     { transaction },
   );
@@ -618,15 +708,67 @@ const reconcileItemMasterStock = async (
   }
 };
 
+const reconcilePackagingStock = async (
+  previousPackagingItems,
+  nextPackagingItems,
+  transaction,
+) => {
+  const previousTotals = aggregatePackagingItems(previousPackagingItems);
+  const nextTotals = aggregatePackagingItems(nextPackagingItems);
+  const itemMasterIds = new Set([
+    ...previousTotals.keys(),
+    ...nextTotals.keys(),
+  ]);
+
+  for (const itemMasterId of itemMasterIds) {
+    const previousQuantity = toNumber(previousTotals.get(itemMasterId));
+    const nextQuantity = toNumber(nextTotals.get(itemMasterId));
+    const delta = previousQuantity - nextQuantity;
+
+    if (!delta) continue;
+
+    const stockRow = await ItemMaster.findOne({
+      where: { Id: itemMasterId },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    if (!stockRow) {
+      throw new ApiError(
+        404,
+        `ItemMaster not found for packaging item ${itemMasterId}`,
+      );
+    }
+
+    const availableStock = toNumber(stockRow.unitValue);
+
+    if (delta < 0 && availableStock < Math.abs(delta)) {
+      throw new ApiError(
+        400,
+        `${stockRow.name} stock not enough. Available: ${availableStock}`,
+      );
+    }
+
+    await stockRow.update(
+      { unitValue: availableStock + delta },
+      { transaction },
+    );
+  }
+};
+
 const sanitizeMixerRecord = (record) => {
   if (!record) return record;
 
   const { displayNote } = parseMixerNote(record.note);
-  const { variants, warehouseId } = parseMixerNote(record.note);
+  const { variants, warehouseId, packagingItems, purchase_price, sale_price } =
+    parseMixerNote(record.note);
   if (typeof record.setDataValue === "function") {
     record.setDataValue("note", displayNote || null);
     record.setDataValue("variants", variants || []);
     record.setDataValue("warehouseId", warehouseId || null);
+    record.setDataValue("packagingItems", packagingItems || []);
+    record.setDataValue("purchase_price", purchase_price || 0);
+    record.setDataValue("sale_price", sale_price || 0);
     return record;
   }
 
@@ -635,6 +777,9 @@ const sanitizeMixerRecord = (record) => {
     note: displayNote || null,
     variants: variants || [],
     warehouseId: warehouseId || null,
+    packagingItems: packagingItems || [],
+    purchase_price: purchase_price || 0,
+    sale_price: sale_price || 0,
   };
 };
 
@@ -674,16 +819,24 @@ const insertIntoDB = async (payload) => {
     manufacturerId,
     warehouseId,
     mixItems,
+    packagingItems,
     date,
     note,
     combo,
     variants,
+    purchase_price,
+    sale_price,
   } = payload;
 
   const productData = await Product.findOne({ where: { Id: productId } });
   if (!productData) throw new ApiError(404, "Product not found");
   const outputVariants = normalizeOutputVariants(variants);
   const outputQuantity = getOutputQuantity(combo, outputVariants);
+  const outputPrices = getOutputPriceSummary(
+    outputVariants,
+    purchase_price,
+    sale_price,
+  );
   if (outputQuantity <= 0) {
     throw new ApiError(400, "Combo quantity must be greater than 0");
   }
@@ -702,6 +855,8 @@ const insertIntoDB = async (payload) => {
       manufacturerContext,
       outputVariants,
       warehouseId,
+      packagingItems,
+      outputPrices,
     );
 
     await reconcileManufactureStock(
@@ -709,7 +864,15 @@ const insertIntoDB = async (payload) => {
       { mixItems: mixItems || [], manufacturerId: manufacturer.Id },
       t,
     );
-    await addMixerOutputToInventory(productData, outputQuantity, outputVariants, t);
+    await reconcilePackagingStock([], packagingItems || [], t);
+    await addMixerOutputToInventory(
+      productData,
+      outputQuantity,
+      outputVariants,
+      outputPrices.purchase_price,
+      outputPrices.sale_price,
+      t,
+    );
 
     const result = await Mixer.create(
       {
@@ -729,6 +892,8 @@ const insertIntoDB = async (payload) => {
       productData,
       quantity: outputQuantity,
       variants: outputVariants,
+      purchasePrice: outputPrices.purchase_price,
+      salePrice: outputPrices.sale_price,
       date,
       note: note || "Generated from Mixer",
       warehouseId,
@@ -821,6 +986,7 @@ const deleteIdFromDB = async (id) => {
       { mixItems: [], manufacturerId: null },
       t,
     );
+    await reconcilePackagingStock(existingContext.packagingItems || [], [], t);
 
     return Mixer.destroy({
       where: { Id: id },
@@ -834,6 +1000,7 @@ const updateOneFromDB = async (id, payload) => {
     productId,
     manufacturerId,
     mixItems,
+    packagingItems,
     variants,
     note,
     date,
@@ -842,6 +1009,8 @@ const updateOneFromDB = async (id, payload) => {
     actorRole,
     combo,
     warehouseId,
+    purchase_price,
+    sale_price,
   } = payload;
 
   const existing = await Mixer.findOne({
@@ -902,10 +1071,20 @@ const updateOneFromDB = async (id, payload) => {
     const previousMixItems = await getStoredMixItems(lockedMixer, t);
     const previousContext = await getStoredStockContext(lockedMixer, t);
     const nextMixItems = Array.isArray(mixItems) ? mixItems : previousMixItems;
+    const nextPackagingItems = Array.isArray(packagingItems)
+      ? packagingItems
+      : previousContext.packagingItems || [];
     const nextVariants =
       variants === undefined
         ? normalizeOutputVariants(previousContext.variants)
         : normalizeOutputVariants(variants);
+    const nextOutputPrices = getOutputPriceSummary(
+      nextVariants,
+      purchase_price === undefined
+        ? previousContext.purchase_price
+        : purchase_price,
+      sale_price === undefined ? previousContext.sale_price : sale_price,
+    );
     const nextCombo = getOutputQuantity(
       nextVariants.length ? 0 : combo ?? lockedMixer.combo,
       nextVariants,
@@ -947,6 +1126,11 @@ const updateOneFromDB = async (id, payload) => {
       { mixItems: nextMixItems, manufacturerId: nextManufacturer.Id },
       t,
     );
+    await reconcilePackagingStock(
+      previousContext.packagingItems || [],
+      nextPackagingItems,
+      t,
+    );
     await removeMixerOutputFromInventory(previousContext, t);
     await deleteMixerReceivedProduct(lockedMixer.Id, t);
     const nextProductData = productData || {
@@ -959,6 +1143,8 @@ const updateOneFromDB = async (id, payload) => {
       nextProductData,
       nextCombo,
       nextVariants,
+      nextOutputPrices.purchase_price,
+      nextOutputPrices.sale_price,
       t,
     );
     await syncMixerReceivedProduct({
@@ -966,16 +1152,26 @@ const updateOneFromDB = async (id, payload) => {
       productData: nextProductData,
       quantity: nextCombo,
       variants: nextVariants,
+      purchasePrice: nextOutputPrices.purchase_price,
+      salePrice: nextOutputPrices.sale_price,
       date: inputDateStr || lockedMixer.date || undefined,
       note: finalDisplayNote || "Generated from Mixer",
       warehouseId: nextWarehouseId,
       transaction: t,
     });
 
-    const storedNote = buildMixerNote(finalDisplayNote, nextMixItems, {
-      manufacturerId: nextManufacturer.Id,
-      manufacturerName: nextManufacturer.name,
-    }, nextVariants, nextWarehouseId);
+    const storedNote = buildMixerNote(
+      finalDisplayNote,
+      nextMixItems,
+      {
+        manufacturerId: nextManufacturer.Id,
+        manufacturerName: nextManufacturer.name,
+      },
+      nextVariants,
+      nextWarehouseId,
+      nextPackagingItems,
+      nextOutputPrices,
+    );
 
     const data = {
       productId: nextProductId || undefined,

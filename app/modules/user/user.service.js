@@ -16,6 +16,22 @@ const welcomeCredentialsTemplate = require("../../utils/emailTemplates/welcomeCr
 const RolePermissionService = require("../rolePermission/rolePermission.service");
 const { ENUM_USER_ROLE } = require("../../enums/user");
 const DEFAULT_REGISTER_PASSWORD = "123456";
+const VALID_USER_ROLES = Object.values(ENUM_USER_ROLE);
+const USER_ROLE_ALIASES = VALID_USER_ROLES.reduce((acc, role) => {
+  acc[String(role).toLowerCase()] = role;
+  return acc;
+}, {});
+
+const normalizeUserRole = (role, { required = false } = {}) => {
+  if (role == null || role === "") {
+    if (required) throw new ApiError(400, "Role is required");
+    return undefined;
+  }
+
+  const normalizedRole = USER_ROLE_ALIASES[String(role).trim().toLowerCase()];
+  if (!normalizedRole) throw new ApiError(400, "Invalid role");
+  return normalizedRole;
+};
 
 const sanitizeUser = (user) => {
   if (!user) return null;
@@ -91,9 +107,13 @@ const register = async (userData) => {
   const isUserExist = await User.findOne({ where: { Email } });
   if (isUserExist) throw new ApiError(409, "User already exist");
 
+  const { role: incomingRole, ...restUserData } = userData;
+  const role = normalizeUserRole(incomingRole);
+
   // ✅ user create
   const result = await User.create({
-    ...userData,
+    ...restUserData,
+    ...(role ? { role } : {}),
     Password: plainPassword,
   });
 
@@ -202,7 +222,14 @@ const updateUserFromDB = async (id, payload) => {
     throw new ApiError(404, "User not found");
   }
 
-  await User.update(payload, {
+  const normalizedPayload = { ...payload };
+  if (Object.prototype.hasOwnProperty.call(normalizedPayload, "role")) {
+    normalizedPayload.role = normalizeUserRole(normalizedPayload.role, {
+      required: true,
+    });
+  }
+
+  await User.update(normalizedPayload, {
     where: {
       Id: id,
     },

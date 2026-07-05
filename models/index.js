@@ -2232,6 +2232,7 @@ const ensureUserRoleColumn = async () => {
     "leader",
     "inventor",
     "accountant",
+    "hr",
     "logistics",
     "up",
     "cs",

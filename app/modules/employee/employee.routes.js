@@ -13,6 +13,7 @@ router.post(
     ENUM_USER_ROLE.SUPER_ADMIN,
     ENUM_USER_ROLE.ADMIN,
     ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.HR,
   ),
   applyApprovalWorkflow({ modelKey: "employee", entityLabel: "Employee" }),
   EmployeeController.insertIntoDB,
@@ -26,6 +27,7 @@ router.delete(
     ENUM_USER_ROLE.SUPER_ADMIN,
     ENUM_USER_ROLE.ADMIN,
     ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.HR,
   ),
   applyApprovalWorkflow({ modelKey: "employee", entityLabel: "Employee" }),
   EmployeeController.deleteIdFromDB,
@@ -36,6 +38,7 @@ router.put(
     ENUM_USER_ROLE.SUPER_ADMIN,
     ENUM_USER_ROLE.ADMIN,
     ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.HR,
   ),
   applyApprovalWorkflow({ modelKey: "employee", entityLabel: "Employee" }),
   EmployeeController.updateOneFromDB,
@@ -43,7 +46,12 @@ router.put(
 
 router.post(
   "/:id/approve",
-  auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
+  auth(
+    ENUM_USER_ROLE.SUPER_ADMIN,
+    ENUM_USER_ROLE.ADMIN,
+    ENUM_USER_ROLE.ACCOUNTANT,
+    ENUM_USER_ROLE.HR,
+  ),
   approvePendingWorkflow({ modelKey: "employee", entityLabel: "Employee" }),
 );
 
