@@ -23,6 +23,7 @@ const MENU_PERMISSIONS = {
   MANUFACTURE_MENU: "manufacture_menu",
   MANUFACTURER: "manufacturer",
   STOCK_ADJUSTMENT: "stock_adjustment",
+  STOCK_MOVEMENT: "stock_movement",
   MIXER: "mixer",
   INVENTORY: "inventory",
   INVENTORY_OVERVIEW: "inventory_overview",

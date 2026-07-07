@@ -7,6 +7,7 @@ const {
 } = require("../../../helpers/unitConversionHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const {
   StockAdjustmentSearchableFields,
 } = require("./stockAdjustment.constants");
@@ -46,11 +47,25 @@ const buildVariantKey = (variant) => {
   return entries.map(([key, value]) => `${key}:${value}`).join("|");
 };
 
-const buildStockWhere = ({ itemId, productId, variantKey }) => ({
-  itemId,
-  productId: productId || null,
-  variantKey: variantKey || null,
-});
+const buildStockWhere = ({ itemId, productId, variantKey }) => {
+  const where = { itemId };
+
+  if (productId) {
+    where.productId = productId;
+  }
+
+  if (variantKey) {
+    where.variantKey = variantKey;
+  } else {
+    where[Op.and] = [
+      {
+        [Op.or]: [{ variantKey: null }, { variantKey: "" }],
+      },
+    ];
+  }
+
+  return where;
+};
 
 const getStockDirectionMultiplier = (stock) => {
   return String(stock || "").trim() === "In" ? 1 : -1;
@@ -60,6 +75,7 @@ const reconcileItemMasterStockAdjustment = async (
   previousAdjustment,
   nextAdjustment,
   transaction,
+  movementContext = null,
 ) => {
   const previousEffects = new Map();
   const nextEffects = new Map();
@@ -106,6 +122,7 @@ const reconcileItemMasterStockAdjustment = async (
       where: buildStockWhere(effectAdjustment),
       transaction,
       lock: transaction.LOCK.UPDATE,
+      order: [["createdAt", "ASC"]],
     });
 
     if (!stockRow) {
@@ -125,7 +142,23 @@ const reconcileItemMasterStockAdjustment = async (
       throw new ApiError(400, "Item stock cannot be negative");
     }
 
-    await stockRow.update({ unitValue: nextUnitValue }, { transaction });
+    const updatedStockRow = await stockRow.update(
+      { unitValue: nextUnitValue },
+      { transaction },
+    );
+    await logStockMovement({
+      transaction,
+      ...movementContext,
+      stockType: movementContext?.stockType || "ItemStock",
+      stockRow: updatedStockRow,
+      itemId: effectAdjustment.itemId,
+      productId: effectAdjustment.productId || null,
+      variantKey: effectAdjustment.variantKey || null,
+      quantityChange: delta,
+      balanceBefore: currentStockPayload.unitValue,
+      balanceAfter: nextUnitValue,
+      unit: currentStockPayload.isWeightUnit ? "Gram" : stockRow.unit,
+    });
   }
 };
 
@@ -174,6 +207,11 @@ const insertIntoDB = async (payload) => {
       status: finalStatus,
     };
 
+    const stockAdjustmentRecord = await StockAdjustment.create(
+      StockAdjustmentData,
+      { transaction: t },
+    );
+
     const stockRow = await ItemMaster.findOne({
       where: buildStockWhere({
         itemId,
@@ -182,6 +220,7 @@ const insertIntoDB = async (payload) => {
       }),
       transaction: t,
       lock: t.LOCK.UPDATE,
+      order: [["createdAt", "ASC"]],
     });
 
     if (stockRow) {
@@ -196,7 +235,10 @@ const insertIntoDB = async (payload) => {
         throw new ApiError(400, "Item stock cannot be negative");
       }
 
-      await stockRow.update(
+      const balanceBefore = currentStockPayload.unitValue;
+      const balanceAfter = stock === "In" ? plusQuantity : minusQuantity;
+      const delta = stock === "In" ? totalUnitValue : -totalUnitValue;
+      const updatedStockRow = await stockRow.update(
         {
           itemId,
           productId: productId || stockRow.productId || null,
@@ -211,8 +253,25 @@ const insertIntoDB = async (payload) => {
         },
         { transaction: t },
       );
+      await logStockMovement({
+        transaction: t,
+        sourceType: "StockAdjustment",
+        sourceId: stockAdjustmentRecord.Id,
+        operation: "CREATE",
+        stockType: "ItemStock",
+        stockRow: updatedStockRow,
+        itemId,
+        productId: productId || stockRow.productId || null,
+        name: itemData.name,
+        variant: normalizedVariant,
+        variantKey: normalizedVariantKey,
+        unit: currentStockPayload.isWeightUnit ? "Gram" : normalizedPayload.unit,
+        quantityChange: delta,
+        balanceBefore,
+        balanceAfter,
+      });
     } else if (stock === "In") {
-      await ItemMaster.create(
+      const createdStockRow = await ItemMaster.create(
         {
           itemId,
           productId: productId || null,
@@ -225,11 +284,28 @@ const insertIntoDB = async (payload) => {
         },
         { transaction: t },
       );
+      await logStockMovement({
+        transaction: t,
+        sourceType: "StockAdjustment",
+        sourceId: stockAdjustmentRecord.Id,
+        operation: "CREATE",
+        stockType: "ItemStock",
+        stockRow: createdStockRow,
+        itemId,
+        productId: productId || null,
+        name: itemData.name,
+        variant: normalizedVariant,
+        variantKey: normalizedVariantKey,
+        unit: normalizedPayload.unit,
+        quantityChange: totalUnitValue,
+        balanceBefore: 0,
+        balanceAfter: totalUnitValue,
+      });
     } else {
       throw new ApiError(404, `ItemMaster not found for itemId ${itemId}`);
     }
 
-    return StockAdjustment.create(StockAdjustmentData, { transaction: t });
+    return stockAdjustmentRecord;
   });
 };
 
@@ -335,6 +411,12 @@ const deleteIdFromDB = async (id) => {
       },
       null,
       t,
+      {
+        sourceType: "StockAdjustment",
+        sourceId: existing.Id,
+        operation: "DELETE",
+        stockType: "ItemStock",
+      },
     );
 
     return StockAdjustment.destroy({ where: { Id: id }, transaction: t });
@@ -471,6 +553,12 @@ const updateOneFromDB = async (id, payload) => {
         stock: nextStock,
       },
       t,
+      {
+        sourceType: "StockAdjustment",
+        sourceId: id,
+        operation: "UPDATE",
+        stockType: "ItemStock",
+      },
     );
 
     const [count] = await StockAdjustment.update(data, {

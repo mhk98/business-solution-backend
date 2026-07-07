@@ -355,10 +355,25 @@ const getAllFromDB = async (filters, options) => {
         : [["createdAt", "DESC"]],
   });
 
-  const count = await EmployeeList.count({ where: whereConditions });
+  const [count, activeCount, linkedUsers, assignedDepartments, withShift] =
+    await Promise.all([
+      EmployeeList.count({ where: whereConditions }),
+      EmployeeList.count({
+        where: { [Op.and]: [whereConditions, { status: "Active" }] },
+      }),
+      EmployeeList.count({
+        where: { [Op.and]: [whereConditions, { userId: { [Op.ne]: null } }] },
+      }),
+      EmployeeList.count({
+        where: { [Op.and]: [whereConditions, { departmentId: { [Op.ne]: null } }] },
+      }),
+      EmployeeList.count({
+        where: { [Op.and]: [whereConditions, { shiftId: { [Op.ne]: null } }] },
+      }),
+    ]);
 
   return {
-    meta: { count, page, limit },
+    meta: { count, page, limit, activeCount, linkedUsers, assignedDepartments, withShift },
     data: await attachAdvanceSummaries(result),
   };
 };

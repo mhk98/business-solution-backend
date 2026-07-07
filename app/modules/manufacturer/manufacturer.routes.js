@@ -33,6 +33,18 @@ router.get(
   ManufacturerController.getAllFromDBWithoutQuery,
 );
 router.get(
+  "/:id/transactions",
+  auth(),
+  requireMenuPermission("manufacturer"),
+  ManufacturerController.getTransactionHistory,
+);
+router.post(
+  "/:id/payments",
+  auth(),
+  requireMenuPermission("manufacturer"),
+  ManufacturerController.payManufacturerAmount,
+);
+router.get(
   "/:id",
   auth(),
   requireMenuPermission("manufacturer"),

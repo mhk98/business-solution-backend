@@ -65,16 +65,30 @@ const getAllFromDB = async (filters, options) => {
     ],
   });
 
-  const count = await AttendanceSummary.count({
-    where: whereConditions,
-    include: searchTerm ? summaryIncludes : [],
-    distinct: true,
-    col: "Id",
-  });
+  const aggregateIncludes = searchTerm ? summaryIncludes : [];
+  const [count, statusRows] = await Promise.all([
+    AttendanceSummary.count({
+      where: whereConditions,
+      include: aggregateIncludes,
+      distinct: true,
+      col: "Id",
+    }),
+    AttendanceSummary.findAll({
+      where: whereConditions,
+      include: aggregateIncludes,
+      attributes: [
+        "attendanceStatus",
+        [db.sequelize.fn("COUNT", db.sequelize.col("AttendanceSummary.Id")), "count"],
+      ],
+      group: ["attendanceStatus"],
+      raw: true,
+      subQuery: false,
+    }),
+  ]);
 
-  const statusCounts = data.reduce((acc, row) => {
+  const statusCounts = statusRows.reduce((acc, row) => {
     const key = row.attendanceStatus || "Unknown";
-    acc[key] = (acc[key] || 0) + 1;
+    acc[key] = Number(row.count || 0);
     return acc;
   }, {});
 

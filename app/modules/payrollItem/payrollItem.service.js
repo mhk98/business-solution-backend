@@ -42,13 +42,21 @@ const getAllFromDB = async (filters, options) => {
     subQuery: false,
     order: [["createdAt", "DESC"]],
   });
-  const count = await PayrollItem.count({
-    where,
-    include: searchTerm || month ? includes : [],
-    distinct: true,
-    col: "Id",
-  });
-  return { meta: { count, page, limit }, data };
+  const aggregateIncludes = searchTerm || month ? includes : [];
+  const [count, totalNet] = await Promise.all([
+    PayrollItem.count({
+      where,
+      include: aggregateIncludes,
+      distinct: true,
+      col: "Id",
+    }),
+    PayrollItem.sum("netAmount", {
+      where,
+      include: aggregateIncludes,
+      subQuery: false,
+    }),
+  ]);
+  return { meta: { count, page, limit, totalNet: Number(totalNet || 0) }, data };
 };
 
 const getDataById = async (id) => PayrollItem.findOne({ where: { Id: id }, include: includes });

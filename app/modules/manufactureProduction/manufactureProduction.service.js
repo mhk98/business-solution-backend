@@ -7,6 +7,7 @@ const {
 } = require("../../../helpers/unitConversionHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const {
   ManufactureProductionSearchableFields,
 } = require("./manufactureProduction.constants");
@@ -43,23 +44,50 @@ const buildVariantKey = (variant) => {
   return entries.map(([key, value]) => `${key}:${value}`).join("|");
 };
 
-const buildItemStockWhere = ({ itemId, productId, variantKey }) => ({
-  itemId,
-  productId: productId || null,
-  variantKey: variantKey || null,
-});
+const buildItemStockWhere = ({ itemId, productId, variantKey }) => {
+  const where = { itemId };
+
+  if (productId) {
+    where.productId = productId;
+  }
+
+  if (variantKey) {
+    where.variantKey = variantKey;
+  } else {
+    where[Op.and] = [
+      {
+        [Op.or]: [{ variantKey: null }, { variantKey: "" }],
+      },
+    ];
+  }
+
+  return where;
+};
 
 const buildManufacturerStockWhere = ({
   manufacturerId,
   itemId,
   productId,
   variantKey,
-}) => ({
-  manufacturerId,
-  itemId,
-  productId: productId || null,
-  variantKey: variantKey || null,
-});
+}) => {
+  const where = { manufacturerId, itemId };
+
+  if (productId) {
+    where.productId = productId;
+  }
+
+  if (variantKey) {
+    where.variantKey = variantKey;
+  } else {
+    where[Op.and] = [
+      {
+        [Op.or]: [{ variantKey: null }, { variantKey: "" }],
+      },
+    ];
+  }
+
+  return where;
+};
 
 const adjustStockBalance = async ({
   Model,
@@ -77,16 +105,18 @@ const adjustStockBalance = async ({
   delta,
   transaction,
   createOnPositive = false,
+  movementContext = null,
 }) => {
   const stockRow = await Model.findOne({
     where,
     transaction,
     lock: transaction.LOCK.UPDATE,
+    order: [["createdAt", "ASC"]],
   });
 
   if (!stockRow) {
     if (createOnPositive && delta > 0) {
-      return Model.create(
+      const createdStockRow = await Model.create(
         {
           itemId,
           productId: productId || null,
@@ -101,6 +131,23 @@ const adjustStockBalance = async ({
         },
         { transaction },
       );
+      await logStockMovement({
+        transaction,
+        ...movementContext,
+        stockType: movementContext?.stockType || stockLabel,
+        stockRow: createdStockRow,
+        itemId,
+        productId: productId || null,
+        manufacturerId,
+        name,
+        variant,
+        variantKey: variantKey || null,
+        unit,
+        quantityChange: delta,
+        balanceBefore: 0,
+        balanceAfter: delta,
+      });
+      return createdStockRow;
     }
 
     throw new ApiError(404, `${stockLabel} not found for selected item`);
@@ -126,7 +173,7 @@ const adjustStockBalance = async ({
       ? currentCost + toNumber(cost)
       : Math.max(0, currentCost + delta * currentUnitCost);
 
-  return stockRow.update(
+  const updatedStockRow = await stockRow.update(
     {
       itemId,
       productId: productId || stockRow.productId || null,
@@ -141,6 +188,23 @@ const adjustStockBalance = async ({
     },
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    ...movementContext,
+    stockType: movementContext?.stockType || stockLabel,
+    stockRow: updatedStockRow,
+    itemId,
+    productId: productId || stockRow.productId || null,
+    manufacturerId,
+    name,
+    variant,
+    variantKey: variantKey || null,
+    unit: currentStockPayload.isWeightUnit ? "Gram" : unit,
+    quantityChange: delta,
+    balanceBefore: currentStockPayload.unitValue,
+    balanceAfter: nextQuantity,
+  });
+  return updatedStockRow;
 };
 
 const buildPayload = async (payload, existing = null, options = {}) => {
@@ -206,6 +270,10 @@ const insertIntoDB = async (payload = {}) => {
   return db.sequelize.transaction(async (t) => {
     const data = await buildPayload(payload, null, { transaction: t });
 
+    const productionRecord = await ManufactureProduction.create(data, {
+      transaction: t,
+    });
+
     await adjustStockBalance({
       Model: ItemMaster,
       where: buildItemStockWhere(data),
@@ -213,6 +281,12 @@ const insertIntoDB = async (payload = {}) => {
       ...data,
       delta: -toNumber(data.unitValue),
       transaction: t,
+      movementContext: {
+        sourceType: "Factory",
+        sourceId: productionRecord.Id,
+        operation: "CREATE",
+        stockType: "ItemStock",
+      },
     });
 
     await adjustStockBalance({
@@ -223,9 +297,15 @@ const insertIntoDB = async (payload = {}) => {
       delta: toNumber(data.unitValue),
       transaction: t,
       createOnPositive: true,
+      movementContext: {
+        sourceType: "Factory",
+        sourceId: productionRecord.Id,
+        operation: "CREATE",
+        stockType: "FactoryStock",
+      },
     });
 
-    return ManufactureProduction.create(data, { transaction: t });
+    return productionRecord;
   });
 };
 
@@ -301,6 +381,12 @@ const deleteIdFromDB = async (id) => {
       ...data,
       delta: -toNumber(data.unitValue),
       transaction: t,
+      movementContext: {
+        sourceType: "Factory",
+        sourceId: existing.Id,
+        operation: "DELETE",
+        stockType: "FactoryStock",
+      },
     });
 
     await adjustStockBalance({
@@ -311,6 +397,12 @@ const deleteIdFromDB = async (id) => {
       delta: toNumber(data.unitValue),
       transaction: t,
       createOnPositive: true,
+      movementContext: {
+        sourceType: "Factory",
+        sourceId: existing.Id,
+        operation: "DELETE",
+        stockType: "ItemStock",
+      },
     });
 
     return ManufactureProduction.destroy({ where: { Id: id }, transaction: t });
@@ -337,6 +429,12 @@ const updateOneFromDB = async (id, payload = {}) => {
       ...oldData,
       delta: -toNumber(oldData.unitValue),
       transaction: t,
+      movementContext: {
+        sourceType: "Factory",
+        sourceId: id,
+        operation: "UPDATE_REVERSE",
+        stockType: "FactoryStock",
+      },
     });
 
     await adjustStockBalance({
@@ -347,6 +445,12 @@ const updateOneFromDB = async (id, payload = {}) => {
       delta: toNumber(oldData.unitValue),
       transaction: t,
       createOnPositive: true,
+      movementContext: {
+        sourceType: "Factory",
+        sourceId: id,
+        operation: "UPDATE_REVERSE",
+        stockType: "ItemStock",
+      },
     });
 
     await adjustStockBalance({
@@ -356,6 +460,12 @@ const updateOneFromDB = async (id, payload = {}) => {
       ...nextData,
       delta: -toNumber(nextData.unitValue),
       transaction: t,
+      movementContext: {
+        sourceType: "Factory",
+        sourceId: id,
+        operation: "UPDATE_APPLY",
+        stockType: "ItemStock",
+      },
     });
 
     await adjustStockBalance({
@@ -366,6 +476,12 @@ const updateOneFromDB = async (id, payload = {}) => {
       delta: toNumber(nextData.unitValue),
       transaction: t,
       createOnPositive: true,
+      movementContext: {
+        sourceType: "Factory",
+        sourceId: id,
+        operation: "UPDATE_APPLY",
+        stockType: "FactoryStock",
+      },
     });
 
     const [count] = await ManufactureProduction.update(nextData, {

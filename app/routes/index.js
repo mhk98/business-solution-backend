@@ -59,6 +59,7 @@ const ItemMasterRoutes = require("../modules/itemMaster/itemMaster.routes");
 const LedgerRoutes = require("../modules/ledger/ledger.routes");
 const LedgerHistoryRoutes = require("../modules/ledgerHistory/ledgerHistory.routes");
 const StockAdjustmentRoutes = require("../modules/stockAdjustment/stockAdjustment.routes");
+const StockMovementRoutes = require("../modules/stockMovement/stockMovement.routes");
 const VariationRoutes = require("../modules/variation/variation.routes");
 const DamageReparingStockRoutes = require("../modules/damageReparingStock/damageReparingStock.routes");
 const EmployeeListRoutes = require("../modules/employeeList/employeeList.routes");
@@ -173,6 +174,10 @@ const moduleRoutes = [
   {
     path: "/stock-adjustment",
     route: StockAdjustmentRoutes,
+  },
+  {
+    path: "/stock-movements",
+    route: StockMovementRoutes,
   },
   {
     path: "/mixer",

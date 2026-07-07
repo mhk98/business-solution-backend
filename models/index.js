@@ -51,11 +51,20 @@ db.manufacturer = require("../app/modules/manufacturer/manufacturer.model")(
   db.sequelize,
   DataTypes,
 );
+db.manufacturerTransaction =
+  require("../app/modules/manufacturerTransaction/manufacturerTransaction.model")(
+    db.sequelize,
+    DataTypes,
+  );
 db.stockAdjustment =
   require("../app/modules/stockAdjustment/stockAdjustment.model")(
     db.sequelize,
     DataTypes,
   );
+db.stockMovement = require("../app/modules/stockMovement/stockMovement.model")(
+  db.sequelize,
+  DataTypes,
+);
 db.mixer = require("../app/modules/mixer/mixer.model")(db.sequelize, DataTypes);
 
 db.receivedProduct =
@@ -500,6 +509,12 @@ db.manufacturer.hasMany(db.manufactureProduction, {
   foreignKey: "manufacturerId",
 });
 db.manufactureProduction.belongsTo(db.manufacturer, {
+  foreignKey: "manufacturerId",
+});
+db.manufacturer.hasMany(db.manufacturerTransaction, {
+  foreignKey: "manufacturerId",
+});
+db.manufacturerTransaction.belongsTo(db.manufacturer, {
   foreignKey: "manufacturerId",
 });
 
@@ -2052,6 +2067,22 @@ const ensureMixerManufacturerColumns = async () => {
     await queryInterface.addColumn(tableName, "manufacturerName", {
       type: DataTypes.STRING,
       allowNull: true,
+    });
+  }
+
+  if (!tableDefinition.unitWage) {
+    await queryInterface.addColumn(tableName, "unitWage", {
+      type: DataTypes.DECIMAL(14, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
+
+  if (!tableDefinition.wageAmount) {
+    await queryInterface.addColumn(tableName, "wageAmount", {
+      type: DataTypes.DECIMAL(14, 2),
+      allowNull: false,
+      defaultValue: 0,
     });
   }
 };

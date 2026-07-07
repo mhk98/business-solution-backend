@@ -149,6 +149,7 @@ const includeNewSettingsChildren = (role, permissions = []) => {
     "ads_campaign_kpi",
     "auto_profit_loss",
     "stock_alert",
+    "stock_movement",
     "cs_work_reports",
     "logistic_work_reports",
     "employee_profile",

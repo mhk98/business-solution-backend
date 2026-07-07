@@ -72,6 +72,36 @@ const getAllFromDBWithoutQuery = catchAsync(async (req, res) => {
   });
 });
 
+const getTransactionHistory = catchAsync(async (req, res) => {
+  const options = pick(req.query, ["limit", "page", "sortBy", "sortOrder"]);
+  const result = await ManufacturerService.getTransactionHistory(
+    req.params.id,
+    options,
+  );
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Manufacturer transaction history fetched!!",
+    meta: result.meta,
+    summary: result.summary,
+    manufacturer: result.manufacturer,
+    data: result.data,
+  });
+});
+
+const payManufacturerAmount = catchAsync(async (req, res) => {
+  const result = await ManufacturerService.payManufacturerAmount(
+    req.params.id,
+    req.body,
+  );
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Manufacturer payment saved!!",
+    data: result,
+  });
+});
+
 const ManufacturerController = {
   getAllFromDB,
   insertIntoDB,
@@ -79,6 +109,8 @@ const ManufacturerController = {
   updateOneFromDB,
   deleteIdFromDB,
   getAllFromDBWithoutQuery,
+  getTransactionHistory,
+  payManufacturerAmount,
 };
 
 module.exports = ManufacturerController;

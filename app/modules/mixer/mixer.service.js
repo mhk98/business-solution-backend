@@ -16,12 +16,17 @@ const {
   assertCatalogInventoryMovementVariants,
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
+const {
+  toBaseStockPayload,
+} = require("../../../helpers/unitConversionHelper");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const Mixer = db.mixer;
 const Notification = db.notification;
 const User = db.user;
 const ItemMaster = db.itemMaster;
 const Product = db.product;
 const Manufacturer = db.manufacturer;
+const ManufacturerTransaction = db.manufacturerTransaction;
 const ManufactureStock = db.manufactureStock;
 const InventoryMaster = db.inventoryMaster;
 const ReceivedProduct = db.receivedProduct;
@@ -30,6 +35,85 @@ const MIXER_META_PREFIX = "\n__MIXER_META__=";
 const toNumber = (value) => {
   const num = Number(value || 0);
   return Number.isFinite(num) ? num : 0;
+};
+
+const calculateMixerWageAmount = (combo, unitWage) =>
+  toNumber(combo) * toNumber(unitWage);
+
+const createManufacturerTransaction = async (
+  payload = {},
+  transaction = null,
+) => {
+  if (!payload.manufacturerId) return null;
+  const debit = toNumber(payload.debit);
+  const credit = toNumber(payload.credit);
+  if (debit <= 0 && credit <= 0) return null;
+
+  return ManufacturerTransaction.create(
+    {
+      manufacturerId: payload.manufacturerId,
+      manufacturerName: payload.manufacturerName || null,
+      mixerId: payload.mixerId || null,
+      type: payload.type,
+      description: payload.description || null,
+      debit,
+      credit,
+      date: payload.date || new Date().toISOString().slice(0, 10),
+      note: payload.note || null,
+    },
+    { transaction },
+  );
+};
+
+const reconcileMixerWageTransaction = async (
+  previous = {},
+  next = {},
+  transaction = null,
+) => {
+  const previousAmount = toNumber(previous.wageAmount);
+  const nextAmount = toNumber(next.wageAmount);
+  if (
+    Number(previous.manufacturerId || 0) === Number(next.manufacturerId || 0) &&
+    previousAmount === nextAmount
+  ) {
+    return;
+  }
+
+  if (previousAmount > 0 && previous.manufacturerId) {
+    await createManufacturerTransaction(
+      {
+        manufacturerId: previous.manufacturerId,
+        manufacturerName: previous.manufacturerName,
+        mixerId: previous.mixerId,
+        type: "MIXER_WAGE_REVERSAL",
+        description: `Reverse mixer wage${previous.productName ? ` - ${previous.productName}` : ""}`,
+        debit: 0,
+        credit: previousAmount,
+        date: previous.date,
+      },
+      transaction,
+    );
+  }
+
+  if (nextAmount > 0 && next.manufacturerId) {
+    await createManufacturerTransaction(
+      {
+        manufacturerId: next.manufacturerId,
+        manufacturerName: next.manufacturerName,
+        mixerId: next.mixerId,
+        type: "MIXER_WAGE",
+        description: `Mixer wage${next.productName ? ` - ${next.productName}` : ""}`,
+        debit: nextAmount,
+        credit: 0,
+        date: next.date,
+        note:
+          next.unitWage && next.combo
+            ? `${toNumber(next.combo)} x ${toNumber(next.unitWage)}`
+            : null,
+      },
+      transaction,
+    );
+  }
 };
 
 const normalizeMaterialName = (value = "") =>
@@ -119,6 +203,7 @@ const buildMixerNote = (
         .map((item) => ({
           itemMasterId: Number(item?.itemMasterId),
           unitValue: toNumber(item?.unitValue),
+          unit: item?.unit || "Pcs",
         }))
         .filter((item) => item.itemMasterId && item.unitValue > 0)
     : [];
@@ -181,6 +266,7 @@ const parseMixerNote = (note = "") => {
           .map((item) => ({
             itemMasterId: Number(item?.itemMasterId),
             unitValue: toNumber(item?.unitValue),
+            unit: item?.unit || "Pcs",
           }))
           .filter((item) => item.itemMasterId && item.unitValue > 0)
       : [];
@@ -257,7 +343,8 @@ const aggregatePackagingItems = (packagingItems = []) => {
 
   for (const item of packagingItems) {
     const itemMasterId = Number(item?.itemMasterId);
-    const unitValue = toNumber(item?.unitValue);
+    const baseStock = toBaseStockPayload(item?.unit || "Pcs", item?.unitValue);
+    const unitValue = toNumber(baseStock.unitValue);
 
     if (!itemMasterId || unitValue <= 0) continue;
 
@@ -327,6 +414,7 @@ const reconcileManufactureStock = async (
   previousContext,
   nextContext,
   transaction,
+  movementContext = null,
 ) => {
   const previousManufacturerId = Number(previousContext?.manufacturerId || 0);
   const nextManufacturerId = Number(nextContext?.manufacturerId || 0);
@@ -336,6 +424,7 @@ const reconcileManufactureStock = async (
       previousContext?.mixItems || [],
       nextContext?.mixItems || [],
       transaction,
+      movementContext,
     );
     return;
   }
@@ -344,11 +433,21 @@ const reconcileManufactureStock = async (
     (previousContext?.mixItems || []).length > 0 &&
     !previousManufacturerId
   ) {
-    await reconcileItemMasterStock(previousContext.mixItems, [], transaction);
+    await reconcileItemMasterStock(
+      previousContext.mixItems,
+      [],
+      transaction,
+      movementContext,
+    );
   }
 
   if ((nextContext?.mixItems || []).length > 0 && !nextManufacturerId) {
-    await reconcileItemMasterStock([], nextContext.mixItems, transaction);
+    await reconcileItemMasterStock(
+      [],
+      nextContext.mixItems,
+      transaction,
+      movementContext,
+    );
   }
 
   const totals = new Map();
@@ -409,7 +508,26 @@ const reconcileManufactureStock = async (
       );
     }
 
-    await stockRow.update({ unitValue: nextStock }, { transaction });
+    const updatedStockRow = await stockRow.update(
+      { unitValue: nextStock },
+      { transaction },
+    );
+    await logStockMovement({
+      transaction,
+      ...movementContext,
+      stockType: movementContext?.stockType || "FactoryStock",
+      stockRow: updatedStockRow,
+      itemId: stockRow.itemId,
+      productId: stockRow.productId || null,
+      manufacturerId,
+      name: stockRow.name,
+      variant: stockRow.variant,
+      variantKey: stockRow.variantKey || null,
+      unit: stockRow.unit || "Pcs",
+      quantityChange: delta,
+      balanceBefore: availableStock,
+      balanceAfter: nextStock,
+    });
   }
 };
 
@@ -557,6 +675,7 @@ const addMixerOutputToInventory = async (
   purchasePrice,
   salePrice,
   transaction,
+  movementContext = null,
 ) => {
   const productId = Number(productData?.Id || 0);
   const outputVariants = normalizeOutputVariants(variants);
@@ -580,15 +699,30 @@ const addMixerOutputToInventory = async (
       transaction,
     });
 
-    await inv.update(
+    const balanceBefore = toNumber(inv.quantity);
+    const balanceAfter = balanceBefore + quantity;
+    const updatedInventory = await inv.update(
       buildSyncedInventoryStockPayload({
-        quantity: toNumber(inv.quantity) + quantity,
+        quantity: balanceAfter,
         variants: mergeVariants(inv.variants, outputVariants),
         purchase_price: toNumber(purchasePrice),
         sale_price: toNumber(salePrice),
       }),
       { transaction },
     );
+    await logStockMovement({
+      transaction,
+      ...movementContext,
+      stockType: movementContext?.stockType || "ProductStock",
+      stockRow: updatedInventory,
+      productId,
+      name: productData.name,
+      variant: outputVariants,
+      unit: "Pcs",
+      quantityChange: quantity,
+      balanceBefore,
+      balanceAfter,
+    });
 
     await syncProductStockId(productData, inv.Id, transaction);
     return;
@@ -616,11 +750,28 @@ const addMixerOutputToInventory = async (
     }),
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    ...movementContext,
+    stockType: movementContext?.stockType || "ProductStock",
+    stockRow: stock,
+    productId,
+    name: productData.name,
+    variant: outputVariants,
+    unit: "Pcs",
+    quantityChange: quantity,
+    balanceBefore: 0,
+    balanceAfter: quantity,
+  });
 
   await syncProductStockId(productData, stock.Id, transaction);
 };
 
-const removeMixerOutputFromInventory = async (context, transaction) => {
+const removeMixerOutputFromInventory = async (
+  context,
+  transaction,
+  movementContext = null,
+) => {
   const productId = Number(context?.productId || 0);
   const quantity = getOutputQuantity(context?.combo, context?.variants);
   if (!productId || quantity <= 0) return;
@@ -649,7 +800,8 @@ const removeMixerOutputFromInventory = async (context, transaction) => {
     throw new ApiError(400, "Inventory cannot be negative for this mixer");
   }
 
-  await inv.update(
+  const balanceBefore = toNumber(inv.quantity);
+  const updatedInventory = await inv.update(
     buildSyncedInventoryStockPayload({
       quantity: nextQuantity,
       variants: subtractVariants(inv.variants, variants),
@@ -658,12 +810,26 @@ const removeMixerOutputFromInventory = async (context, transaction) => {
     }),
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    ...movementContext,
+    stockType: movementContext?.stockType || "ProductStock",
+    stockRow: updatedInventory,
+    productId,
+    name: inv.name,
+    variant: variants,
+    unit: "Pcs",
+    quantityChange: -quantity,
+    balanceBefore,
+    balanceAfter: nextQuantity,
+  });
 };
 
 const reconcileItemMasterStock = async (
   previousMixItems,
   nextMixItems,
   transaction,
+  movementContext = null,
 ) => {
   const previousTotals = aggregateMixItems(previousMixItems);
   const nextTotals = aggregateMixItems(nextMixItems);
@@ -701,10 +867,25 @@ const reconcileItemMasterStock = async (
       );
     }
 
-    await stockRow.update(
+    const updatedStockRow = await stockRow.update(
       { unitValue: availableStock + delta },
       { transaction },
     );
+    await logStockMovement({
+      transaction,
+      ...movementContext,
+      stockType: movementContext?.stockType || "ItemStock",
+      stockRow: updatedStockRow,
+      itemId: stockRow.itemId,
+      productId: stockRow.productId || null,
+      name: stockRow.name,
+      variant: stockRow.variant,
+      variantKey: stockRow.variantKey || null,
+      unit: stockRow.unit || "Pcs",
+      quantityChange: delta,
+      balanceBefore: availableStock,
+      balanceAfter: availableStock + delta,
+    });
   }
 };
 
@@ -712,6 +893,7 @@ const reconcilePackagingStock = async (
   previousPackagingItems,
   nextPackagingItems,
   transaction,
+  movementContext = null,
 ) => {
   const previousTotals = aggregatePackagingItems(previousPackagingItems);
   const nextTotals = aggregatePackagingItems(nextPackagingItems);
@@ -749,10 +931,25 @@ const reconcilePackagingStock = async (
       );
     }
 
-    await stockRow.update(
+    const updatedStockRow = await stockRow.update(
       { unitValue: availableStock + delta },
       { transaction },
     );
+    await logStockMovement({
+      transaction,
+      ...movementContext,
+      stockType: movementContext?.stockType || "PackagingStock",
+      stockRow: updatedStockRow,
+      itemId: stockRow.itemId,
+      productId: stockRow.productId || null,
+      name: stockRow.name,
+      variant: stockRow.variant,
+      variantKey: stockRow.variantKey || null,
+      unit: stockRow.unit || "Pcs",
+      quantityChange: delta,
+      balanceBefore: availableStock,
+      balanceAfter: availableStock + delta,
+    });
   }
 };
 
@@ -769,6 +966,8 @@ const sanitizeMixerRecord = (record) => {
     record.setDataValue("packagingItems", packagingItems || []);
     record.setDataValue("purchase_price", purchase_price || 0);
     record.setDataValue("sale_price", sale_price || 0);
+    record.setDataValue("unitWage", toNumber(record.unitWage));
+    record.setDataValue("wageAmount", toNumber(record.wageAmount));
     return record;
   }
 
@@ -780,6 +979,8 @@ const sanitizeMixerRecord = (record) => {
     packagingItems: packagingItems || [],
     purchase_price: purchase_price || 0,
     sale_price: sale_price || 0,
+    unitWage: toNumber(record.unitWage),
+    wageAmount: toNumber(record.wageAmount),
   };
 };
 
@@ -826,6 +1027,7 @@ const insertIntoDB = async (payload) => {
     variants,
     purchase_price,
     sale_price,
+    unitWage,
   } = payload;
 
   const productData = await Product.findOne({ where: { Id: productId } });
@@ -840,6 +1042,7 @@ const insertIntoDB = async (payload) => {
   if (outputQuantity <= 0) {
     throw new ApiError(400, "Combo quantity must be greater than 0");
   }
+  const wageAmount = calculateMixerWageAmount(outputQuantity, unitWage);
 
   return db.sequelize.transaction(async (t) => {
     const manufacturer = await getManufacturerById(manufacturerId, t);
@@ -859,21 +1062,6 @@ const insertIntoDB = async (payload) => {
       outputPrices,
     );
 
-    await reconcileManufactureStock(
-      { mixItems: [], manufacturerId: null },
-      { mixItems: mixItems || [], manufacturerId: manufacturer.Id },
-      t,
-    );
-    await reconcilePackagingStock([], packagingItems || [], t);
-    await addMixerOutputToInventory(
-      productData,
-      outputQuantity,
-      outputVariants,
-      outputPrices.purchase_price,
-      outputPrices.sale_price,
-      t,
-    );
-
     const result = await Mixer.create(
       {
         productId,
@@ -882,9 +1070,58 @@ const insertIntoDB = async (payload) => {
         manufacturerName: manufacturer.name,
         date,
         combo: outputQuantity,
+        unitWage: toNumber(unitWage),
+        wageAmount,
         note: storedNote,
       },
       { transaction: t },
+    );
+
+    await reconcileMixerWageTransaction(
+      {},
+      {
+        manufacturerId: manufacturer.Id,
+        manufacturerName: manufacturer.name,
+        mixerId: result.Id,
+        productName: productData.name,
+        combo: outputQuantity,
+        unitWage,
+        wageAmount,
+        date,
+      },
+      t,
+    );
+
+    await reconcileManufactureStock(
+      { mixItems: [], manufacturerId: null },
+      { mixItems: mixItems || [], manufacturerId: manufacturer.Id },
+      t,
+      {
+        sourceType: "Mixer",
+        sourceId: result.Id,
+        operation: "CREATE",
+        stockType: "FactoryStock",
+      },
+    );
+    await reconcilePackagingStock([], packagingItems || [], t, {
+      sourceType: "Mixer",
+      sourceId: result.Id,
+      operation: "CREATE",
+      stockType: "PackagingStock",
+    });
+    await addMixerOutputToInventory(
+      productData,
+      outputQuantity,
+      outputVariants,
+      outputPrices.purchase_price,
+      outputPrices.sale_price,
+      t,
+      {
+        sourceType: "Mixer",
+        sourceId: result.Id,
+        operation: "CREATE",
+        stockType: "ProductStock",
+      },
     );
 
     await syncMixerReceivedProduct({
@@ -979,14 +1216,42 @@ const deleteIdFromDB = async (id) => {
     if (!existing) return 0;
 
     const existingContext = await getStoredStockContext(existing, t);
-    await removeMixerOutputFromInventory(existingContext, t);
+    await removeMixerOutputFromInventory(existingContext, t, {
+      sourceType: "Mixer",
+      sourceId: existing.Id,
+      operation: "DELETE",
+      stockType: "ProductStock",
+    });
     await deleteMixerReceivedProduct(existing.Id, t);
     await reconcileManufactureStock(
       existingContext,
       { mixItems: [], manufacturerId: null },
       t,
+      {
+        sourceType: "Mixer",
+        sourceId: existing.Id,
+        operation: "DELETE",
+        stockType: "FactoryStock",
+      },
     );
-    await reconcilePackagingStock(existingContext.packagingItems || [], [], t);
+    await reconcilePackagingStock(existingContext.packagingItems || [], [], t, {
+      sourceType: "Mixer",
+      sourceId: existing.Id,
+      operation: "DELETE",
+      stockType: "PackagingStock",
+    });
+    await reconcileMixerWageTransaction(
+      {
+        manufacturerId: existing.manufacturerId,
+        manufacturerName: existing.manufacturerName,
+        mixerId: existing.Id,
+        productName: existing.name,
+        wageAmount: existing.wageAmount,
+        date: existing.date,
+      },
+      {},
+      t,
+    );
 
     return Mixer.destroy({
       where: { Id: id },
@@ -1011,6 +1276,7 @@ const updateOneFromDB = async (id, payload) => {
     warehouseId,
     purchase_price,
     sale_price,
+    unitWage,
   } = payload;
 
   const existing = await Mixer.findOne({
@@ -1025,6 +1291,8 @@ const updateOneFromDB = async (id, payload) => {
       "status",
       "date",
       "combo",
+      "unitWage",
+      "wageAmount",
     ],
   });
 
@@ -1112,6 +1380,11 @@ const updateOneFromDB = async (id, payload) => {
     if (!nextManufacturer) {
       throw new ApiError(400, "Please select a manufacturer");
     }
+    const nextUnitWage =
+      unitWage === undefined || unitWage === null || unitWage === ""
+        ? toNumber(lockedMixer.unitWage)
+        : toNumber(unitWage);
+    const nextWageAmount = calculateMixerWageAmount(nextCombo, nextUnitWage);
 
     const nextWarehouseId =
       warehouseId === undefined
@@ -1125,13 +1398,30 @@ const updateOneFromDB = async (id, payload) => {
       previousContext,
       { mixItems: nextMixItems, manufacturerId: nextManufacturer.Id },
       t,
+      {
+        sourceType: "Mixer",
+        sourceId: lockedMixer.Id,
+        operation: "UPDATE",
+        stockType: "FactoryStock",
+      },
     );
     await reconcilePackagingStock(
       previousContext.packagingItems || [],
       nextPackagingItems,
       t,
+      {
+        sourceType: "Mixer",
+        sourceId: lockedMixer.Id,
+        operation: "UPDATE",
+        stockType: "PackagingStock",
+      },
     );
-    await removeMixerOutputFromInventory(previousContext, t);
+    await removeMixerOutputFromInventory(previousContext, t, {
+      sourceType: "Mixer",
+      sourceId: lockedMixer.Id,
+      operation: "UPDATE_REVERSE",
+      stockType: "ProductStock",
+    });
     await deleteMixerReceivedProduct(lockedMixer.Id, t);
     const nextProductData = productData || {
       Id: Number(nextProductId),
@@ -1146,6 +1436,12 @@ const updateOneFromDB = async (id, payload) => {
       nextOutputPrices.purchase_price,
       nextOutputPrices.sale_price,
       t,
+      {
+        sourceType: "Mixer",
+        sourceId: lockedMixer.Id,
+        operation: "UPDATE_APPLY",
+        stockType: "ProductStock",
+      },
     );
     await syncMixerReceivedProduct({
       mixerId: lockedMixer.Id,
@@ -1159,6 +1455,27 @@ const updateOneFromDB = async (id, payload) => {
       warehouseId: nextWarehouseId,
       transaction: t,
     });
+    await reconcileMixerWageTransaction(
+      {
+        manufacturerId: lockedMixer.manufacturerId,
+        manufacturerName: lockedMixer.manufacturerName,
+        mixerId: lockedMixer.Id,
+        productName: lockedMixer.name,
+        wageAmount: lockedMixer.wageAmount,
+        date: lockedMixer.date,
+      },
+      {
+        manufacturerId: nextManufacturer.Id,
+        manufacturerName: nextManufacturer.name,
+        mixerId: lockedMixer.Id,
+        productName: nextProductData.name || lockedMixer.name,
+        combo: nextCombo,
+        unitWage: nextUnitWage,
+        wageAmount: nextWageAmount,
+        date: inputDateStr || lockedMixer.date || undefined,
+      },
+      t,
+    );
 
     const storedNote = buildMixerNote(
       finalDisplayNote,
@@ -1179,6 +1496,8 @@ const updateOneFromDB = async (id, payload) => {
       manufacturerId: nextManufacturer.Id,
       manufacturerName: nextManufacturer.name,
       combo: nextCombo,
+      unitWage: nextUnitWage,
+      wageAmount: nextWageAmount,
       note: storedNote,
       status: finalStatus,
       date: inputDateStr || lockedMixer.date || undefined,

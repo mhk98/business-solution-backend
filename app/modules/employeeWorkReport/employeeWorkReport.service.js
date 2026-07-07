@@ -366,27 +366,48 @@ const getAllReports = async (filters = {}, options = {}, actor) => {
     order,
   });
 
-  const count = await EmployeeWorkReport.count({
-    where,
-    include: [
-      {
-        model: User,
-        as: "user",
-        attributes: [],
-        required: false,
-      },
-      {
-        model: EmployeeList,
-        as: "employee",
-        attributes: [],
-        required: false,
-      },
-    ],
-    distinct: true,
-    col: "Id",
-  });
+  const [count, ...fieldTotals] = await Promise.all([
+    EmployeeWorkReport.count({
+      where,
+      include: [
+        {
+          model: User,
+          as: "user",
+          attributes: [],
+          required: false,
+        },
+        {
+          model: EmployeeList,
+          as: "employee",
+          attributes: [],
+          required: false,
+        },
+      ],
+      distinct: true,
+      col: "Id",
+    }),
+    ...EmployeeWorkReportNumericFields.map((field) =>
+      EmployeeWorkReport.sum(field, { where }),
+    ),
+  ]);
 
-  return { meta: { count, page, limit }, data };
+  const totals = EmployeeWorkReportNumericFields.reduce(
+    (acc, field, index) => ({ ...acc, [field]: Number(fieldTotals[index] || 0) }),
+    {},
+  );
+
+  return {
+    meta: {
+      count,
+      page,
+      limit,
+      totalAssign: totals.totalAssign || 0,
+      totalOrder: totals.totalOrder || 0,
+      totalAmount: totals.totalAmount || 0,
+      totals,
+    },
+    data,
+  };
 };
 
 module.exports = {

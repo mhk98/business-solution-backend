@@ -1,6 +1,6 @@
 module.exports = (sequelize, DataTypes) => {
-  const Mixer = sequelize.define(
-    "Mixer",
+  const ManufacturerTransaction = sequelize.define(
+    "ManufacturerTransaction",
     {
       Id: {
         type: DataTypes.INTEGER(10),
@@ -8,59 +8,42 @@ module.exports = (sequelize, DataTypes) => {
         autoIncrement: true,
         allowNull: false,
       },
-      itemId: {
-        type: DataTypes.INTEGER(10),
-        allowNull: true,
-      },
-      name: {
-        type: DataTypes.STRING,
-        allowNull: false,
-        validate: {
-          notEmpty: true,
-        },
-      },
       manufacturerId: {
         type: DataTypes.INTEGER(10),
-        allowNull: true,
+        allowNull: false,
       },
       manufacturerName: {
         type: DataTypes.STRING,
         allowNull: true,
       },
-      unit: {
-        type: DataTypes.STRING,
-        defaultValue: "Pcs",
+      mixerId: {
+        type: DataTypes.INTEGER(10),
         allowNull: true,
       },
-      unitValue: {
-        type: DataTypes.DECIMAL(10, 2),
+      type: {
+        type: DataTypes.STRING,
+        allowNull: false,
+      },
+      description: {
+        type: DataTypes.STRING,
         allowNull: true,
+      },
+      debit: {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      credit: {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: false,
         defaultValue: 0,
       },
       date: {
         type: DataTypes.DATEONLY,
         allowNull: true,
       },
-      combo: {
-        type: DataTypes.STRING,
-        allowNull: true,
-      },
-      unitWage: {
-        type: DataTypes.DECIMAL(14, 2),
-        allowNull: false,
-        defaultValue: 0,
-      },
-      wageAmount: {
-        type: DataTypes.DECIMAL(14, 2),
-        allowNull: false,
-        defaultValue: 0,
-      },
       note: {
         type: DataTypes.TEXT,
-        allowNull: true,
-      },
-      status: {
-        type: DataTypes.STRING,
         allowNull: true,
       },
       deletedAt: {
@@ -74,5 +57,5 @@ module.exports = (sequelize, DataTypes) => {
     },
   );
 
-  return Mixer;
+  return ManufacturerTransaction;
 };

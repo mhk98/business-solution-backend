@@ -260,27 +260,43 @@ const getAllReports = async (filters = {}, options = {}, actor) => {
     subQuery: false,
   });
 
-  const count = await LogisticWorkReport.count({
-    where,
-    include: [
-      {
-        model: User,
-        as: "user",
-        attributes: [],
-        required: false,
-      },
-      {
-        model: EmployeeList,
-        as: "employee",
-        attributes: [],
-        required: false,
-      },
-    ],
-    distinct: true,
-    col: "Id",
-  });
+  const aggregateIncludes = [
+    {
+      model: User,
+      as: "user",
+      attributes: [],
+      required: false,
+    },
+    {
+      model: EmployeeList,
+      as: "employee",
+      attributes: [],
+      required: false,
+    },
+  ];
 
-  return { meta: { count, page, limit }, data };
+  const [count, ...fieldTotals] = await Promise.all([
+    LogisticWorkReport.count({
+      where,
+      include: aggregateIncludes,
+      distinct: true,
+      col: "Id",
+    }),
+    ...LogisticWorkReportNumericFields.map((field) =>
+      LogisticWorkReport.sum(field, {
+        where,
+        include: aggregateIncludes,
+        subQuery: false,
+      }),
+    ),
+  ]);
+
+  const totals = LogisticWorkReportNumericFields.reduce(
+    (acc, field, index) => ({ ...acc, [field]: Number(fieldTotals[index] || 0) }),
+    {},
+  );
+
+  return { meta: { count, page, limit, totals }, data };
 };
 
 module.exports = {

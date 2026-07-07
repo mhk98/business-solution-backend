@@ -8,6 +8,7 @@ const {
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const { ManufactureSearchableFields } = require("./manufacture.constants");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const Manufacture = db.manufacture;
 const Notification = db.notification;
 const User = db.user;
@@ -41,11 +42,29 @@ const buildVariantKey = (variant) => {
   return entries.map(([key, value]) => `${key}:${value}`).join("|");
 };
 
-const buildStockWhere = ({ itemId, productId, variantKey }) => ({
-  itemId,
-  productId: productId || null,
-  variantKey: variantKey || null,
-});
+const buildStockWhere = ({ itemId, productId, variantKey }) => {
+  const where = { itemId };
+
+  if (productId) {
+    where.productId = productId;
+  }
+
+  if (variantKey) {
+    where.variantKey = variantKey;
+  } else {
+    const emptyVariantCondition = {
+      [Op.or]: [{ variantKey: null }, { variantKey: "" }],
+    };
+
+    if (where[Op.and]) {
+      where[Op.and].push(emptyVariantCondition);
+    } else {
+      where[Op.and] = [emptyVariantCondition];
+    }
+  }
+
+  return where;
+};
 
 const normalizeUnitPayload = (unit, unitValue) => {
   return toBaseStockPayload(unit, unitValue);
@@ -66,6 +85,7 @@ const adjustStockBalance = async ({
   transaction,
   createOnPositive = false,
   ignoreMissingOnNegative = false,
+  movementContext = null,
 }) => {
   if (!delta) return null;
 
@@ -73,11 +93,12 @@ const adjustStockBalance = async ({
     where: buildStockWhere({ itemId, productId, variantKey }),
     transaction,
     lock: transaction.LOCK.UPDATE,
+    order: [["createdAt", "ASC"]],
   });
 
   if (!stockRow) {
     if (createOnPositive && delta > 0) {
-      return Model.create(
+      const createdStockRow = await Model.create(
         {
           itemId,
           productId: productId || null,
@@ -90,6 +111,22 @@ const adjustStockBalance = async ({
         },
         { transaction },
       );
+      await logStockMovement({
+        transaction,
+        ...movementContext,
+        stockType: movementContext?.stockType || stockLabel,
+        stockRow: createdStockRow,
+        itemId,
+        productId: productId || null,
+        name,
+        variant,
+        variantKey: variantKey || null,
+        unit,
+        quantityChange: delta,
+        balanceBefore: 0,
+        balanceAfter: delta,
+      });
+      return createdStockRow;
     }
 
     if (ignoreMissingOnNegative && delta < 0) {
@@ -119,7 +156,7 @@ const adjustStockBalance = async ({
       ? currentCost + toNumber(cost)
       : Math.max(0, currentCost + delta * currentUnitCost);
 
-  return stockRow.update(
+  const updatedStockRow = await stockRow.update(
     {
       itemId,
       productId: productId || stockRow.productId || null,
@@ -132,6 +169,22 @@ const adjustStockBalance = async ({
     },
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    ...movementContext,
+    stockType: movementContext?.stockType || stockLabel,
+    stockRow: updatedStockRow,
+    itemId,
+    productId: productId || stockRow.productId || null,
+    name,
+    variant,
+    variantKey: variantKey || null,
+    unit: currentStockPayload.isWeightUnit ? "Gram" : unit,
+    quantityChange: delta,
+    balanceBefore: currentStockPayload.unitValue,
+    balanceAfter: nextQuantity,
+  });
+  return updatedStockRow;
 };
 
 const insertIntoDB = async (payload) => {
@@ -184,6 +237,10 @@ const insertIntoDB = async (payload) => {
       status: finalStatus,
     };
 
+    const manufactureRecord = await Manufacture.create(manufactureData, {
+      transaction: t,
+    });
+
     await adjustStockBalance({
       Model: ItemMaster,
       stockLabel: "Item stock",
@@ -198,9 +255,15 @@ const insertIntoDB = async (payload) => {
       delta: totalUnitValue,
       transaction: t,
       createOnPositive: true,
+      movementContext: {
+        sourceType: "ItemPurchase",
+        sourceId: manufactureRecord.Id,
+        operation: "CREATE",
+        stockType: "ItemStock",
+      },
     });
 
-    return Manufacture.create(manufactureData, { transaction: t });
+    return manufactureRecord;
   });
 };
 
@@ -318,11 +381,23 @@ const deleteIdFromDB = async (id) => {
       cost: oldCost,
       delta: -oldUnitValue,
       transaction: t,
+      movementContext: {
+        sourceType: "ItemPurchase",
+        sourceId: existing.Id,
+        operation: "DELETE",
+        stockType: "ItemStock",
+      },
     });
 
     return Manufacture.destroy({
       where: { Id: id },
       transaction: t,
+      movementContext: {
+        sourceType: "ItemPurchase",
+        sourceId: id,
+        operation: "UPDATE_REVERSE",
+        stockType: "ItemStock",
+      },
     });
   });
 };
@@ -444,6 +519,12 @@ const updateOneFromDB = async (id, payload) => {
       delta: totalUnitValue,
       transaction: t,
       createOnPositive: true,
+      movementContext: {
+        sourceType: "ItemPurchase",
+        sourceId: id,
+        operation: "UPDATE_APPLY",
+        stockType: "ItemStock",
+      },
     });
 
     const [count] = await Manufacture.update(data, {

@@ -161,10 +161,13 @@ const getAll = async (filters = {}, options = {}, actor) => {
     limit,
     order: [[sortBy, sortOrder]],
   });
-  const count = await LogisticUpdate.count({ where });
+  const [count, totalQuantity] = await Promise.all([
+    LogisticUpdate.count({ where }),
+    LogisticUpdate.sum("quantity", { where }),
+  ]);
 
   return {
-    meta: { count, page, limit },
+    meta: { count, page, limit, totalQuantity: Number(totalQuantity || 0) },
     data: await attachEmployeeProfiles(data, departmentId ? Number(departmentId) : null),
   };
 };
