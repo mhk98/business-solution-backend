@@ -134,6 +134,10 @@ const includeNewSettingsChildren = (role, permissions = []) => {
     permissionSet.add("loan");
   }
 
+  if (defaults.includes("owner") && !permissionSet.has("owner")) {
+    permissionSet.add("owner");
+  }
+
   if (
     defaults.includes("owner_transaction") &&
     !permissionSet.has("owner_transaction")
@@ -148,10 +152,24 @@ const includeNewSettingsChildren = (role, permissions = []) => {
     "delivery_charge",
     "ads_campaign_kpi",
     "auto_profit_loss",
+    "packaging",
+    "packaging_item",
+    "packaging_item_stock",
+    "packaging_item_purchase",
+    "packaging_manufacturer",
+    "packaging_factory",
+    "packaging_factory_stock",
+    "packaging_mixer",
     "stock_alert",
     "stock_movement",
     "cs_work_reports",
     "logistic_work_reports",
+    "shifa",
+    "shifa_overview",
+    "shifa_call_history",
+    "shifa_starting_situation",
+    "shifa_problem_history",
+    "shifa_patient_update",
     "employee_profile",
     "employee_kpi",
   ].forEach((permission) => {

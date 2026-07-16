@@ -50,6 +50,10 @@ module.exports = (sequelize, DataTypes) => {
           notEmpty: true,
         },
       },
+      voucherNo: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
 
       note: {
         type: DataTypes.STRING,

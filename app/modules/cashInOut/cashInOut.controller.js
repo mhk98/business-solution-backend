@@ -199,6 +199,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     loanId,
     bookId,
     supplierId,
+    voucherPrefix,
   } = req.body;
 
   const file = req.file?.path ? req.file.path.replace(/\\/g, "/") : null;
@@ -263,6 +264,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     category,
     bookId,
     supplierId: finalSupplierId, // ✅ only CashOut হলে value যাবে, নাহলে null
+    voucherPrefix: normalizeOptionalText(voucherPrefix) || "KM-",
   };
 
   const actor = req.user || {};

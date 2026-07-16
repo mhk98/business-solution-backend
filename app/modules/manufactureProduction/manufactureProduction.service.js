@@ -89,6 +89,16 @@ const buildManufacturerStockWhere = ({
   return where;
 };
 
+const normalizeStockDataForAdjustment = (data = {}) => {
+  const basePayload = toBaseStockPayload(data.unit, data.unitValue);
+
+  return {
+    ...data,
+    unit: basePayload.unit,
+    unitValue: basePayload.unitValue,
+  };
+};
+
 const adjustStockBalance = async ({
   Model,
   where,
@@ -182,7 +192,7 @@ const adjustStockBalance = async ({
       manufacturerName,
       variant,
       variantKey: variantKey || null,
-      unit: currentStockPayload.isWeightUnit ? "Gram" : unit,
+      unit: currentStockPayload.isConvertedUnit ? currentStockPayload.unit : unit,
       unitValue: nextQuantity,
       cost: nextCost,
     },
@@ -199,7 +209,7 @@ const adjustStockBalance = async ({
     name,
     variant,
     variantKey: variantKey || null,
-    unit: currentStockPayload.isWeightUnit ? "Gram" : unit,
+    unit: currentStockPayload.isConvertedUnit ? currentStockPayload.unit : unit,
     quantityChange: delta,
     balanceBefore: currentStockPayload.unitValue,
     balanceAfter: nextQuantity,
@@ -372,7 +382,7 @@ const deleteIdFromDB = async (id) => {
     });
 
     if (!existing) return 0;
-    const data = existing.toJSON();
+    const data = normalizeStockDataForAdjustment(existing.toJSON());
 
     await adjustStockBalance({
       Model: ManufacturerStock,
@@ -419,8 +429,10 @@ const updateOneFromDB = async (id, payload = {}) => {
 
     if (!existing) return 0;
 
-    const oldData = existing.toJSON();
-    const nextData = await buildPayload(payload, oldData, { transaction: t });
+    const oldData = normalizeStockDataForAdjustment(existing.toJSON());
+    const nextData = normalizeStockDataForAdjustment(
+      await buildPayload(payload, oldData, { transaction: t }),
+    );
 
     await adjustStockBalance({
       Model: ManufacturerStock,

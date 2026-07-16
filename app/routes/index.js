@@ -55,6 +55,13 @@ const ManufactureProductionRoutes = require("../modules/manufactureProduction/ma
 const ManufacturerRoutes = require("../modules/manufacturer/manufacturer.routes");
 const MixerRoutes = require("../modules/mixer/mixer.routes");
 const ItemRoutes = require("../modules/item/item.routes");
+const PackagingItemRoutes = require("../modules/packagingItem/packagingItem.routes");
+const PackagingItemPurchaseRoutes = require("../modules/packagingItemPurchase/packagingItemPurchase.routes");
+const PackagingItemStockRoutes = require("../modules/packagingItemStock/packagingItemStock.routes");
+const PackagingManufacturerRoutes = require("../modules/packagingManufacturer/packagingManufacturer.routes");
+const PackagingFactoryRoutes = require("../modules/packagingFactory/packagingFactory.routes");
+const PackagingFactoryStockRoutes = require("../modules/packagingFactoryStock/packagingFactoryStock.routes");
+const PackagingMixerRoutes = require("../modules/packagingMixer/packagingMixer.routes");
 const ItemMasterRoutes = require("../modules/itemMaster/itemMaster.routes");
 const LedgerRoutes = require("../modules/ledger/ledger.routes");
 const LedgerHistoryRoutes = require("../modules/ledgerHistory/ledgerHistory.routes");
@@ -67,6 +74,7 @@ const DailyWorkReportRoutes = require("../modules/dailyWorkReport/dailyWorkRepor
 const EmployeeWorkReportRoutes = require("../modules/employeeWorkReport/employeeWorkReport.routes");
 const LogisticWorkReportRoutes = require("../modules/logisticWorkReport/logisticWorkReport.routes");
 const LogisticUpdateRoutes = require("../modules/logisticUpdate/logisticUpdate.routes");
+const ShifaReportRoutes = require("../modules/shifaReport/shifaReport.routes");
 const DepartmentRoutes = require("../modules/department/department.routes");
 const DesignationRoutes = require("../modules/designation/designation.routes");
 const TeamRoutes = require("../modules/team/team.routes");
@@ -111,6 +119,10 @@ const moduleRoutes = [
     route: LogisticUpdateRoutes,
   },
   {
+    path: "/shifa-reports",
+    route: ShifaReportRoutes,
+  },
+  {
     path: "/role-permissions",
     route: RolePermissionRoutes,
   },
@@ -134,6 +146,34 @@ const moduleRoutes = [
   {
     path: "/item",
     route: ItemRoutes,
+  },
+  {
+    path: "/packaging-item",
+    route: PackagingItemRoutes,
+  },
+  {
+    path: "/packaging-item-purchase",
+    route: PackagingItemPurchaseRoutes,
+  },
+  {
+    path: "/packaging-item-stock",
+    route: PackagingItemStockRoutes,
+  },
+  {
+    path: "/packaging-manufacturer",
+    route: PackagingManufacturerRoutes,
+  },
+  {
+    path: "/packaging-factory",
+    route: PackagingFactoryRoutes,
+  },
+  {
+    path: "/packaging-factory-stock",
+    route: PackagingFactoryStockRoutes,
+  },
+  {
+    path: "/packaging-mixer",
+    route: PackagingMixerRoutes,
   },
   {
     path: "/item-master",

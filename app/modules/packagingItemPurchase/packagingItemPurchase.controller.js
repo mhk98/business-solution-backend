@@ -1,0 +1,82 @@
+const catchAsync = require("../../../shared/catchAsync");
+const sendResponse = require("../../../shared/sendResponse");
+const pick = require("../../../shared/pick");
+const {
+  PackagingItemPurchaseFilterAbleFileds,
+} = require("./packagingItemPurchase.constants");
+const PackagingItemPurchaseService = require("./packagingItemPurchase.service");
+
+const insertIntoDB = catchAsync(async (req, res) => {
+  const result = await PackagingItemPurchaseService.insertIntoDB(req.body);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Packaging item purchase data created!!",
+    data: result,
+  });
+});
+
+const getAllFromDB = catchAsync(async (req, res) => {
+  const filters = pick(req.query, PackagingItemPurchaseFilterAbleFileds);
+  const options = pick(req.query, ["limit", "page", "sortBy", "sortOrder"]);
+  const result = await PackagingItemPurchaseService.getAllFromDB(filters, options);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Packaging item purchase data fetched!!",
+    meta: result.meta,
+    data: result.data,
+  });
+});
+
+const getDataById = catchAsync(async (req, res) => {
+  const result = await PackagingItemPurchaseService.getDataById(req.params.id);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Packaging item purchase data fetched!!",
+    data: result,
+  });
+});
+
+const updateOneFromDB = catchAsync(async (req, res) => {
+  const result = await PackagingItemPurchaseService.updateOneFromDB(
+    req.params.id,
+    req.body,
+  );
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Packaging item purchase update successfully!!",
+    data: result,
+  });
+});
+
+const deleteIdFromDB = catchAsync(async (req, res) => {
+  const result = await PackagingItemPurchaseService.deleteIdFromDB(req.params.id);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Packaging item purchase delete successfully!!",
+    data: result,
+  });
+});
+
+const getAllFromDBWithoutQuery = catchAsync(async (req, res) => {
+  const result = await PackagingItemPurchaseService.getAllFromDBWithoutQuery();
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Packaging item purchase data fetch!!",
+    data: result,
+  });
+});
+
+module.exports = {
+  getAllFromDB,
+  insertIntoDB,
+  getDataById,
+  updateOneFromDB,
+  deleteIdFromDB,
+  getAllFromDBWithoutQuery,
+};

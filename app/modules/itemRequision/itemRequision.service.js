@@ -14,8 +14,6 @@ const Item = db.item;
 const Notification = db.notification;
 const User = db.user;
 const Supplier = db.supplier;
-const CashInOut = db.cashInOut;
-const SupplierHistory = db.supplierHistory;
 
 const ITEM_REQUISITION_STATUS_UPDATE_ROLES = [
   "superAdmin",
@@ -31,32 +29,6 @@ const normalizeOptionalId = (value) => {
 
   const id = Number(value);
   return Number.isNaN(id) ? null : id;
-};
-
-const normalizePaymentDetails = ({ paymentMode, bankName, bankAccount }) => {
-  const normalizedPaymentMode = String(paymentMode || "").trim();
-  const isBank = normalizedPaymentMode === "Bank";
-  const normalizedBankName = String(bankName || "").trim();
-  const normalizedBankAccount =
-    bankAccount !== undefined &&
-    bankAccount !== null &&
-    String(bankAccount).trim() !== ""
-      ? Number(bankAccount)
-      : null;
-
-  if (
-    isBank &&
-    normalizedBankAccount !== null &&
-    Number.isNaN(normalizedBankAccount)
-  ) {
-    throw new ApiError(400, "Invalid bank account");
-  }
-
-  return {
-    paymentMode: normalizedPaymentMode || null,
-    bankName: isBank ? normalizedBankName || null : null,
-    bankAccount: isBank ? normalizedBankAccount : null,
-  };
 };
 
 const resolveItem = async (itemId, options = {}) => {
@@ -102,22 +74,6 @@ const buildPayload = async (data = {}, existing = null, options = {}) => {
         : existing?.procurement || null,
     quantity,
     amount,
-    bookId:
-      data.bookId !== undefined
-        ? data.bookId || null
-        : existing?.bookId || null,
-    ...normalizePaymentDetails({
-      paymentMode:
-        data.paymentMode !== undefined
-          ? data.paymentMode
-          : existing?.paymentMode,
-      bankName:
-        data.bankName !== undefined ? data.bankName : existing?.bankName,
-      bankAccount:
-        data.bankAccount !== undefined
-          ? data.bankAccount
-          : existing?.bankAccount,
-    }),
     status:
       data.status !== undefined ? data.status || "Pending" : existing?.status,
     remarks:
@@ -165,73 +121,6 @@ const sendCreateNotifications = async ({ userId, status, note, date }, t) => {
         { transaction: t },
       ),
     ),
-  );
-};
-
-const createCompletionEntries = async (
-  existing,
-  payload = {},
-  options = {},
-) => {
-  const finalStatus = payload.status || existing.status;
-  if (finalStatus !== "Completed" || existing.status === "Completed") {
-    return;
-  }
-
-  const supplierId =
-    normalizeOptionalId(payload.supplierId) || existing.supplierId;
-  const amount =
-    payload.amount !== undefined
-      ? Number(payload.amount || 0)
-      : Number(existing.amount || 0);
-
-  if (!supplierId || amount <= 0) return;
-
-  const bookId = normalizeOptionalId(payload.bookId) || existing.bookId || null;
-  const date =
-    payload.date || existing.date || new Date().toISOString().slice(0, 10);
-  const itemName = payload.name || existing.name;
-  const paymentMode =
-    payload.paymentMode !== undefined
-      ? payload.paymentMode
-      : existing.paymentMode;
-  const bankName =
-    payload.bankName !== undefined ? payload.bankName : existing.bankName;
-  const bankAccount =
-    payload.bankAccount !== undefined
-      ? payload.bankAccount
-      : existing.bankAccount;
-  const file = payload.file !== undefined ? payload.file : existing.file;
-
-  await SupplierHistory.create(
-    {
-      supplierId,
-      bookId,
-      amount,
-      status: "Paid",
-      date,
-      note: `Item requisition completed: ${itemName}`,
-      file: file || null,
-    },
-    { transaction: options.transaction },
-  );
-
-  await CashInOut.create(
-    {
-      supplierId,
-      bookId,
-      paymentMode,
-      bankName,
-      bankAccount,
-      paymentStatus: "CashOut",
-      amount,
-      status: "Active",
-      category: "Item Requisition",
-      date,
-      note: `Item requisition completed: ${itemName}`,
-      file: file || null,
-    },
-    { transaction: options.transaction },
   );
 };
 
@@ -314,6 +203,7 @@ const getAllFromDB = async (filters, options) => {
         model: Item,
         as: "item",
         attributes: ["Id", "name"],
+        required: false,
       },
       {
         model: Supplier,
@@ -352,6 +242,7 @@ const getDataById = async (id) => {
         model: Item,
         as: "item",
         attributes: ["Id", "name"],
+        required: false,
       },
       {
         model: Supplier,
@@ -399,8 +290,6 @@ const updateOneFromDB = async (id, data = {}) => {
         note: data.note !== undefined ? data.note || null : existing.note,
       };
 
-      await createCompletionEntries(existing, payload, { transaction: t });
-
       const [updatedCount] = await ItemRequisition.update(payload, {
         where: { Id: id },
         transaction: t,
@@ -419,8 +308,6 @@ const updateOneFromDB = async (id, data = {}) => {
 
   return db.sequelize.transaction(async (t) => {
     const payload = await buildPayload(data, existing, { transaction: t });
-
-    await createCompletionEntries(existing, payload, { transaction: t });
 
     const [updatedCount] = await ItemRequisition.update(payload, {
       where: { Id: id },
@@ -445,6 +332,7 @@ const getAllFromDBWithoutQuery = async () => {
         model: Item,
         as: "item",
         attributes: ["Id", "name"],
+        required: false,
       },
     ],
     paranoid: true,

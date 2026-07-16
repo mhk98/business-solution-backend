@@ -71,12 +71,29 @@ const getStockDirectionMultiplier = (stock) => {
   return String(stock || "").trim() === "In" ? 1 : -1;
 };
 
+const normalizeAdjustmentForStockEffect = (adjustment = {}) => {
+  const basePayload = toBaseStockPayload(adjustment.unit, adjustment.unitValue);
+
+  return {
+    ...adjustment,
+    unit: basePayload.unit,
+    unitValue: basePayload.unitValue,
+  };
+};
+
 const reconcileItemMasterStockAdjustment = async (
   previousAdjustment,
   nextAdjustment,
   transaction,
   movementContext = null,
 ) => {
+  previousAdjustment = previousAdjustment
+    ? normalizeAdjustmentForStockEffect(previousAdjustment)
+    : null;
+  nextAdjustment = nextAdjustment
+    ? normalizeAdjustmentForStockEffect(nextAdjustment)
+    : null;
+
   const previousEffects = new Map();
   const nextEffects = new Map();
 
@@ -157,7 +174,9 @@ const reconcileItemMasterStockAdjustment = async (
       quantityChange: delta,
       balanceBefore: currentStockPayload.unitValue,
       balanceAfter: nextUnitValue,
-      unit: currentStockPayload.isWeightUnit ? "Gram" : stockRow.unit,
+      unit: currentStockPayload.isConvertedUnit
+        ? currentStockPayload.unit
+        : stockRow.unit,
     });
   }
 };
@@ -246,8 +265,8 @@ const insertIntoDB = async (payload) => {
           variant: normalizedVariant,
           variantKey: normalizedVariantKey,
           unitValue: stock === "In" ? plusQuantity : minusQuantity,
-          unit: currentStockPayload.isWeightUnit
-            ? "Gram"
+          unit: currentStockPayload.isConvertedUnit
+            ? currentStockPayload.unit
             : normalizedPayload.unit,
           stock,
         },
@@ -265,7 +284,9 @@ const insertIntoDB = async (payload) => {
         name: itemData.name,
         variant: normalizedVariant,
         variantKey: normalizedVariantKey,
-        unit: currentStockPayload.isWeightUnit ? "Gram" : normalizedPayload.unit,
+        unit: currentStockPayload.isConvertedUnit
+          ? currentStockPayload.unit
+          : normalizedPayload.unit,
         quantityChange: delta,
         balanceBefore,
         balanceAfter,
@@ -405,8 +426,8 @@ const deleteIdFromDB = async (id) => {
         itemId: existing.itemId,
         productId: existing.productId,
         variantKey: existing.variantKey,
-        unitValue: toBaseStockPayload(existing.unit, existing.unitValue)
-          .unitValue,
+        unit: existing.unit,
+        unitValue: existing.unitValue,
         stock: existing.stock,
       },
       null,
@@ -541,14 +562,15 @@ const updateOneFromDB = async (id, payload) => {
         itemId: existing.itemId,
         productId: existing.productId,
         variantKey: existing.variantKey,
-        unitValue: toBaseStockPayload(existing.unit, existing.unitValue)
-          .unitValue,
+        unit: existing.unit,
+        unitValue: existing.unitValue,
         stock: existing.stock,
       },
       {
         itemId: nextItemId,
         productId: nextProductId,
         variantKey: nextVariantKey,
+        unit: normalizedPayload.unit,
         unitValue: totalUnitValue,
         stock: nextStock,
       },

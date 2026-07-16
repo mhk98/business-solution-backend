@@ -72,9 +72,13 @@ const reconcileMixerWageTransaction = async (
 ) => {
   const previousAmount = toNumber(previous.wageAmount);
   const nextAmount = toNumber(next.wageAmount);
+  const sameWageInputs =
+    toNumber(previous.combo) === toNumber(next.combo) &&
+    toNumber(previous.unitWage) === toNumber(next.unitWage);
   if (
     Number(previous.manufacturerId || 0) === Number(next.manufacturerId || 0) &&
-    previousAmount === nextAmount
+    previousAmount === nextAmount &&
+    sameWageInputs
   ) {
     return;
   }
@@ -192,19 +196,42 @@ const buildMixerNote = (
   const serializedVariants = normalizeOutputVariants(variants);
   const serializedMixItems = Array.isArray(mixItems)
     ? mixItems
-        .map((item) => ({
-          manufactureId: Number(item?.manufactureId),
-          unitValue: toNumber(item?.unitValue),
-        }))
+        .map((item) => {
+          const value = toNumber(item?.value);
+          const quantity = toNumber(item?.quantity);
+          const unitValue =
+            item?.unitValue === undefined || item?.unitValue === null
+              ? value * quantity
+              : toNumber(item.unitValue);
+
+          return {
+            manufactureId: Number(item?.manufactureId),
+            unitValue,
+            value,
+            quantity,
+            unit: item?.unit || "Pcs",
+          };
+        })
         .filter((item) => item.manufactureId && item.unitValue > 0)
     : [];
   const serializedPackagingItems = Array.isArray(packagingItems)
     ? packagingItems
-        .map((item) => ({
-          itemMasterId: Number(item?.itemMasterId),
-          unitValue: toNumber(item?.unitValue),
-          unit: item?.unit || "Pcs",
-        }))
+        .map((item) => {
+          const value = toNumber(item?.value);
+          const quantity = toNumber(item?.quantity);
+          const unitValue =
+            item?.unitValue === undefined || item?.unitValue === null
+              ? value * quantity
+              : toNumber(item.unitValue);
+
+          return {
+            itemMasterId: Number(item?.itemMasterId),
+            unitValue,
+            value,
+            quantity,
+            unit: item?.unit || "Pcs",
+          };
+        })
         .filter((item) => item.itemMasterId && item.unitValue > 0)
     : [];
 
@@ -255,19 +282,48 @@ const parseMixerNote = (note = "") => {
       : null;
     const mixItems = Array.isArray(parsedMeta?.mixItems)
       ? parsedMeta.mixItems
-          .map((item) => ({
-            manufactureId: Number(item?.manufactureId),
-            unitValue: toNumber(item?.unitValue),
-          }))
+          .map((item) => {
+            const unitValue = toNumber(item?.unitValue);
+            const value =
+              item?.value === undefined || item?.value === null
+                ? unitValue
+                : toNumber(item.value);
+            const quantity =
+              item?.quantity === undefined || item?.quantity === null
+                ? 1
+                : toNumber(item.quantity);
+
+            return {
+              manufactureId: Number(item?.manufactureId),
+              unitValue,
+              value,
+              quantity,
+              unit: item?.unit || "Pcs",
+            };
+          })
           .filter((item) => item.manufactureId && item.unitValue > 0)
       : [];
     const packagingItems = Array.isArray(parsedMeta?.packagingItems)
       ? parsedMeta.packagingItems
-          .map((item) => ({
-            itemMasterId: Number(item?.itemMasterId),
-            unitValue: toNumber(item?.unitValue),
-            unit: item?.unit || "Pcs",
-          }))
+          .map((item) => {
+            const unitValue = toNumber(item?.unitValue);
+            const value =
+              item?.value === undefined || item?.value === null
+                ? unitValue
+                : toNumber(item.value);
+            const quantity =
+              item?.quantity === undefined || item?.quantity === null
+                ? 1
+                : toNumber(item.quantity);
+
+            return {
+              itemMasterId: Number(item?.itemMasterId),
+              unitValue,
+              value,
+              quantity,
+              unit: item?.unit || "Pcs",
+            };
+          })
           .filter((item) => item.itemMasterId && item.unitValue > 0)
       : [];
 
@@ -328,7 +384,8 @@ const aggregateMixItems = (mixItems = []) => {
 
   for (const item of mixItems) {
     const manufactureId = Number(item?.manufactureId);
-    const unitValue = toNumber(item?.unitValue);
+    const baseStock = toBaseStockPayload(item?.unit || "Pcs", item?.unitValue);
+    const unitValue = toNumber(baseStock.unitValue);
 
     if (!manufactureId || unitValue <= 0) continue;
 
@@ -456,7 +513,8 @@ const reconcileManufactureStock = async (
 
     for (const item of mixItems || []) {
       const manufactureId = Number(item?.manufactureId);
-      const unitValue = toNumber(item?.unitValue);
+      const baseStock = toBaseStockPayload(item?.unit || "Pcs", item?.unitValue);
+      const unitValue = toNumber(baseStock.unitValue);
       if (!manufactureId || unitValue <= 0) continue;
 
       const key = `${manufacturerId}:${manufactureId}`;
@@ -498,7 +556,11 @@ const reconcileManufactureStock = async (
       throw new ApiError(404, `${item.name} manufacturer stock not found`);
     }
 
-    const availableStock = toNumber(stockRow.unitValue);
+    const currentStockPayload = toBaseStockPayload(
+      stockRow.unit,
+      stockRow.unitValue,
+    );
+    const availableStock = toNumber(currentStockPayload.unitValue);
     const nextStock = availableStock + delta;
 
     if (nextStock < 0) {
@@ -509,7 +571,12 @@ const reconcileManufactureStock = async (
     }
 
     const updatedStockRow = await stockRow.update(
-      { unitValue: nextStock },
+      {
+        unit: currentStockPayload.isConvertedUnit
+          ? currentStockPayload.unit
+          : stockRow.unit,
+        unitValue: nextStock,
+      },
       { transaction },
     );
     await logStockMovement({
@@ -523,7 +590,9 @@ const reconcileManufactureStock = async (
       name: stockRow.name,
       variant: stockRow.variant,
       variantKey: stockRow.variantKey || null,
-      unit: stockRow.unit || "Pcs",
+      unit: currentStockPayload.isConvertedUnit
+        ? currentStockPayload.unit
+        : stockRow.unit || "Pcs",
       quantityChange: delta,
       balanceBefore: availableStock,
       balanceAfter: nextStock,
@@ -858,7 +927,11 @@ const reconcileItemMasterStock = async (
       );
     }
 
-    const availableStock = toNumber(stockRow.unitValue);
+    const currentStockPayload = toBaseStockPayload(
+      stockRow.unit,
+      stockRow.unitValue,
+    );
+    const availableStock = toNumber(currentStockPayload.unitValue);
 
     if (delta < 0 && availableStock < Math.abs(delta)) {
       throw new ApiError(
@@ -868,7 +941,12 @@ const reconcileItemMasterStock = async (
     }
 
     const updatedStockRow = await stockRow.update(
-      { unitValue: availableStock + delta },
+      {
+        unit: currentStockPayload.isConvertedUnit
+          ? currentStockPayload.unit
+          : stockRow.unit,
+        unitValue: availableStock + delta,
+      },
       { transaction },
     );
     await logStockMovement({
@@ -881,7 +959,9 @@ const reconcileItemMasterStock = async (
       name: stockRow.name,
       variant: stockRow.variant,
       variantKey: stockRow.variantKey || null,
-      unit: stockRow.unit || "Pcs",
+      unit: currentStockPayload.isConvertedUnit
+        ? currentStockPayload.unit
+        : stockRow.unit || "Pcs",
       quantityChange: delta,
       balanceBefore: availableStock,
       balanceAfter: availableStock + delta,
@@ -922,7 +1002,11 @@ const reconcilePackagingStock = async (
       );
     }
 
-    const availableStock = toNumber(stockRow.unitValue);
+    const currentStockPayload = toBaseStockPayload(
+      stockRow.unit,
+      stockRow.unitValue,
+    );
+    const availableStock = toNumber(currentStockPayload.unitValue);
 
     if (delta < 0 && availableStock < Math.abs(delta)) {
       throw new ApiError(
@@ -932,7 +1016,12 @@ const reconcilePackagingStock = async (
     }
 
     const updatedStockRow = await stockRow.update(
-      { unitValue: availableStock + delta },
+      {
+        unit: currentStockPayload.isConvertedUnit
+          ? currentStockPayload.unit
+          : stockRow.unit,
+        unitValue: availableStock + delta,
+      },
       { transaction },
     );
     await logStockMovement({
@@ -945,7 +1034,9 @@ const reconcilePackagingStock = async (
       name: stockRow.name,
       variant: stockRow.variant,
       variantKey: stockRow.variantKey || null,
-      unit: stockRow.unit || "Pcs",
+      unit: currentStockPayload.isConvertedUnit
+        ? currentStockPayload.unit
+        : stockRow.unit || "Pcs",
       quantityChange: delta,
       balanceBefore: availableStock,
       balanceAfter: availableStock + delta,
@@ -956,13 +1047,20 @@ const reconcilePackagingStock = async (
 const sanitizeMixerRecord = (record) => {
   if (!record) return record;
 
-  const { displayNote } = parseMixerNote(record.note);
-  const { variants, warehouseId, packagingItems, purchase_price, sale_price } =
-    parseMixerNote(record.note);
+  const {
+    displayNote,
+    variants,
+    warehouseId,
+    mixItems,
+    packagingItems,
+    purchase_price,
+    sale_price,
+  } = parseMixerNote(record.note);
   if (typeof record.setDataValue === "function") {
     record.setDataValue("note", displayNote || null);
     record.setDataValue("variants", variants || []);
     record.setDataValue("warehouseId", warehouseId || null);
+    record.setDataValue("mixItems", mixItems || []);
     record.setDataValue("packagingItems", packagingItems || []);
     record.setDataValue("purchase_price", purchase_price || 0);
     record.setDataValue("sale_price", sale_price || 0);
@@ -976,6 +1074,7 @@ const sanitizeMixerRecord = (record) => {
     note: displayNote || null,
     variants: variants || [],
     warehouseId: warehouseId || null,
+    mixItems: mixItems || [],
     packagingItems: packagingItems || [],
     purchase_price: purchase_price || 0,
     sale_price: sale_price || 0,
@@ -1046,11 +1145,10 @@ const insertIntoDB = async (payload) => {
 
   return db.sequelize.transaction(async (t) => {
     const manufacturer = await getManufacturerById(manufacturerId, t);
-    if (!manufacturer) throw new ApiError(400, "Please select a manufacturer");
 
     const manufacturerContext = {
-      manufacturerId: manufacturer.Id,
-      manufacturerName: manufacturer.name,
+      manufacturerId: manufacturer?.Id || null,
+      manufacturerName: manufacturer?.name || null,
     };
     const storedNote = buildMixerNote(
       note,
@@ -1066,8 +1164,8 @@ const insertIntoDB = async (payload) => {
       {
         productId,
         name: productData.name,
-        manufacturerId: manufacturer.Id,
-        manufacturerName: manufacturer.name,
+        manufacturerId: manufacturer?.Id || null,
+        manufacturerName: manufacturer?.name || null,
         date,
         combo: outputQuantity,
         unitWage: toNumber(unitWage),
@@ -1080,8 +1178,8 @@ const insertIntoDB = async (payload) => {
     await reconcileMixerWageTransaction(
       {},
       {
-        manufacturerId: manufacturer.Id,
-        manufacturerName: manufacturer.name,
+        manufacturerId: manufacturer?.Id || null,
+        manufacturerName: manufacturer?.name || null,
         mixerId: result.Id,
         productName: productData.name,
         combo: outputQuantity,
@@ -1094,7 +1192,7 @@ const insertIntoDB = async (payload) => {
 
     await reconcileManufactureStock(
       { mixItems: [], manufacturerId: null },
-      { mixItems: mixItems || [], manufacturerId: manufacturer.Id },
+      { mixItems: mixItems || [], manufacturerId: manufacturer?.Id || null },
       t,
       {
         sourceType: "Mixer",
@@ -1377,9 +1475,6 @@ const updateOneFromDB = async (id, payload) => {
             }
           : null;
 
-    if (!nextManufacturer) {
-      throw new ApiError(400, "Please select a manufacturer");
-    }
     const nextUnitWage =
       unitWage === undefined || unitWage === null || unitWage === ""
         ? toNumber(lockedMixer.unitWage)
@@ -1396,7 +1491,7 @@ const updateOneFromDB = async (id, payload) => {
 
     await reconcileManufactureStock(
       previousContext,
-      { mixItems: nextMixItems, manufacturerId: nextManufacturer.Id },
+      { mixItems: nextMixItems, manufacturerId: nextManufacturer?.Id || null },
       t,
       {
         sourceType: "Mixer",
@@ -1461,12 +1556,14 @@ const updateOneFromDB = async (id, payload) => {
         manufacturerName: lockedMixer.manufacturerName,
         mixerId: lockedMixer.Id,
         productName: lockedMixer.name,
+        combo: lockedMixer.combo,
+        unitWage: lockedMixer.unitWage,
         wageAmount: lockedMixer.wageAmount,
         date: lockedMixer.date,
       },
       {
-        manufacturerId: nextManufacturer.Id,
-        manufacturerName: nextManufacturer.name,
+        manufacturerId: nextManufacturer?.Id || null,
+        manufacturerName: nextManufacturer?.name || null,
         mixerId: lockedMixer.Id,
         productName: nextProductData.name || lockedMixer.name,
         combo: nextCombo,
@@ -1481,8 +1578,8 @@ const updateOneFromDB = async (id, payload) => {
       finalDisplayNote,
       nextMixItems,
       {
-        manufacturerId: nextManufacturer.Id,
-        manufacturerName: nextManufacturer.name,
+        manufacturerId: nextManufacturer?.Id || null,
+        manufacturerName: nextManufacturer?.name || null,
       },
       nextVariants,
       nextWarehouseId,
@@ -1493,8 +1590,8 @@ const updateOneFromDB = async (id, payload) => {
     const data = {
       productId: nextProductId || undefined,
       name: productData?.name || lockedMixer.name,
-      manufacturerId: nextManufacturer.Id,
-      manufacturerName: nextManufacturer.name,
+      manufacturerId: nextManufacturer?.Id || null,
+      manufacturerName: nextManufacturer?.name || null,
       combo: nextCombo,
       unitWage: nextUnitWage,
       wageAmount: nextWageAmount,

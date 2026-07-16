@@ -198,6 +198,17 @@ const payManufacturerAmount = async (id, payload = {}) => {
   const amount = toNumber(payload.amount);
   if (amount <= 0) throw new ApiError(400, "Please enter valid paid amount");
 
+  const contactUpdates = {};
+  if (Object.prototype.hasOwnProperty.call(payload, "phone")) {
+    contactUpdates.phone = payload.phone || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "address")) {
+    contactUpdates.address = payload.address || null;
+  }
+  if (Object.keys(contactUpdates).length > 0) {
+    await manufacturer.update(contactUpdates);
+  }
+
   const transaction = await ManufacturerTransaction.create({
     manufacturerId: manufacturer.Id,
     manufacturerName: manufacturer.name,

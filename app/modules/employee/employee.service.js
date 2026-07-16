@@ -199,7 +199,9 @@ const insertIntoDB = async (payload) => {
 };
 
 const getAllFromDB = async (filters, options) => {
-  const { page, limit, skip } = paginationHelpers.calculatePagination(options);
+  const { page, limit, skip } = paginationHelpers.calculatePagination(options, {
+    maxLimit: 200,
+  });
 
   const { searchTerm, startDate, endDate, employeeListId, ...otherFilters } =
     filters;

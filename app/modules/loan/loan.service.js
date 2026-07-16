@@ -7,13 +7,28 @@ const CashInOut = db.cashInOut;
 
 const normalizeAmount = (value) => Number(value || 0);
 
-const addBalancesToLoans = async (loans) => {
+const buildDateCondition = ({ startDate, endDate } = {}) => {
+  if (startDate && endDate) return { [Op.between]: [startDate, endDate] };
+  if (startDate) return { [Op.gte]: startDate };
+  if (endDate) return { [Op.lte]: endDate };
+  return null;
+};
+
+const addBalancesToLoans = async (loans, filters = {}) => {
   const plainLoans = loans.map((loan) =>
     loan.get ? loan.get({ plain: true }) : loan,
   );
   const loanIds = plainLoans.map((loan) => loan.Id).filter(Boolean);
 
   if (!loanIds.length) return plainLoans;
+
+  const dateCondition = buildDateCondition(filters);
+  const where = {
+    loanId: { [Op.in]: loanIds },
+    category: { [Op.like]: "loan" },
+  };
+
+  if (dateCondition) where.date = dateCondition;
 
   const rows = await CashInOut.findAll({
     attributes: [
@@ -38,10 +53,7 @@ const addBalancesToLoans = async (loans) => {
       ],
       [db.Sequelize.fn("MAX", db.Sequelize.col("date")), "lastDate"],
     ],
-    where: {
-      loanId: { [Op.in]: loanIds },
-      category: { [Op.like]: "loan" },
-    },
+    where,
     group: ["loanId"],
     raw: true,
   });
@@ -78,8 +90,9 @@ const insertIntoDB = async (payload) =>
 
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
-  const { searchTerm, ...filterData } = filters;
+  const { searchTerm, startDate, endDate, ...filterData } = filters;
   const andConditions = [];
+  const balanceFilters = { startDate, endDate };
 
   if (searchTerm && String(searchTerm).trim()) {
     andConditions.push({
@@ -110,7 +123,10 @@ const getAllFromDB = async (filters, options) => {
     Loan.count({ where }),
     Loan.findAll({ where, paranoid: true }),
   ]);
-  const allLoansWithBalances = await addBalancesToLoans(allRows);
+  const allLoansWithBalances = await addBalancesToLoans(
+    allRows,
+    balanceFilters,
+  );
   const totalLoanTaken = allLoansWithBalances.reduce(
     (sum, loan) => sum + normalizeAmount(loan.totalLoanTaken),
     0,
@@ -130,7 +146,7 @@ const getAllFromDB = async (filters, options) => {
       totalLoanGiven: totalLoanPaid,
       netBalance: totalLoanTaken - totalLoanPaid,
     },
-    data: await addBalancesToLoans(rows),
+    data: await addBalancesToLoans(rows, balanceFilters),
   };
 };
 

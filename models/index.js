@@ -29,6 +29,45 @@ db.variation = require("../app/modules/variation/variation.model")(
   DataTypes,
 );
 db.item = require("../app/modules/item/item.model")(db.sequelize, DataTypes);
+db.packagingItem = require("../app/modules/packagingItem/packagingItem.model")(
+  db.sequelize,
+  DataTypes,
+);
+db.packagingItemPurchase =
+  require("../app/modules/packagingItemPurchase/packagingItemPurchase.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.packagingItemStock =
+  require("../app/modules/packagingItemStock/packagingItemStock.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.packagingManufacturer =
+  require("../app/modules/packagingManufacturer/packagingManufacturer.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.packagingFactory =
+  require("../app/modules/packagingFactory/packagingFactory.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.packagingFactoryStock =
+  require("../app/modules/packagingFactoryStock/packagingFactoryStock.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.packagingManufacturerTransaction =
+  require("../app/modules/packagingManufacturerTransaction/packagingManufacturerTransaction.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.packagingMixer =
+  require("../app/modules/packagingMixer/packagingMixer.model")(
+    db.sequelize,
+    DataTypes,
+  );
 db.itemMaster = require("../app/modules/itemMaster/itemMaster.model")(
   db.sequelize,
   DataTypes,
@@ -309,6 +348,10 @@ db.logisticUpdate =
     db.sequelize,
     DataTypes,
   );
+db.shifaReport = require("../app/modules/shifaReport/shifaReport.model")(
+  db.sequelize,
+  DataTypes,
+);
 
 db.department = require("../app/modules/department/department.model")(
   db.sequelize,
@@ -551,6 +594,70 @@ db.itemMaster.belongsTo(db.item, { foreignKey: "itemId" });
 
 db.product.hasMany(db.itemMaster, { foreignKey: "productId" });
 db.itemMaster.belongsTo(db.product, { foreignKey: "productId" });
+
+db.packagingItem.hasMany(db.packagingItemPurchase, {
+  foreignKey: "packagingItemId",
+});
+db.packagingItemPurchase.belongsTo(db.packagingItem, {
+  foreignKey: "packagingItemId",
+  as: "packagingItem",
+});
+db.packagingItem.hasOne(db.packagingItemStock, {
+  foreignKey: "packagingItemId",
+});
+db.packagingItemStock.belongsTo(db.packagingItem, {
+  foreignKey: "packagingItemId",
+  as: "packagingItem",
+});
+db.packagingItem.hasMany(db.packagingFactory, {
+  foreignKey: "packagingItemId",
+});
+db.packagingFactory.belongsTo(db.packagingItem, {
+  foreignKey: "packagingItemId",
+  as: "packagingItem",
+});
+db.packagingItem.hasMany(db.packagingFactoryStock, {
+  foreignKey: "packagingItemId",
+});
+db.packagingFactoryStock.belongsTo(db.packagingItem, {
+  foreignKey: "packagingItemId",
+  as: "packagingItem",
+});
+db.packagingManufacturer.hasMany(db.packagingFactory, {
+  foreignKey: "manufacturerId",
+});
+db.packagingFactory.belongsTo(db.packagingManufacturer, {
+  foreignKey: "manufacturerId",
+  as: "packagingManufacturer",
+});
+db.packagingManufacturer.hasMany(db.packagingFactoryStock, {
+  foreignKey: "manufacturerId",
+});
+db.packagingFactoryStock.belongsTo(db.packagingManufacturer, {
+  foreignKey: "manufacturerId",
+  as: "packagingManufacturer",
+});
+db.packagingManufacturer.hasMany(db.packagingManufacturerTransaction, {
+  foreignKey: "manufacturerId",
+});
+db.packagingManufacturerTransaction.belongsTo(db.packagingManufacturer, {
+  foreignKey: "manufacturerId",
+  as: "packagingManufacturer",
+});
+db.packagingManufacturer.hasMany(db.packagingMixer, {
+  foreignKey: "manufacturerId",
+});
+db.packagingMixer.belongsTo(db.packagingManufacturer, {
+  foreignKey: "manufacturerId",
+  as: "packagingManufacturer",
+});
+db.item.hasMany(db.packagingMixer, { foreignKey: "itemId" });
+db.packagingMixer.belongsTo(db.item, { foreignKey: "itemId", as: "item" });
+db.supplier.hasMany(db.packagingItemPurchase, { foreignKey: "supplierId" });
+db.packagingItemPurchase.belongsTo(db.supplier, {
+  foreignKey: "supplierId",
+  as: "supplier",
+});
 
 db.product.hasMany(db.receivedProduct, { foreignKey: "productId" });
 db.receivedProduct.belongsTo(db.product, { foreignKey: "productId" });
@@ -797,6 +904,24 @@ db.user.hasMany(db.logisticUpdate, {
 db.logisticUpdate.belongsTo(db.user, {
   foreignKey: "userId",
   as: "user",
+});
+
+db.user.hasMany(db.shifaReport, {
+  foreignKey: "userId",
+  as: "shifaReports",
+});
+db.shifaReport.belongsTo(db.user, {
+  foreignKey: "userId",
+  as: "user",
+});
+
+db.employeeList.hasMany(db.shifaReport, {
+  foreignKey: "employeeId",
+  as: "shifaReports",
+});
+db.shifaReport.belongsTo(db.employeeList, {
+  foreignKey: "employeeId",
+  as: "employee",
 });
 
 db.user.hasMany(db.userLogHistory, {
@@ -1570,6 +1695,128 @@ const ensureLogisticWorkReportColumns = async () => {
   await maybeAddColumn("completedPendingAssign", numericColumn());
 };
 
+const ensureShifaReportColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.shifaReport.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  const maybeAddColumn = async (columnName, definition) => {
+    if (!tableDefinition[columnName]) {
+      await queryInterface.addColumn(tableName, columnName, definition);
+    }
+  };
+
+  await maybeAddColumn("employeeId", {
+    type: DataTypes.INTEGER(10),
+    allowNull: true,
+  });
+  await maybeAddColumn("reportType", {
+    type: DataTypes.STRING(80),
+    allowNull: false,
+    defaultValue: "call_history",
+  });
+  await maybeAddColumn("phone", {
+    type: DataTypes.STRING(50),
+    allowNull: true,
+  });
+  await maybeAddColumn("age", {
+    type: DataTypes.STRING(30),
+    allowNull: true,
+  });
+  await maybeAddColumn("gender", {
+    type: DataTypes.STRING(40),
+    allowNull: true,
+  });
+  await maybeAddColumn("address", {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  });
+  await maybeAddColumn("callerName", {
+    type: DataTypes.STRING(180),
+    allowNull: true,
+  });
+  await maybeAddColumn("relation", {
+    type: DataTypes.STRING(120),
+    allowNull: true,
+  });
+  await maybeAddColumn("callHistory", {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  });
+  await maybeAddColumn("phoneCalled", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("phoneNotReceived", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("phoneOff", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("numberBusy", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("refusedCall", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("callCut", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  const numericColumn = () => ({
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("started", numericColumn());
+  await maybeAddColumn("notStarted", numericColumn());
+  await maybeAddColumn("startingOther", numericColumn());
+  await maybeAddColumn("spousePractice", numericColumn());
+  await maybeAddColumn("evilEye", numericColumn());
+  await maybeAddColumn("marriageObstacle", numericColumn());
+  await maybeAddColumn("livelihoodObstacle", numericColumn());
+  await maybeAddColumn("jinnAndMagic", numericColumn());
+  await maybeAddColumn("separation", numericColumn());
+  await maybeAddColumn("noChild", numericColumn());
+  await maybeAddColumn("problemOther", numericColumn());
+  await maybeAddColumn("improving", numericColumn());
+  await maybeAddColumn("notImproving", numericColumn());
+  await maybeAddColumn("startingSituation", {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  });
+  await maybeAddColumn("problemHistory", {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  });
+  await maybeAddColumn("patientUpdate", {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  });
+  await maybeAddColumn("notes", {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  });
+  await maybeAddColumn("nextFollowUpDate", {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+  });
+  await maybeAddColumn("details", {
+    type: DataTypes.JSON,
+    allowNull: true,
+  });
+};
+
 const ensureDailyWorkReportTaskColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.dailyWorkReportTask.getTableName();
@@ -1801,6 +2048,37 @@ const ensurePurchaseRequisitionItemsColumn = async () => {
       defaultValue: [],
     });
   }
+};
+
+const ensurePackagingItemPurchaseColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.packagingItemPurchase.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  const maybeAddColumn = async (columnName, definition) => {
+    if (!tableDefinition[columnName]) {
+      await queryInterface.addColumn(tableName, columnName, definition);
+    }
+  };
+
+  await maybeAddColumn("unitCost", {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("allPackagingItemCost", {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("batchId", {
+    type: DataTypes.STRING,
+    allowNull: true,
+  });
+  await maybeAddColumn("supplierHistoryId", {
+    type: DataTypes.INTEGER(10),
+    allowNull: true,
+  });
 };
 
 const ensurePurchaseReturnProductItemsColumn = async () => {
@@ -2192,6 +2470,13 @@ const ensureCashInOutLoanColumns = async () => {
       allowNull: true,
     });
   }
+
+  if (!tableDefinition.voucherNo) {
+    await queryInterface.addColumn(tableName, "voucherNo", {
+      type: DataTypes.STRING,
+      allowNull: true,
+    });
+  }
 };
 
 const syncLoanRowsFromCashInOut = async () => {
@@ -2549,6 +2834,7 @@ db.sequelize
     await ensureEmployeeColumns();
     await ensureEmployeeWorkReportColumns();
     await ensureLogisticWorkReportColumns();
+    await ensureShifaReportColumns();
     await ensureDailyWorkReportColumns();
     await ensureDailyWorkReportTaskColumns();
     await ensureKPIColumns();
@@ -2565,6 +2851,11 @@ db.sequelize
     await Promise.all(
       [
         "item",
+        "packagingItem",
+        "packagingItemPurchase",
+        "packagingFactory",
+        "packagingManufacturer",
+        "packagingMixer",
         "product",
         "supplier",
         "loan",
@@ -2602,6 +2893,7 @@ db.sequelize
     await ensureAssetIdColumn("assetsRequisition");
     await ensurePurchaseRequisitionAssetColumns();
     await ensurePurchaseRequisitionItemsColumn();
+    await ensurePackagingItemPurchaseColumns();
     await ensurePurchaseReturnProductItemsColumn();
     await ensureManufactureVariantColumns();
     await ensureMixerManufacturerColumns();

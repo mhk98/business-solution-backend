@@ -118,6 +118,8 @@ const getAllFromDB = async (filters, options) => {
       [Op.or]: [
         { remarks: { [Op.like]: `%${term}%` } },
         { type: { [Op.like]: `%${term}%` } },
+        { "$owner.name$": { [Op.like]: `%${term}%` } },
+        { "$book.name$": { [Op.like]: `%${term}%` } },
         db.Sequelize.where(db.Sequelize.cast(db.Sequelize.col("amount"), "CHAR"), {
           [Op.like]: `%${term}%`,
         }),
@@ -139,14 +141,15 @@ const getAllFromDB = async (filters, options) => {
   if (status) andConditions.push({ status: { [Op.eq]: status } });
 
   const where = andConditions.length ? { [Op.and]: andConditions } : {};
+  const include = [
+    { model: Owner, as: "owner", required: false },
+    { model: Book, as: "book", required: false },
+  ];
 
   const [data, count, totalDeposit, totalWithdraw] = await Promise.all([
     OwnerTransaction.findAll({
       where,
-      include: [
-        { model: Owner, as: "owner", required: false },
-        { model: Book, as: "book", required: false },
-      ],
+      include,
       offset: skip,
       limit,
       paranoid: true,
@@ -155,12 +158,14 @@ const getAllFromDB = async (filters, options) => {
           ? [[options.sortBy, options.sortOrder.toUpperCase()]]
           : [["date", "DESC"]],
     }),
-    OwnerTransaction.count({ where }),
+    OwnerTransaction.count({ where, include, distinct: true }),
     OwnerTransaction.sum("amount", {
       where: { [Op.and]: [...andConditions, { type: "Deposit" }] },
+      include,
     }),
     OwnerTransaction.sum("amount", {
       where: { [Op.and]: [...andConditions, { type: "Withdraw" }] },
+      include,
     }),
   ]);
 

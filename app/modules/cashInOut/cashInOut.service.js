@@ -9,6 +9,54 @@ const User = db.user;
 const SupplierHistory = db.supplierHistory;
 const Loan = db.loan;
 
+const formatDateOnly = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+};
+
+const getMonthRange = (value) => {
+  const sourceDate = value ? new Date(value) : new Date();
+  const safeDate = Number.isNaN(sourceDate.getTime()) ? new Date() : sourceDate;
+  const year = safeDate.getFullYear();
+  const month = safeDate.getMonth();
+  const start = new Date(year, month, 1);
+  const end = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+  return {
+    date: formatDateOnly(safeDate),
+    start: formatDateOnly(start),
+    end: formatDateOnly(end),
+  };
+};
+
+const normalizeVoucherPrefix = (value) => {
+  const prefix = String(value || "KM-")
+    .trim()
+    .replace(/[^A-Za-z0-9-]/g, "");
+
+  if (!prefix) return "KM-";
+
+  return prefix.endsWith("-") ? prefix : `${prefix}-`;
+};
+
+const generateMonthlyVoucherNo = async (date, voucherPrefix, transaction) => {
+  const { start, end } = getMonthRange(date);
+  const prefix = normalizeVoucherPrefix(voucherPrefix);
+  const count = await CashInOut.count({
+    where: {
+      voucherNo: { [Op.like]: `${prefix}%` },
+      date: { [Op.between]: [start, end] },
+    },
+    paranoid: true,
+    transaction,
+  });
+
+  return `${prefix}${String(count + 1).padStart(4, "0")}`;
+};
+
 const buildLoanWhere = (filters = {}, extraConditions = []) => {
   const { searchTerm, startDate, endDate, lender, loanId } = filters;
   const conditions = [
@@ -85,7 +133,8 @@ const loanSumAttributes = [
 ];
 
 const insertIntoDB = async (data) => {
-  const { amount, date, bookId, supplierId, employeeId, file } = data;
+  const { amount, date, bookId, supplierId, employeeId, file, voucherPrefix } =
+    data;
   const hasSupplierId =
     supplierId !== undefined &&
     supplierId !== null &&
@@ -97,7 +146,13 @@ const insertIntoDB = async (data) => {
   //   String(employeeId) !== "";
 
   return db.sequelize.transaction(async (t) => {
-    const result = await CashInOut.create(data, { transaction: t });
+    const voucherNo = await generateMonthlyVoucherNo(date, voucherPrefix, t);
+    const { date: normalizedDate } = getMonthRange(date);
+    const { voucherPrefix: _voucherPrefix, ...cashInOutData } = data;
+    const result = await CashInOut.create(
+      { ...cashInOutData, date: date || normalizedDate, voucherNo },
+      { transaction: t },
+    );
 
     if (hasSupplierId) {
       const supplierData = {
@@ -327,6 +382,7 @@ const getAllFromDB = async (filters, options) => {
     paymentMode,
     paymentStatus,
     bookId,
+    voucherNo,
     ...otherFilters
   } = filters;
 
@@ -343,6 +399,7 @@ const getAllFromDB = async (filters, options) => {
         { paymentStatus: { [Op.like]: `%${term}%` } },
         { category: { [Op.like]: `%${term}%` } },
         { bankAccount: { [Op.like]: `%${term}%` } },
+        { voucherNo: { [Op.like]: `%${term}%` } },
 
         db.Sequelize.where(
           db.Sequelize.cast(db.Sequelize.col("amount"), "CHAR"),
@@ -393,6 +450,12 @@ const getAllFromDB = async (filters, options) => {
 
   if (bookId) {
     baseConditions.push({ bookId: { [Op.eq]: bookId } });
+  }
+
+  if (voucherNo && String(voucherNo).trim()) {
+    baseConditions.push({
+      voucherNo: { [Op.like]: `%${String(voucherNo).trim()}%` },
+    });
   }
 
   if (Object.keys(otherFilters).length) {

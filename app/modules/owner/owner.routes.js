@@ -1,44 +1,45 @@
 const auth = require("../../middlewares/auth");
 const {
-  requireMenuPermission,
+  requireAnyPermission,
 } = require("../../middlewares/requireMenuPermission");
 const OwnerController = require("./owner.controller");
 const router = require("express").Router();
+const ownerPermission = requireAnyPermission(["owner", "owner_transaction"]);
 
 router.post(
   "/create",
   auth(),
-  requireMenuPermission("owner_transaction"),
+  ownerPermission,
   OwnerController.insertIntoDB,
 );
 router.get(
   "/",
   auth(),
-  requireMenuPermission("owner_transaction"),
+  ownerPermission,
   OwnerController.getAllFromDB,
 );
 router.get(
   "/all",
   auth(),
-  requireMenuPermission("owner_transaction"),
+  ownerPermission,
   OwnerController.getAllFromDBWithoutQuery,
 );
 router.get(
   "/:id",
   auth(),
-  requireMenuPermission("owner_transaction"),
+  ownerPermission,
   OwnerController.getDataById,
 );
 router.delete(
   "/:id",
   auth(),
-  requireMenuPermission("owner_transaction"),
+  ownerPermission,
   OwnerController.deleteIdFromDB,
 );
 router.put(
   "/:id",
   auth(),
-  requireMenuPermission("owner_transaction"),
+  ownerPermission,
   OwnerController.updateOneFromDB,
 );
 

@@ -554,6 +554,10 @@ const getAllFromDB = async (filters, options) => {
         as: "warehouse",
         attributes: ["Id", "name"],
       },
+      {
+        model: InventoryMaster,
+        attributes: ["Id", "name", "sale_price"],
+      },
     ],
     paranoid: true,
     order:

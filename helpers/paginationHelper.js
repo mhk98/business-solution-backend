@@ -21,10 +21,11 @@
 
 //   module.exports = paginationHelpers
 
-const calculatePagination = (options) => {
+const calculatePagination = (options, config = {}) => {
   const page = Math.max(Number(options.page) || 1, 1);
   const limitRaw = Number(options.limit) || 10;
-  const limit = Math.min(Math.max(limitRaw, 1), 100); // max 100
+  const maxLimit = Math.max(Number(config.maxLimit) || 100, 1);
+  const limit = Math.min(Math.max(limitRaw, 1), maxLimit);
   const skip = (page - 1) * limit;
 
   const sortBy = options.sortBy || "createdAt";

@@ -7,6 +7,7 @@ const CashInOutFilterAbleFields = [
   "category",
   "lender",
   "loanId",
+  "voucherNo",
   "bookId",
 ];
 
@@ -18,6 +19,7 @@ const CashInOutSearchableFields = [
   "paymentStatus",
   "category",
   "bankAccount",
+  "voucherNo",
 ]; // ✅ এখানে searchTerm দিবে না
 
 module.exports = {
