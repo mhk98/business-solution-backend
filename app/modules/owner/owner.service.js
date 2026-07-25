@@ -4,7 +4,6 @@ const db = require("../../../models");
 
 const Owner = db.owner;
 const OwnerTransaction = db.ownerTransaction;
-const CashInOut = db.cashInOut;
 
 const normalizeAmount = (value) => Number(value || 0);
 
@@ -133,36 +132,14 @@ const getAllFromDB = async (filters, options) => {
 const getDataById = async (id) => Owner.findOne({ where: { Id: id } });
 
 const updateOneFromDB = async (id, payload) =>
-  db.sequelize.transaction(async (transaction) => {
-    const data = {
+  Owner.update(
+    {
       name: String(payload.name || "").trim(),
       note: payload.note || null,
       status: payload.status || "Active",
-    };
-
-    const result = await Owner.update(data, { where: { Id: id }, transaction });
-
-    if (data.name) {
-      const transactions = await OwnerTransaction.findAll({
-        attributes: ["cashInOutId"],
-        where: { ownerId: id },
-        transaction,
-        raw: true,
-      });
-      const cashInOutIds = transactions
-        .map((row) => row.cashInOutId)
-        .filter(Boolean);
-
-      if (cashInOutIds.length) {
-        await CashInOut.update(
-          { lender: data.name },
-          { where: { Id: { [Op.in]: cashInOutIds } }, transaction },
-        );
-      }
-    }
-
-    return result;
-  });
+    },
+    { where: { Id: id } },
+  );
 
 const deleteIdFromDB = async (id) => Owner.destroy({ where: { Id: id } });
 

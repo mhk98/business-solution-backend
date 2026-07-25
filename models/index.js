@@ -122,6 +122,11 @@ db.inTransitProduct =
     db.sequelize,
     DataTypes,
   );
+db.courierNoEntry =
+  require("../app/modules/courierNoEntry/courierNoEntry.model")(
+    db.sequelize,
+    DataTypes,
+  );
 
 db.returnProduct = require("../app/modules/returnProduct/returnProduct.model")(
   db.sequelize,
@@ -227,6 +232,14 @@ db.expense = require("../app/modules/expense/expense.model")(
 db.book = require("../app/modules/book/book.model")(db.sequelize, DataTypes);
 
 db.profitLoss = require("../app/modules/profitLoss/profitLoss.model")(
+  db.sequelize,
+  DataTypes,
+);
+db.autoProfitLoss = require("../app/modules/profitLoss/autoProfitLoss.model")(
+  db.sequelize,
+  DataTypes,
+);
+db.userProfitLoss = require("../app/modules/profitLoss/userProfitLoss.model")(
   db.sequelize,
   DataTypes,
 );
@@ -676,6 +689,9 @@ db.returnProduct.belongsTo(db.inventoryMaster, { foreignKey: "productId" });
 
 db.inventoryMaster.hasMany(db.inTransitProduct, { foreignKey: "productId" });
 db.inTransitProduct.belongsTo(db.inventoryMaster, { foreignKey: "productId" });
+
+db.inventoryMaster.hasMany(db.courierNoEntry, { foreignKey: "productId" });
+db.courierNoEntry.belongsTo(db.inventoryMaster, { foreignKey: "productId" });
 
 db.inventoryMaster.hasMany(db.damageProduct, { foreignKey: "productId" });
 db.damageProduct.belongsTo(db.inventoryMaster, { foreignKey: "productId" });
@@ -1303,6 +1319,19 @@ db.inTransitProduct.belongsTo(db.warehouse, {
 
 db.supplier.hasMany(db.inTransitProduct, { foreignKey: "supplierId" });
 db.inTransitProduct.belongsTo(db.supplier, {
+  foreignKey: "supplierId",
+  as: "supplier",
+});
+
+// ---- CourierNoEntry
+db.warehouse.hasMany(db.courierNoEntry, { foreignKey: "warehouseId" });
+db.courierNoEntry.belongsTo(db.warehouse, {
+  foreignKey: "warehouseId",
+  as: "warehouse",
+});
+
+db.supplier.hasMany(db.courierNoEntry, { foreignKey: "supplierId" });
+db.courierNoEntry.belongsTo(db.supplier, {
   foreignKey: "supplierId",
   as: "supplier",
 });
@@ -2022,6 +2051,20 @@ const ensureBatchIdColumn = async (modelKey) => {
   }
 };
 
+const ensureCourierNoEntryColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.courierNoEntry.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.courierStatus) {
+    await queryInterface.addColumn(tableName, "courierStatus", {
+      type: DataTypes.STRING(32),
+      allowNull: true,
+      defaultValue: "On the way",
+    });
+  }
+};
+
 const ensureReceivedProductItemsColumn = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.receivedProduct.getTableName();
@@ -2109,16 +2152,22 @@ const ensureInventoryMovementItemsColumn = async (modelKey) => {
   }
 };
 
-const ensureProfitLossModeColumn = async () => {
+const ensureProfitLossColumns = async (modelKey) => {
   const queryInterface = db.sequelize.getQueryInterface();
-  const tableName = db.profitLoss.getTableName();
+  const tableName = db[modelKey].getTableName();
   const tableDefinition = await queryInterface.describeTable(tableName);
 
   if (!tableDefinition.mode) {
+    const defaultMode =
+      modelKey === "autoProfitLoss"
+        ? "auto"
+        : modelKey === "userProfitLoss"
+          ? "user"
+          : "product";
     await queryInterface.addColumn(tableName, "mode", {
       type: DataTypes.STRING(16),
       allowNull: false,
-      defaultValue: "product",
+      defaultValue: defaultMode,
     });
   }
 
@@ -2127,6 +2176,91 @@ const ensureProfitLossModeColumn = async () => {
       type: DataTypes.DATEONLY,
       allowNull: true,
     });
+  }
+
+  if (!tableDefinition.marketingSpends) {
+    await queryInterface.addColumn(tableName, "marketingSpends", {
+      type: DataTypes.DECIMAL(15, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
+
+  if (!tableDefinition.otherExpenses) {
+    await queryInterface.addColumn(tableName, "otherExpenses", {
+      type: DataTypes.DECIMAL(15, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
+
+  if (!tableDefinition.incentiveType) {
+    await queryInterface.addColumn(tableName, "incentiveType", {
+      type: DataTypes.STRING(16),
+      allowNull: false,
+      defaultValue: "flat",
+    });
+  }
+
+  if (!tableDefinition.incentiveValue) {
+    await queryInterface.addColumn(tableName, "incentiveValue", {
+      type: DataTypes.DECIMAL(15, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
+
+  if (!tableDefinition.incentiveAmount) {
+    await queryInterface.addColumn(tableName, "incentiveAmount", {
+      type: DataTypes.DECIMAL(15, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
+
+  if (!tableDefinition.returnPercentage) {
+    await queryInterface.addColumn(tableName, "returnPercentage", {
+      type: DataTypes.DECIMAL(8, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
+};
+
+const syncProfitLossRowsToModeTables = async () => {
+  const modeTargets = [
+    { mode: "auto", Model: db.autoProfitLoss },
+    { mode: "user", Model: db.userProfitLoss },
+  ];
+
+  for (const { mode, Model } of modeTargets) {
+    const rows = await db.profitLoss.findAll({
+      where: { mode },
+      paranoid: false,
+    });
+
+    for (const row of rows) {
+      const plain = row.get({ plain: true });
+      const existing = await Model.findOne({
+        where: { Id: plain.Id },
+        paranoid: false,
+      });
+      if (existing) continue;
+
+      await Model.create(
+        {
+          ...plain,
+          mode,
+          marketingSpends: plain.marketingSpends || 0,
+          otherExpenses: plain.otherExpenses || 0,
+          incentiveType: plain.incentiveType || "flat",
+          incentiveValue: plain.incentiveValue || 0,
+          incentiveAmount: plain.incentiveAmount || 0,
+          returnPercentage: plain.returnPercentage || 0,
+        },
+        { silent: true },
+      );
+    }
   }
 };
 
@@ -2861,6 +2995,8 @@ db.sequelize
         "loan",
         "warehouse",
         "profitLoss",
+        "autoProfitLoss",
+        "userProfitLoss",
         "salary",
       ].map((modelKey) => ensureStatusAndNoteColumns(modelKey)),
     );
@@ -2875,16 +3011,23 @@ db.sequelize
       ].map((modelKey) => ensureBatchIdColumn(modelKey)),
     );
     await ensureReceivedProductItemsColumn();
+    await ensureCourierNoEntryColumns();
     await Promise.all(
       [
         "inTransitProduct",
+        "courierNoEntry",
         "returnProduct",
         "damageProduct",
         "damageRepair",
         "damageRepaired",
       ].map((modelKey) => ensureInventoryMovementItemsColumn(modelKey)),
     );
-    await ensureProfitLossModeColumn();
+    await Promise.all(
+      ["profitLoss", "autoProfitLoss", "userProfitLoss"].map((modelKey) =>
+        ensureProfitLossColumns(modelKey),
+      ),
+    );
+    await syncProfitLossRowsToModeTables();
     await Promise.all(
       ["assetsPurchase", "assetsSale", "assetsDamage"].map((modelKey) =>
         ensureAssetMovementColumns(modelKey),

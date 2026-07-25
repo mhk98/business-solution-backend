@@ -11,7 +11,7 @@ const EmployeeWorkReport = db.employeeWorkReport;
 const User = db.user;
 const EmployeeList = db.employeeList;
 
-const PRIVILEGED_ROLES = new Set(["superAdmin", "admin"]);
+const PRIVILEGED_ROLES = new Set(["superAdmin", "admin", "marketer"]);
 const TOTAL_ASSIGN_SOURCE_FIELDS = [
   "failedGiven",
   "pendingGiven",

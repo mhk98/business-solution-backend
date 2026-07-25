@@ -177,6 +177,7 @@ const registerInventoryReconcileHooks = (db) => {
   registerMovementHooks(db, "inTransitProduct", "inventory");
   registerMovementHooks(db, "purchaseReturnProduct", "inventory");
   registerMovementHooks(db, "damageProduct", "inventory");
+  registerMovementHooks(db, "courierNoEntry", "inventory");
   registerMovementHooks(db, "posReport", "inventory");
   registerMovementHooks(db, "damageRepaired", "repairing");
 };

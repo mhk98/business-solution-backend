@@ -46,7 +46,10 @@ const getAllFromDB = catchAsync(async (req, res) => {
 });
 
 const getDataById = catchAsync(async (req, res) => {
-  const result = await ProfitLossService.getDataById(req.params.id);
+  const result = await ProfitLossService.getDataById(
+    req.params.id,
+    req.query?.mode,
+  );
   sendResponse(res, {
     statusCode: 200,
     success: true,
@@ -57,7 +60,11 @@ const getDataById = catchAsync(async (req, res) => {
 
 const updateOneFromDB = catchAsync(async (req, res) => {
   const { id } = req.params;
-  const result = await ProfitLossService.updateOneFromDB(id, req.body);
+  const result = await ProfitLossService.updateOneFromDB(
+    id,
+    req.body,
+    req.query?.mode,
+  );
   sendResponse(res, {
     statusCode: 200,
     success: true,
@@ -67,7 +74,10 @@ const updateOneFromDB = catchAsync(async (req, res) => {
 });
 
 const deleteIdFromDB = catchAsync(async (req, res) => {
-  const result = await ProfitLossService.deleteIdFromDB(req.params.id);
+  const result = await ProfitLossService.deleteIdFromDB(
+    req.params.id,
+    req.query?.mode,
+  );
   sendResponse(res, {
     statusCode: 200,
     success: true,

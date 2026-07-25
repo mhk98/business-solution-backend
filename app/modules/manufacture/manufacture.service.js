@@ -454,13 +454,16 @@ const updateOneFromDB = async (id, payload) => {
   const nextTotalCost =
     totalCost === undefined ? toNumber(existing.cost) : totalCost;
   const nextItemId = itemId || existing.itemId;
+  const nextItem = await Item.findOne({ where: { Id: nextItemId } });
+  if (!nextItem) throw new ApiError(404, "Item not found");
+
   const nextProductId =
     productId === "" || productId == null ? existing.productId : productId;
   const nextVariant =
     variant === undefined ? parseVariantPayload(existing.variant) : parseVariantPayload(variant);
   const nextVariantKey =
     variantKey === undefined ? existing.variantKey : variantKey || buildVariantKey(nextVariant);
-  const nextName = name === "" || name == null ? existing.name : name;
+  const nextName = name === "" || name == null ? nextItem.name : name;
 
   const data = {
     itemId: nextItemId,

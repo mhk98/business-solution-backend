@@ -1,6 +1,6 @@
 module.exports = (sequelize, DataTypes) => {
-  const ProfitLoss = sequelize.define(
-    "ProfitLoss",
+  const AutoProfitLoss = sequelize.define(
+    "AutoProfitLoss",
     {
       Id: {
         type: DataTypes.INTEGER(10),
@@ -8,13 +8,12 @@ module.exports = (sequelize, DataTypes) => {
         autoIncrement: true,
         allowNull: false,
       },
-
       mode: {
         type: DataTypes.STRING(16),
         allowNull: false,
-        defaultValue: "product",
+        defaultValue: "auto",
         validate: {
-          isIn: [["product", "user", "auto"]],
+          isIn: [["auto"]],
         },
       },
       salesType: {
@@ -29,27 +28,17 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: false,
       },
-
       purchase: {
         type: DataTypes.INTEGER(10),
         allowNull: false,
-        validate: {
-          notEmpty: true, // Ensure price is not empty
-        },
       },
       revenue: {
         type: DataTypes.INTEGER(10),
         allowNull: false,
-        validate: {
-          notEmpty: true, // Ensure price is not empty
-        },
       },
       return: {
         type: DataTypes.INTEGER(10),
         allowNull: false,
-        validate: {
-          notEmpty: true, // Ensure price is not empty
-        },
       },
       marketingSpends: {
         type: DataTypes.DECIMAL(15, 2),
@@ -81,21 +70,13 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
         defaultValue: 0,
       },
-
       cost: {
         type: DataTypes.INTEGER(10),
         allowNull: false,
-        validate: {
-          notEmpty: true, // Ensure price is not empty
-        },
       },
-
       profitLoss: {
         type: DataTypes.INTEGER(10),
         allowNull: false,
-        validate: {
-          notEmpty: true, // Ensure price is not empty
-        },
       },
       note: {
         type: DataTypes.STRING,
@@ -106,17 +87,16 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
         defaultValue: "Active",
       },
-
       deletedAt: {
         type: DataTypes.DATE,
-        allowNull: true, // This will be used for soft delete
+        allowNull: true,
       },
     },
     {
       timestamps: true,
-      paranoid: true, // Soft delete enabled
+      paranoid: true,
     },
   );
 
-  return ProfitLoss;
+  return AutoProfitLoss;
 };

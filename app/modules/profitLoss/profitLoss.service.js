@@ -1,4 +1,4 @@
-const { Op, where } = require("sequelize"); // Ensure Op is imported
+const { Op } = require("sequelize");
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
@@ -9,8 +9,20 @@ const ProfitLoss = db.profitLoss;
 const Notification = db.notification;
 const User = db.user;
 
+const modelByMode = {
+  auto: db.autoProfitLoss,
+  user: db.userProfitLoss,
+  product: db.profitLoss,
+};
+
+const resolveMode = (mode) => (["auto", "user"].includes(mode) ? mode : "product");
+
+const getModelByMode = (mode) => modelByMode[resolveMode(mode)];
+
 const insertIntoDB = async (payload) => {
-  const result = await ProfitLoss.create(payload);
+  const mode = resolveMode(payload?.mode);
+  const Model = getModelByMode(mode);
+  const result = await Model.create({ ...payload, mode });
   return result;
 };
 
@@ -46,6 +58,14 @@ const sendInvoiceEmail = async (payload) => {
     subject: `Your Profit & Loss Invoice - ${invoiceNumber || ""}`,
     htmlContent,
   });
+
+  if (!result) {
+    const message = sendEmail.lastError?.message
+      ? `Invoice email could not be sent: ${sendEmail.lastError.message}`
+      : "Invoice email could not be sent";
+    throw new ApiError(400, message);
+  }
+
   return result;
 };
 
@@ -53,6 +73,7 @@ const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
 
   const { searchTerm, startDate, endDate, mode, ...otherFilters } = filters;
+  const Model = getModelByMode(mode);
 
   const andConditions = [];
 
@@ -65,16 +86,10 @@ const getAllFromDB = async (filters, options) => {
   //   });
   // }
 
-  console.log("filters", filters);
-
   if (searchTerm) {
     andConditions.push({
       salesType: { [Op.like]: `${searchTerm}%` },
     });
-  }
-
-  if (mode) {
-    andConditions.push({ mode: { [Op.eq]: mode } });
   }
 
   // ✅ Exact filters (e.g. name)
@@ -116,7 +131,7 @@ const getAllFromDB = async (filters, options) => {
     ? { [Op.and]: andConditions }
     : {};
 
-  const result = await ProfitLoss.findAll({
+  const result = await Model.findAll({
     where: whereConditions,
     offset: skip,
     limit,
@@ -127,7 +142,7 @@ const getAllFromDB = async (filters, options) => {
         : [["createdAt", "DESC"]],
   });
 
-  const total = await ProfitLoss.count({ where: whereConditions });
+  const total = await Model.count({ where: whereConditions });
 
   return {
     meta: { page, limit, total },
@@ -135,14 +150,21 @@ const getAllFromDB = async (filters, options) => {
   };
 };
 
-const getDataById = async (id) => {
-  const result = await ProfitLoss.findOne({
+const getDataById = async (id, mode) => {
+  const models = mode
+    ? [getModelByMode(mode)]
+    : [db.profitLoss, db.autoProfitLoss, db.userProfitLoss];
+
+  for (const Model of models) {
+    const result = await Model.findOne({
     where: {
       Id: id,
     },
   });
+    if (result) return result;
+  }
 
-  return result;
+  return null;
 };
 
 // const removeIdFromDB = async (id) => {
@@ -163,8 +185,9 @@ const getDataById = async (id) => {
 //   return result;
 // };
 
-const deleteIdFromDB = async (id) => {
-  const result = await ProfitLoss.destroy({
+const deleteIdFromDB = async (id, mode) => {
+  const Model = getModelByMode(mode);
+  const result = await Model.destroy({
     where: {
       Id: id,
     },
@@ -236,8 +259,10 @@ const deleteIdFromDB = async (id) => {
 //   return updatedCount;
 // };
 
-const updateOneFromDB = async (id, payload) => {
-  const [updatedCount] = await ProfitLoss.update(payload, {
+const updateOneFromDB = async (id, payload, mode) => {
+  const nextMode = resolveMode(mode || payload?.mode);
+  const Model = getModelByMode(nextMode);
+  const [updatedCount] = await Model.update({ ...payload, mode: nextMode }, {
     where: { Id: id },
   });
 
@@ -270,10 +295,18 @@ const updateOneFromDB = async (id, payload) => {
 };
 
 const getAllFromDBWithoutQuery = async () => {
-  const result = await ProfitLoss.findAll({
-    paranoid: true,
-    order: [["createdAt", "DESC"]],
-  });
+  const [productRows, autoRows, userRows] = await Promise.all(
+    [db.profitLoss, db.autoProfitLoss, db.userProfitLoss].map((Model) =>
+      Model.findAll({
+        paranoid: true,
+        order: [["createdAt", "DESC"]],
+      }),
+    ),
+  );
+
+  const result = [...productRows, ...autoRows, ...userRows].sort(
+    (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+  );
 
   return result;
 };

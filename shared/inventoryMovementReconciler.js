@@ -153,18 +153,29 @@ const calculateExpectedInventoryForProduct = async (
 
   if (inventoryRefs.length) {
     const inventoryRefWhere = { productId: inventoryRefs };
-    const [returnRows, inTransitRows, purchaseReturnRows, damageRows] =
+    const [returnRows, inTransitRows, purchaseReturnRows, damageRows, courierRows] =
       await Promise.all([
         fetchRows(db.returnProduct, inventoryRefWhere, transaction),
         fetchRows(db.inTransitProduct, inventoryRefWhere, transaction),
         fetchRows(db.purchaseReturnProduct, inventoryRefWhere, transaction),
         fetchRows(db.damageProduct, inventoryRefWhere, transaction),
+        db.courierNoEntry
+          ? fetchRows(
+              db.courierNoEntry,
+              {
+                productId: inventoryRefs,
+                courierStatus: "Received",
+              },
+              transaction,
+            )
+          : [],
       ]);
 
     returnRows.forEach((row) => applyMovement(state, row, 1));
     inTransitRows.forEach((row) => applyMovement(state, row, -1));
     purchaseReturnRows.forEach((row) => applyMovement(state, row, -1));
     damageRows.forEach((row) => applyMovement(state, row, -1));
+    courierRows.forEach((row) => applyMovement(state, row, 1));
 
     if (db.posReport) {
       const posRows = await fetchRows(db.posReport, {}, transaction);

@@ -6,9 +6,6 @@ const db = require("../../../models");
 const OwnerTransaction = db.ownerTransaction;
 const Owner = db.owner;
 const Book = db.book;
-const CashInOut = db.cashInOut;
-
-const CATEGORY = "Owner Transaction";
 
 const normalizeOptionalId = (value) => {
   if (value === undefined || value === null || String(value).trim() === "") {
@@ -46,21 +43,6 @@ const ensureOwnerAndBook = async ({ ownerId, bookId }, transaction) => {
   return { owner, book };
 };
 
-const buildCashInOutPayload = ({ owner, transactionData }) => ({
-  bookId: transactionData.bookId,
-  paymentMode: "Cash",
-  paymentStatus: transactionData.type === "Deposit" ? "CashIn" : "CashOut",
-  amount: transactionData.amount,
-  remarks: transactionData.remarks || "",
-  note: transactionData.remarks || "",
-  category: CATEGORY,
-  date: transactionData.date,
-  status: transactionData.status || "Active",
-  lender: owner.name,
-  loanId: null,
-  supplierId: null,
-});
-
 const normalizePayload = (payload, existing = {}) => ({
   ownerId:
     normalizeOptionalId(payload.ownerId) ||
@@ -83,17 +65,12 @@ const normalizePayload = (payload, existing = {}) => ({
 const insertIntoDB = async (payload) =>
   db.sequelize.transaction(async (transaction) => {
     const transactionData = normalizePayload(payload);
-    const { owner } = await ensureOwnerAndBook(transactionData, transaction);
-
-    const cashInOut = await CashInOut.create(
-      buildCashInOutPayload({ owner, transactionData }),
-      { transaction },
-    );
+    await ensureOwnerAndBook(transactionData, transaction);
 
     return OwnerTransaction.create(
       {
         ...transactionData,
-        cashInOutId: cashInOut.Id,
+        cashInOutId: null,
       },
       { transaction },
     );
@@ -200,27 +177,12 @@ const updateOneFromDB = async (id, payload) =>
     if (!existing) throw new ApiError(404, "Owner transaction not found");
 
     const transactionData = normalizePayload(payload, existing);
-    const { owner } = await ensureOwnerAndBook(transactionData, transaction);
-    const cashPayload = buildCashInOutPayload({ owner, transactionData });
-
-    let cashInOutId = existing.cashInOutId;
-    if (cashInOutId) {
-      const [updated] = await CashInOut.update(cashPayload, {
-        where: { Id: cashInOutId },
-        transaction,
-      });
-      if (!updated) cashInOutId = null;
-    }
-
-    if (!cashInOutId) {
-      const cashInOut = await CashInOut.create(cashPayload, { transaction });
-      cashInOutId = cashInOut.Id;
-    }
+    await ensureOwnerAndBook(transactionData, transaction);
 
     await existing.update(
       {
         ...transactionData,
-        cashInOutId,
+        cashInOutId: null,
       },
       { transaction },
     );
@@ -232,13 +194,6 @@ const deleteIdFromDB = async (id) =>
   db.sequelize.transaction(async (transaction) => {
     const existing = await OwnerTransaction.findByPk(id, { transaction });
     if (!existing) return 0;
-
-    if (existing.cashInOutId) {
-      await CashInOut.destroy({
-        where: { Id: existing.cashInOutId },
-        transaction,
-      });
-    }
 
     return existing.destroy({ transaction });
   });

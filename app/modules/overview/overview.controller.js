@@ -19,8 +19,22 @@ const getOverviewSummaryFromDB = catchAsync(async (req, res) => {
   });
 });
 
+const getOverviewDashboardFromDB = catchAsync(async (req, res) => {
+  const filters = pick(req.query, OverviewFilterAbleFileds);
+
+  const result = await OverviewService.getOverviewDashboardFromDB(filters);
+
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Overview dashboard fetched!!",
+    data: result,
+  });
+});
+
 const OverviewController = {
   getOverviewSummaryFromDB,
+  getOverviewDashboardFromDB,
 };
 
 module.exports = OverviewController;

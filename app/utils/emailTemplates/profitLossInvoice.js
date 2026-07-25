@@ -21,7 +21,10 @@ const fmtNum = (value) => (Number(value) || 0).toLocaleString();
 
 const thStyle =
   'style="padding:10px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#475569;background:#f8fafc;border-bottom:2px solid #e2e8f0;"';
-
+const dateThStyle =
+  'style="padding:10px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#475569;background:#f8fafc;border-bottom:2px solid #e2e8f0;white-space:nowrap;min-width:96px;width:96px;"';
+const dateTdStyle =
+  'style="padding:8px 10px;border-bottom:1px solid #f1f5f9;white-space:nowrap;min-width:96px;width:96px;"';
 const sectionTitle = (title) =>
   `<h3 style="margin:0 0 10px;font-size:14px;font-weight:700;color:#1e293b;border-bottom:2px solid #e2e8f0;padding-bottom:6px;">${esc(title)}</h3>`;
 
@@ -34,7 +37,6 @@ const profitLossInvoiceTemplate = ({
   selectedProducts = [],
   employeeReports = [],
   calculationSummary = {},
-  savedHistory = [],
   supportEmail = process.env.MAIL_SUPPORT_EMAIL || process.env.MAIL_FROM_EMAIL || "",
 }) => {
   const {
@@ -44,6 +46,9 @@ const profitLossInvoiceTemplate = ({
     grossProfit = 0,
     marketingCost = 0,
     otherCost = 0,
+    incentiveType = "flat",
+    incentiveValue = 0,
+    incentiveAmount = 0,
     returnRate = 0,
     returnDeduction = 0,
     finalProfit = 0,
@@ -95,7 +100,7 @@ const profitLossInvoiceTemplate = ({
           const rows = employeeReports
             .map(
               (r) => `<tr>
-                <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;">${esc(r.reportDate)}</td>
+                <td ${dateTdStyle}>${esc(r.reportDate)}</td>
                 <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;font-weight:600;">${esc(r.name)}</td>
                 <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;color:#64748b;">${esc(r.failed)}</td>
                 <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;color:#64748b;">${esc(r.pending)}</td>
@@ -113,7 +118,7 @@ const profitLossInvoiceTemplate = ({
       <div style="overflow-x:auto;margin-bottom:20px;">
         <table style="width:100%;border-collapse:collapse;min-width:720px;">
           <thead><tr>
-            <th ${thStyle}>Date</th>
+            <th ${dateThStyle}>Date</th>
             <th ${thStyle}>Name</th>
             <th ${thStyle}>Failed</th>
             <th ${thStyle}>Pending</th>
@@ -147,6 +152,10 @@ const profitLossInvoiceTemplate = ({
           <td style="padding:8px 12px;border:1px solid #e2e8f0;color:#475569;font-size:13px;">Other Expenses</td>
           <td style="padding:8px 12px;border:1px solid #e2e8f0;font-weight:700;font-size:13px;">${fmtCurrency(otherCost)}</td>
         </tr>
+        <tr>
+          <td style="padding:8px 12px;border:1px solid #e2e8f0;color:#475569;font-size:13px;">Incentive${incentiveType === "percentage" ? ` (${(Number(incentiveValue) || 0).toFixed(2)}%)` : ""}</td>
+          <td style="padding:8px 12px;border:1px solid #e2e8f0;font-weight:700;font-size:13px;" colspan="3">${fmtCurrency(incentiveAmount)}</td>
+        </tr>
         ${
           Number(totalCost) > 0
             ? `
@@ -168,77 +177,31 @@ const profitLossInvoiceTemplate = ({
         </tr>
       </table>`;
 
-  // ── Saved history table ──────────────────────────────────────────────────
-  const isUserMode =
-    savedHistory.length > 0 && savedHistory[0].purchase === undefined;
-  const historyRows =
-    savedHistory.length > 0
-      ? savedHistory
-          .map((hr) => {
-            const plColor =
-              (Number(hr.profitLoss) || 0) >= 0 ? "#059669" : "#dc2626";
-            if (isUserMode) {
-              return `<tr>
-                <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;">${esc(hr.date)}</td>
-                <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;">${esc(hr.salesType)}</td>
-                <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-weight:700;">${fmtCurrency(hr.revenue)}</td>
-                <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-weight:700;">${fmtCurrency(hr.return)}</td>
-                <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-weight:700;">${fmtCurrency(hr.cost)}</td>
-                <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-weight:700;color:${plColor};">${fmtCurrency(hr.profitLoss)}</td>
-              </tr>`;
-            }
-            return `<tr>
-              <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;">${esc(hr.date)}</td>
-              <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;">${esc(hr.salesType)}</td>
-              <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;">${fmtNum(hr.products)}</td>
-              <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-weight:700;">${fmtCurrency(hr.purchase)}</td>
-              <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-weight:700;">${fmtCurrency(hr.revenue)}</td>
-              <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-weight:700;">${fmtCurrency(hr.return)}</td>
-              <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-weight:700;">${fmtCurrency(hr.cost)}</td>
-              <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-weight:700;color:${plColor};">${fmtCurrency(hr.profitLoss)}</td>
-            </tr>`;
-          })
-          .join("")
-      : `<tr><td colspan="${isUserMode ? 6 : 8}" style="padding:16px;text-align:center;color:#94a3b8;">কোনো saved history নেই</td></tr>`;
-
-  const historySection = `
-      ${sectionTitle("Saved Profit/Loss History")}
-      <div style="overflow-x:auto;margin-bottom:20px;">
-        <table style="width:100%;border-collapse:collapse;min-width:${isUserMode ? 480 : 600}px;">
-          <thead><tr>
-            <th ${thStyle}>Date</th>
-            <th ${thStyle}>Sales Type</th>
-            ${isUserMode ? "" : `<th ${thStyle}>Products</th><th ${thStyle}>Purchase</th>`}
-            <th ${thStyle}>Sale</th>
-            <th ${thStyle}>Return</th>
-            <th ${thStyle}>Cost</th>
-            <th ${thStyle}>Profit/Loss</th>
-          </tr></thead>
-          <tbody>${historyRows}</tbody>
-        </table>
-      </div>`;
-
   return `
 <div style="margin:0;padding:24px;background:#f4f7fb;font-family:Arial,sans-serif;">
   <div style="max-width:700px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;">
 
     <div style="padding:22px 24px;background:linear-gradient(135deg,#0f172a,#1d4ed8);">
-      <h2 style="margin:0;color:#ffffff;font-size:20px;font-weight:700;">${esc(companyName)}</h2>
-      <p style="margin:6px 0 0;color:#dbeafe;font-size:13px;">${esc(reportTitle)}</p>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr>
+          <td style="vertical-align:top;padding:0;border:0;">
+            <h2 style="margin:0;color:#ffffff;font-size:20px;font-weight:700;">${esc(companyName)}</h2>
+            <p style="margin:6px 0 0;color:#dbeafe;font-size:13px;">${esc(reportTitle)}</p>
+          </td>
+          <td style="vertical-align:top;text-align:right;padding:0;border:0;min-width:230px;">
+            ${invoiceNumber ? `<p style="margin:0 0 6px;color:#e0e7ff;font-size:12px;"><strong style="color:#ffffff;">Invoice No:</strong> ${esc(invoiceNumber)}</p>` : ""}
+            ${reportDate ? `<p style="margin:0 0 6px;color:#e0e7ff;font-size:12px;"><strong style="color:#ffffff;">Date:</strong> ${esc(reportDate)}</p>` : ""}
+            ${salesType ? `<p style="margin:0;color:#e0e7ff;font-size:12px;"><strong style="color:#ffffff;">Sales Type:</strong> ${esc(salesType)}</p>` : ""}
+          </td>
+        </tr>
+      </table>
     </div>
 
     <div style="padding:24px;">
 
-      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:20px;">
-        ${invoiceNumber ? `<p style="margin:0 0 6px;color:#0f172a;font-size:13px;"><strong>Invoice No:</strong> ${esc(invoiceNumber)}</p>` : ""}
-        ${reportDate ? `<p style="margin:0 0 6px;color:#0f172a;font-size:13px;"><strong>Date:</strong> ${esc(reportDate)}</p>` : ""}
-        ${salesType ? `<p style="margin:0;color:#0f172a;font-size:13px;"><strong>Sales Type:</strong> ${esc(salesType)}</p>` : ""}
-      </div>
-
+      ${breakdownSection}
       ${productSection}
       ${employeeSection}
-      ${breakdownSection}
-      ${historySection}
 
       <p style="margin:18px 0 0;color:#4b5563;font-size:13px;line-height:1.7;">
         If you have any questions, please contact us at

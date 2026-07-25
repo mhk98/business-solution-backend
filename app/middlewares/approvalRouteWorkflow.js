@@ -26,6 +26,8 @@ const readDeleteNote = (req) =>
   req.headers["x-approval-note"];
 
 const hasAttribute = (Model, field) => Boolean(Model?.rawAttributes?.[field]);
+const resolveWorkflowModelKey = (modelKey, req) =>
+  typeof modelKey === "function" ? modelKey(req) : modelKey;
 
 const stripWorkflowNote = (value) =>
   String(value || "")
@@ -93,11 +95,12 @@ const applyApprovalWorkflow =
   ({ modelKey, entityLabel, updatePrivilegedRoles }) =>
   async (req, res, next) => {
     try {
-      const Model = db[modelKey];
+      const resolvedModelKey = resolveWorkflowModelKey(modelKey, req);
+      const Model = db[resolvedModelKey];
       if (!Model) {
         throw new ApiError(
           500,
-          `${entityLabel || modelKey} workflow model not found`,
+          `${entityLabel || resolvedModelKey} workflow model not found`,
         );
       }
 
@@ -170,7 +173,7 @@ const applyApprovalWorkflow =
 
       // Ownership guard: employees can only request delete for their own KPI rows.
       if (
-        modelKey === "kpi" &&
+        resolvedModelKey === "kpi" &&
         req.user?.role === ENUM_USER_ROLE.EMPLOYEE &&
         hasAttribute(Model, "userId") &&
         Number(existing.userId) !== Number(req.user?.Id)
@@ -244,9 +247,9 @@ const applyApprovalWorkflow =
               : null;
 
           const url =
-            modelKey === "cashInOut" && bookId
+            resolvedModelKey === "cashInOut" && bookId
               ? `/book/${bookId}`
-              : modelKey === "cashInOut"
+              : resolvedModelKey === "cashInOut"
                 ? `/cash-in-out`
                 : `${req.baseUrl || ""}`;
 
@@ -278,11 +281,12 @@ const approvePendingWorkflow =
   ({ modelKey, entityLabel }) =>
   async (req, res, next) => {
     try {
-      const Model = db[modelKey];
+      const resolvedModelKey = resolveWorkflowModelKey(modelKey, req);
+      const Model = db[resolvedModelKey];
       if (!Model) {
         throw new ApiError(
           500,
-          `${entityLabel || modelKey} workflow model not found`,
+          `${entityLabel || resolvedModelKey} workflow model not found`,
         );
       }
 
@@ -295,13 +299,15 @@ const approvePendingWorkflow =
         existing.pendingAction === "Delete" ||
         existing.status === "Pending Delete"
       ) {
-        if (modelKey === "receivedProduct") {
+        if (resolvedModelKey === "receivedProduct") {
           await ReceivedProductService.deleteIdFromDB(req.params.id);
         } else {
           await Model.destroy({ where: { Id: req.params.id } });
         }
         if (
-          ["assetsPurchase", "assetsSale", "assetsDamage"].includes(modelKey)
+          ["assetsPurchase", "assetsSale", "assetsDamage"].includes(
+            resolvedModelKey,
+          )
         ) {
           await db.sequelize.transaction(async (t) => {
             await rebuildAssetsStockBalances(t);
@@ -318,7 +324,7 @@ const approvePendingWorkflow =
 
       if (hasAttribute(Model, "status")) {
         approvalPayload.status =
-          modelKey === "cashInOut" ? "Approved" : "Active";
+          resolvedModelKey === "cashInOut" ? "Approved" : "Active";
       }
       if (hasAttribute(Model, "pendingAction")) {
         approvalPayload.pendingAction = null;
@@ -336,15 +342,19 @@ const approvePendingWorkflow =
 
       const updated = await Model.findOne({ where: { Id: req.params.id } });
 
-      if (["assetsPurchase", "assetsSale", "assetsDamage"].includes(modelKey)) {
+      if (
+        ["assetsPurchase", "assetsSale", "assetsDamage"].includes(
+          resolvedModelKey,
+        )
+      ) {
         await db.sequelize.transaction(async (t) => {
           await rebuildAssetsStockBalances(t);
         });
       }
-      if (modelKey === "pettyCash") {
+      if (resolvedModelKey === "pettyCash") {
         await notifyApprovedPettyCash(req);
       }
-      if (modelKey === "assetsRequisition") {
+      if (resolvedModelKey === "assetsRequisition") {
         await notifyApprovedAssetsRequisition(req);
       }
 

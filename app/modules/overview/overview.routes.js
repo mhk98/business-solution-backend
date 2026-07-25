@@ -15,5 +15,13 @@ router.get(
   OverviewController.getOverviewSummaryFromDB,
 );
 
+// GET /api/v1/overview/dashboard?from=2026-01-01&to=2026-01-30
+router.get(
+  "/dashboard",
+  auth(),
+  requireMenuPermission("overview"),
+  OverviewController.getOverviewDashboardFromDB,
+);
+
 const OverviewRoutes = router;
 module.exports = OverviewRoutes;
