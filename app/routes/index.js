@@ -92,9 +92,11 @@ const PayrollRunRoutes = require("../modules/payrollRun/payrollRun.routes");
 const PayrollItemRoutes = require("../modules/payrollItem/payrollItem.routes");
 const ProfileLossRoutes = require("../modules/profitLoss/profitLoss.routes");
 const RolePermissionRoutes = require("../modules/rolePermission/rolePermission.routes");
+const MasterPermissionRoutes = require("../modules/masterPermission/masterPermission.routes");
 const UserLogHistoryRoutes = require("../modules/userLogHistory/userLogHistory.routes");
 const KPIRoutes = require("../modules/kpi/kpi.routes");
 const ChatRoutes = require("../modules/chat/chat.routes");
+const SystemResetRoutes = require("../modules/systemReset/systemReset.routes");
 
 const router = express.Router();
 
@@ -102,6 +104,14 @@ const moduleRoutes = [
   {
     path: "/user",
     route: UserRoutes,
+  },
+  {
+    path: "/system-reset",
+    route: SystemResetRoutes,
+  },
+  {
+    path: "/master-permissions",
+    route: MasterPermissionRoutes,
   },
   {
     path: "/daily-work-reports",

@@ -70,7 +70,16 @@ const getAllFromDB = async (filters, options) => {
   }
 
   if (module) {
-    andConditions.push({ module });
+    const modules = String(module)
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (modules.length > 1) {
+      andConditions.push({ module: { [Op.in]: modules } });
+    } else if (modules.length === 1) {
+      andConditions.push({ module: modules[0] });
+    }
   }
 
   if (action) {

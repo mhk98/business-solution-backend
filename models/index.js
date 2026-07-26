@@ -14,6 +14,11 @@ db.rolePermission =
     db.sequelize,
     DataTypes,
   );
+db.masterPermission =
+  require("../app/modules/masterPermission/masterPermission.model")(
+    db.sequelize,
+    DataTypes,
+  );
 db.userLogHistory =
   require("../app/modules/userLogHistory/userLogHistory.model")(
     db.sequelize,
@@ -3055,6 +3060,7 @@ db.sequelize
         ensureDamageStockPriceColumns(modelKey),
       ),
     );
+    await require("../app/modules/masterPermission/masterPermission.service").ensureDefaultMasterPermission();
     await syncAssetsStockSeedData();
     await syncDamageStockPriceData();
     await require("../app/modules/kpi/kpi.service").ensureDefaultSettings();

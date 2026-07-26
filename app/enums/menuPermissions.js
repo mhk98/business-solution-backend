@@ -74,6 +74,7 @@ const MENU_PERMISSIONS = {
   DELIVERY_ADVANCE: "delivery_advance",
   DELIVERY_CHARGE: "delivery_charge",
   ROLE_PERMISSIONS: "role_permissions",
+  MASTER_PERMISSION: "master_permission",
   LOG_HISTORY: "log_history",
   HRM: "hrm",
   EMPLOYEE_MANAGEMENT: "employee_management",
