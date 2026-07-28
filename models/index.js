@@ -2685,6 +2685,8 @@ const ensureUserRoleColumn = async () => {
     "admin",
     "marketer",
     "leader",
+    "leaderCs",
+    "leaderLogistics",
     "inventor",
     "accountant",
     "hr",
@@ -3082,6 +3084,18 @@ db.sequelize
       ENUM_USER_ROLE.STAFF,
       ENUM_USER_ROLE.USER,
     ]);
+    const rolesWithLegacyShifaDefault = new Set([
+      ENUM_USER_ROLE.SUPER_ADMIN,
+      ENUM_USER_ROLE.ADMIN,
+    ]);
+    const legacyShifaPermissionSet = new Set([
+      MENU_PERMISSIONS.SHIFA,
+      MENU_PERMISSIONS.SHIFA_OVERVIEW,
+      MENU_PERMISSIONS.SHIFA_CALL_HISTORY,
+      MENU_PERMISSIONS.SHIFA_STARTING_SITUATION,
+      MENU_PERMISSIONS.SHIFA_PROBLEM_HISTORY,
+      MENU_PERMISSIONS.SHIFA_PATIENT_UPDATE,
+    ]);
 
     const normalizePermissionList = (permissions) => {
       if (Array.isArray(permissions)) return permissions;
@@ -3146,6 +3160,34 @@ db.sequelize
       }
     };
 
+    const removeLegacyShifaDefault = async (role, defaultMenuPermissions) => {
+      if (!rolesWithLegacyShifaDefault.has(role)) return;
+
+      const record = await db.rolePermission.findOne({ where: { role } });
+      if (!record) return;
+
+      const currentPermissions = normalizePermissionList(
+        record.menuPermissions,
+      );
+      if (
+        !currentPermissions.some((permission) =>
+          legacyShifaPermissionSet.has(permission),
+        )
+      ) {
+        return;
+      }
+
+      const permissionsWithoutShifa = currentPermissions.filter(
+        (permission) => !legacyShifaPermissionSet.has(permission),
+      );
+
+      if (areSamePermissions(permissionsWithoutShifa, defaultMenuPermissions)) {
+        await record.update({
+          menuPermissions: permissionsWithoutShifa,
+        });
+      }
+    };
+
     await Promise.all(
       Object.entries(DEFAULT_ROLE_MENU_PERMISSIONS).map(
         async ([role, menuPermissions]) => {
@@ -3157,6 +3199,7 @@ db.sequelize
             },
           });
           await removeLegacyDailyWorkReportDefault(role, menuPermissions);
+          await removeLegacyShifaDefault(role, menuPermissions);
         },
       ),
     );

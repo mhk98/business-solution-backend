@@ -75,6 +75,8 @@ module.exports = (sequelize, DataTypes) => {
           "admin",
           "marketer",
           "leader",
+          "leaderCs",
+          "leaderLogistics",
           "inventor",
           "accountant",
           "hr",

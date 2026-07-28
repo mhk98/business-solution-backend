@@ -165,12 +165,6 @@ const includeNewSettingsChildren = (role, permissions = []) => {
     "stock_movement",
     "cs_work_reports",
     "logistic_work_reports",
-    "shifa",
-    "shifa_overview",
-    "shifa_call_history",
-    "shifa_starting_situation",
-    "shifa_problem_history",
-    "shifa_patient_update",
     "employee_profile",
     "employee_kpi",
   ].forEach((permission) => {
