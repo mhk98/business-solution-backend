@@ -58,22 +58,43 @@ const deleteAllFromModel = async (model, transaction) => {
   return { deleted, total: count };
 };
 
-const deleteEightyPercentFromModel = async (model, transaction) => {
+const shuffle = (items) => {
+  const shuffled = [...items];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]];
+  }
+  return shuffled;
+};
+
+const normalizeDeletePercentage = (mode, percentage) => {
+  if (mode === "all") return 100;
+
+  const parsed = Number(percentage);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) {
+    throw new ApiError(400, "Delete percentage must be between 1 and 100.");
+  }
+
+  return parsed;
+};
+
+const deletePercentageFromModel = async (model, transaction, percentage) => {
   const total = await model.count({ paranoid: false, transaction });
-  const deleteCount = Math.floor(total * 0.8);
+  const deleteCount = Math.floor(total * (percentage / 100));
   if (!deleteCount) return { deleted: 0, total };
 
   const primaryKey = model.primaryKeyAttribute || "Id";
   const rows = await model.findAll({
     attributes: [primaryKey],
-    limit: deleteCount,
-    order: [[primaryKey, "ASC"]],
     paranoid: false,
     raw: true,
     transaction,
   });
 
-  const ids = rows.map((row) => row[primaryKey]).filter(Boolean);
+  const ids = shuffle(rows.map((row) => row[primaryKey]).filter(Boolean)).slice(
+    0,
+    deleteCount,
+  );
   if (!ids.length) return { deleted: 0, total };
 
   const deleted = await model.destroy({
@@ -87,10 +108,11 @@ const deleteEightyPercentFromModel = async (model, transaction) => {
   return { deleted, total };
 };
 
-const resetData = async ({ mode, confirmation, user }) => {
+const resetData = async ({ mode, percentage, confirmation, user }) => {
   await assertResetAccess(user, confirmation);
 
-  const normalizedMode = mode === "all" ? "all" : "eightyPercent";
+  const normalizedMode = mode === "all" ? "all" : "percentage";
+  const deletePercentage = normalizeDeletePercentage(normalizedMode, percentage);
   const resettableModels = getResettableModels();
   const transaction = await db.sequelize.transaction();
 
@@ -102,7 +124,7 @@ const resetData = async ({ mode, confirmation, user }) => {
       const result =
         normalizedMode === "all"
           ? await deleteAllFromModel(model, transaction)
-          : await deleteEightyPercentFromModel(model, transaction);
+          : await deletePercentageFromModel(model, transaction, deletePercentage);
 
       results.push({ model: key, ...result });
     }
@@ -112,6 +134,7 @@ const resetData = async ({ mode, confirmation, user }) => {
 
     return {
       mode: normalizedMode,
+      deletePercentage,
       protectedModels: Array.from(PROTECTED_MODEL_KEYS),
       deletedTotal: results.reduce((sum, item) => sum + Number(item.deleted || 0), 0),
       results,

@@ -55,7 +55,17 @@ const employeeIncludes = [
   {
     model: Shift,
     as: "shift",
-    attributes: ["Id", "name", "code", "startTime", "endTime", "status"],
+    attributes: [
+      "Id",
+      "name",
+      "code",
+      "startTime",
+      "endTime",
+      "graceInMinutes",
+      "graceOutMinutes",
+      "weeklyOffDays",
+      "status",
+    ],
     required: false,
   },
   {

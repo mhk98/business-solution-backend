@@ -18,11 +18,51 @@ const PackagingFactoryStock = db.packagingFactoryStock;
 
 const normalizePackagingItems = (items = []) =>
   (Array.isArray(items) ? items : [])
-    .map((item) => ({
-      packagingFactoryStockId: Number(item.packagingFactoryStockId || item.Id),
-      unitValue: toNumber(item.unitValue),
-    }))
+    .map((item) => {
+      const value = toNumber(item.value ?? item.unitValue);
+      const quantity = toNumber(item.quantity || 1);
+      const total = toNumber(item.total || value * quantity);
+      return {
+        packagingFactoryStockId: Number(item.packagingFactoryStockId || item.Id),
+        value,
+        unit: item.unit || "Pcs",
+        quantity,
+        total,
+        unitValue: total,
+      };
+    })
     .filter((item) => item.packagingFactoryStockId && item.unitValue > 0);
+
+const validatePackagingItemsForManufacturer = async (
+  packagingItems = [],
+  manufacturerId,
+) => {
+  if (!packagingItems.length) return;
+
+  const stockRows = await PackagingFactoryStock.findAll({
+    where: {
+      Id: {
+        [Op.in]: packagingItems.map((item) => item.packagingFactoryStockId),
+      },
+    },
+    attributes: ["Id", "manufacturerId", "name"],
+  });
+  const stockById = new Map(stockRows.map((row) => [Number(row.Id), row]));
+  const invalidItem = packagingItems.find((item) => {
+    const stock = stockById.get(Number(item.packagingFactoryStockId));
+    return !stock || String(stock.manufacturerId) !== String(manufacturerId);
+  });
+
+  if (invalidItem) {
+    const stock = stockById.get(Number(invalidItem.packagingFactoryStockId));
+    throw new ApiError(
+      400,
+      stock
+        ? `${stock.name} does not belong to selected packaging manufacturer`
+        : "Packaging manufacturer stock not found",
+    );
+  }
+};
 
 const adjustItemStock = async ({ itemId, name, unit, unitValue, cost, delta, transaction }) => {
   const stockRow = await ItemMaster.findOne({
@@ -131,20 +171,26 @@ const buildPayload = async (payload, existing = null) => {
   if (unitValue <= 0) throw new ApiError(400, "Unit details must be greater than 0");
   const unitCost = toNumber(payload.unitCost ?? existing?.unitCost);
   const wage = toNumber(payload.wage ?? existing?.wage);
+  const othersCost = toNumber(payload.othersCost ?? existing?.othersCost);
   const itemQuantity = toNumber(payload.itemQuantity ?? existing?.itemQuantity);
+  const packagingItems = normalizePackagingItems(
+    payload.packagingItems || existing?.packagingItems || [],
+  );
+  await validatePackagingItemsForManufacturer(packagingItems, manufacturer.Id);
 
   return {
     itemId: item.Id,
     name: item.name,
     manufacturerId: manufacturer.Id,
     manufacturerName: manufacturer.name,
-    packagingItems: normalizePackagingItems(payload.packagingItems || existing?.packagingItems || []),
+    packagingItems,
     unit,
     unitValue,
     unitCost,
     itemQuantity,
     wage,
-    wageAmount: unitValue * wage,
+    othersCost,
+    wageAmount: unitValue * wage + othersCost,
     date: payload.date || existing?.date || new Date().toISOString().slice(0, 10),
     note: payload.note !== undefined ? payload.note || null : existing?.note || null,
     status: payload.status || existing?.status || "Active",
@@ -174,7 +220,7 @@ const applyRecordEffects = async (data, recordId, transaction) => {
     {
       ...data,
       mixerId: recordId,
-      note: `${data.unitValue} x ${data.wage}`,
+      note: `${data.unitValue} x ${data.wage} + others ${data.othersCost}`,
     },
     transaction,
   );

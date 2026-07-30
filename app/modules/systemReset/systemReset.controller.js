@@ -5,6 +5,7 @@ const SystemResetService = require("./systemReset.service");
 const resetData = catchAsync(async (req, res) => {
   const result = await SystemResetService.resetData({
     mode: req.body?.mode,
+    percentage: req.body?.percentage,
     confirmation: req.body?.confirmation,
     user: req.user,
   });

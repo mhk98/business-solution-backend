@@ -407,6 +407,18 @@ db.attendanceLog = require("../app/modules/attendanceLog/attendanceLog.model")(
   DataTypes,
 );
 
+db.stellarAttendanceLog =
+  require("../app/modules/stellarAttendance/stellarAttendanceLog.model")(
+    db.sequelize,
+    DataTypes,
+  );
+
+db.stellarAttendanceSyncState =
+  require("../app/modules/stellarAttendance/stellarAttendanceSyncState.model")(
+    db.sequelize,
+    DataTypes,
+  );
+
 db.attendanceSummary =
   require("../app/modules/attendanceSummary/attendanceSummary.model")(
     db.sequelize,
@@ -2119,6 +2131,11 @@ const ensurePackagingItemPurchaseColumns = async () => {
     allowNull: false,
     defaultValue: 0,
   });
+  await maybeAddColumn("othersCost", {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    defaultValue: 0,
+  });
   await maybeAddColumn("batchId", {
     type: DataTypes.STRING,
     allowNull: true,
@@ -2502,6 +2519,28 @@ const ensureMixerManufacturerColumns = async () => {
       defaultValue: 0,
     });
   }
+
+  if (!tableDefinition.othersCost) {
+    await queryInterface.addColumn(tableName, "othersCost", {
+      type: DataTypes.DECIMAL(14, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
+};
+
+const ensurePackagingMixerColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.packagingMixer.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.othersCost) {
+    await queryInterface.addColumn(tableName, "othersCost", {
+      type: DataTypes.DECIMAL(14, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
 };
 
 const ensurePettyCashColumns = async (modelKey) => {
@@ -2605,6 +2644,20 @@ const ensureCashInOutLoanColumns = async () => {
 
   if (!tableDefinition.loanId) {
     await queryInterface.addColumn(tableName, "loanId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+
+  if (!tableDefinition.bookId) {
+    await queryInterface.addColumn(tableName, "bookId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+
+  if (!tableDefinition.supplierId) {
+    await queryInterface.addColumn(tableName, "supplierId", {
       type: DataTypes.INTEGER(10),
       allowNull: true,
     });
@@ -3047,6 +3100,7 @@ db.sequelize
     await ensurePurchaseReturnProductItemsColumn();
     await ensureManufactureVariantColumns();
     await ensureMixerManufacturerColumns();
+    await ensurePackagingMixerColumns();
     await Promise.all(
       ["pettyCash", "pettyCashRequisition"].map((modelKey) =>
         ensurePettyCashColumns(modelKey),

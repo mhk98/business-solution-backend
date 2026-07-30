@@ -37,8 +37,8 @@ const toNumber = (value) => {
   return Number.isFinite(num) ? num : 0;
 };
 
-const calculateMixerWageAmount = (combo, unitWage) =>
-  toNumber(combo) * toNumber(unitWage);
+const calculateMixerWageAmount = (combo, unitWage, othersCost = 0) =>
+  toNumber(combo) * toNumber(unitWage) + toNumber(othersCost);
 
 const createManufacturerTransaction = async (
   payload = {},
@@ -74,7 +74,8 @@ const reconcileMixerWageTransaction = async (
   const nextAmount = toNumber(next.wageAmount);
   const sameWageInputs =
     toNumber(previous.combo) === toNumber(next.combo) &&
-    toNumber(previous.unitWage) === toNumber(next.unitWage);
+    toNumber(previous.unitWage) === toNumber(next.unitWage) &&
+    toNumber(previous.othersCost) === toNumber(next.othersCost);
   if (
     Number(previous.manufacturerId || 0) === Number(next.manufacturerId || 0) &&
     previousAmount === nextAmount &&
@@ -112,7 +113,7 @@ const reconcileMixerWageTransaction = async (
         date: next.date,
         note:
           next.unitWage && next.combo
-            ? `${toNumber(next.combo)} x ${toNumber(next.unitWage)}`
+            ? `${toNumber(next.combo)} x ${toNumber(next.unitWage)} + others ${toNumber(next.othersCost)}`
             : null,
       },
       transaction,
@@ -1065,6 +1066,7 @@ const sanitizeMixerRecord = (record) => {
     record.setDataValue("purchase_price", purchase_price || 0);
     record.setDataValue("sale_price", sale_price || 0);
     record.setDataValue("unitWage", toNumber(record.unitWage));
+    record.setDataValue("othersCost", toNumber(record.othersCost));
     record.setDataValue("wageAmount", toNumber(record.wageAmount));
     return record;
   }
@@ -1079,6 +1081,7 @@ const sanitizeMixerRecord = (record) => {
     purchase_price: purchase_price || 0,
     sale_price: sale_price || 0,
     unitWage: toNumber(record.unitWage),
+    othersCost: toNumber(record.othersCost),
     wageAmount: toNumber(record.wageAmount),
   };
 };
@@ -1127,6 +1130,7 @@ const insertIntoDB = async (payload) => {
     purchase_price,
     sale_price,
     unitWage,
+    othersCost,
   } = payload;
 
   const productData = await Product.findOne({ where: { Id: productId } });
@@ -1141,7 +1145,12 @@ const insertIntoDB = async (payload) => {
   if (outputQuantity <= 0) {
     throw new ApiError(400, "Combo quantity must be greater than 0");
   }
-  const wageAmount = calculateMixerWageAmount(outputQuantity, unitWage);
+  const mixerOthersCost = toNumber(othersCost);
+  const wageAmount = calculateMixerWageAmount(
+    outputQuantity,
+    unitWage,
+    mixerOthersCost,
+  );
 
   return db.sequelize.transaction(async (t) => {
     const manufacturer = await getManufacturerById(manufacturerId, t);
@@ -1169,6 +1178,7 @@ const insertIntoDB = async (payload) => {
         date,
         combo: outputQuantity,
         unitWage: toNumber(unitWage),
+        othersCost: mixerOthersCost,
         wageAmount,
         note: storedNote,
       },
@@ -1184,6 +1194,7 @@ const insertIntoDB = async (payload) => {
         productName: productData.name,
         combo: outputQuantity,
         unitWage,
+        othersCost: mixerOthersCost,
         wageAmount,
         date,
       },
@@ -1344,6 +1355,7 @@ const deleteIdFromDB = async (id) => {
         manufacturerName: existing.manufacturerName,
         mixerId: existing.Id,
         productName: existing.name,
+        othersCost: existing.othersCost,
         wageAmount: existing.wageAmount,
         date: existing.date,
       },
@@ -1375,6 +1387,7 @@ const updateOneFromDB = async (id, payload) => {
     purchase_price,
     sale_price,
     unitWage,
+    othersCost,
   } = payload;
 
   const existing = await Mixer.findOne({
@@ -1390,6 +1403,7 @@ const updateOneFromDB = async (id, payload) => {
       "date",
       "combo",
       "unitWage",
+      "othersCost",
       "wageAmount",
     ],
   });
@@ -1479,7 +1493,15 @@ const updateOneFromDB = async (id, payload) => {
       unitWage === undefined || unitWage === null || unitWage === ""
         ? toNumber(lockedMixer.unitWage)
         : toNumber(unitWage);
-    const nextWageAmount = calculateMixerWageAmount(nextCombo, nextUnitWage);
+    const nextOthersCost =
+      othersCost === undefined || othersCost === null || othersCost === ""
+        ? toNumber(lockedMixer.othersCost)
+        : toNumber(othersCost);
+    const nextWageAmount = calculateMixerWageAmount(
+      nextCombo,
+      nextUnitWage,
+      nextOthersCost,
+    );
 
     const nextWarehouseId =
       warehouseId === undefined
@@ -1558,6 +1580,7 @@ const updateOneFromDB = async (id, payload) => {
         productName: lockedMixer.name,
         combo: lockedMixer.combo,
         unitWage: lockedMixer.unitWage,
+        othersCost: lockedMixer.othersCost,
         wageAmount: lockedMixer.wageAmount,
         date: lockedMixer.date,
       },
@@ -1568,6 +1591,7 @@ const updateOneFromDB = async (id, payload) => {
         productName: nextProductData.name || lockedMixer.name,
         combo: nextCombo,
         unitWage: nextUnitWage,
+        othersCost: nextOthersCost,
         wageAmount: nextWageAmount,
         date: inputDateStr || lockedMixer.date || undefined,
       },
@@ -1594,6 +1618,7 @@ const updateOneFromDB = async (id, payload) => {
       manufacturerName: nextManufacturer?.name || null,
       combo: nextCombo,
       unitWage: nextUnitWage,
+      othersCost: nextOthersCost,
       wageAmount: nextWageAmount,
       note: storedNote,
       status: finalStatus,

@@ -68,6 +68,7 @@ const resolveLineCost = (item, inputUnitValue) => {
 const normalizePurchaseItems = async (payload = {}) => {
   const rawItems = getPayloadItems(payload);
   const normalizedItems = [];
+  const othersCost = Math.max(0, toNumber(payload.othersCost));
 
   for (const item of rawItems) {
     const packagingItemId = item.packagingItemId;
@@ -95,12 +96,13 @@ const normalizePurchaseItems = async (payload = {}) => {
     });
   }
 
-  const allPackagingItemCost = normalizedItems.reduce(
+  const itemTotalCost = normalizedItems.reduce(
     (total, item) => total + toNumber(item.cost),
     0,
   );
+  const allPackagingItemCost = itemTotalCost + othersCost;
 
-  return { normalizedItems, allPackagingItemCost };
+  return { normalizedItems, allPackagingItemCost, itemTotalCost, othersCost };
 };
 
 const updateSupplierHistoryAmount = async ({
@@ -209,7 +211,7 @@ const adjustStockBalance = async ({
 
 const insertIntoDB = async (payload) => {
   const { bookId, date, file, note, status, supplierId } = payload;
-  const { normalizedItems, allPackagingItemCost } =
+  const { normalizedItems, allPackagingItemCost, othersCost } =
     await normalizePurchaseItems(payload);
 
   return db.sequelize.transaction(async (t) => {
@@ -249,6 +251,7 @@ const insertIntoDB = async (payload) => {
           unitCost: item.unitCost,
           cost: item.cost,
           allPackagingItemCost,
+          othersCost,
           batchId,
           supplierHistoryId,
           date,
@@ -274,6 +277,7 @@ const insertIntoDB = async (payload) => {
     return {
       batchId,
       allPackagingItemCost,
+      othersCost,
       supplierHistoryId,
       items: purchases,
     };
@@ -358,6 +362,16 @@ const deleteIdFromDB = async (id) => {
     if (!existing) return 0;
 
     const existingPayload = toBaseStockPayload(existing.unit, existing.unitValue);
+    const siblingCount = existing.batchId
+      ? await PackagingItemPurchase.count({
+          where: { batchId: existing.batchId, Id: { [Op.ne]: id } },
+          transaction: t,
+        })
+      : 0;
+    const deleteAmountDelta =
+      siblingCount > 0
+        ? -toNumber(existing.cost)
+        : -(toNumber(existing.cost) + toNumber(existing.othersCost));
 
     await adjustStockBalance({
       packagingItemId: existing.packagingItemId,
@@ -370,7 +384,7 @@ const deleteIdFromDB = async (id) => {
 
     await updateSupplierHistoryAmount({
       supplierHistoryId: existing.supplierHistoryId,
-      amountDelta: -toNumber(existing.cost),
+      amountDelta: deleteAmountDelta,
       transaction: t,
     });
 
@@ -384,9 +398,13 @@ const deleteIdFromDB = async (id) => {
         where: { batchId: existing.batchId },
         transaction: t,
       });
+      const nextOthersCost = siblingCount > 0 ? toNumber(existing.othersCost) : 0;
 
       await PackagingItemPurchase.update(
-        { allPackagingItemCost: toNumber(remainingBatchCost) },
+        {
+          allPackagingItemCost: toNumber(remainingBatchCost) + nextOthersCost,
+          othersCost: nextOthersCost,
+        },
         { where: { batchId: existing.batchId }, transaction: t },
       );
     }
@@ -458,6 +476,10 @@ const updateOneFromDB = async (id, payload) => {
         ? existing.supplierId
         : payload.supplierId;
     const batchId = payload.batchId || existing.batchId;
+    const nextOthersCost =
+      payload.othersCost === "" || payload.othersCost == null
+        ? toNumber(existing.othersCost)
+        : Math.max(0, toNumber(payload.othersCost));
     let allPackagingItemCost = nextCost;
 
     if (batchId) {
@@ -465,10 +487,13 @@ const updateOneFromDB = async (id, payload) => {
         where: { batchId, Id: { [Op.ne]: id } },
         transaction: t,
       });
-      allPackagingItemCost = toNumber(siblingCost) + nextCost;
+      allPackagingItemCost = toNumber(siblingCost) + nextCost + nextOthersCost;
+    } else {
+      allPackagingItemCost = nextCost + nextOthersCost;
     }
 
-    const supplierCostDelta = nextCost - toNumber(existing.cost);
+    const supplierCostDelta =
+      allPackagingItemCost - toNumber(existing.allPackagingItemCost || existing.cost);
     let supplierHistoryId = existing.supplierHistoryId;
 
     if (supplierHistoryId) {
@@ -509,6 +534,7 @@ const updateOneFromDB = async (id, payload) => {
         unitCost: nextUnitCost,
         cost: nextCost,
         allPackagingItemCost,
+        othersCost: nextOthersCost,
         batchId,
         supplierHistoryId,
         date: payload.date || existing.date,
@@ -523,7 +549,7 @@ const updateOneFromDB = async (id, payload) => {
 
     if (batchId) {
       await PackagingItemPurchase.update(
-        { allPackagingItemCost },
+        { allPackagingItemCost, othersCost: nextOthersCost },
         { where: { batchId }, transaction: t },
       );
     }

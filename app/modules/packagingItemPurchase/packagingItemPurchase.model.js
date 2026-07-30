@@ -48,6 +48,11 @@ module.exports = (sequelize, DataTypes) => {
         defaultValue: 0,
         allowNull: false,
       },
+      othersCost: {
+        type: DataTypes.DECIMAL(10, 2),
+        defaultValue: 0,
+        allowNull: false,
+      },
       batchId: {
         type: DataTypes.STRING,
         allowNull: true,
