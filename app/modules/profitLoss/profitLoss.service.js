@@ -19,6 +19,29 @@ const resolveMode = (mode) => (["auto", "user"].includes(mode) ? mode : "product
 
 const getModelByMode = (mode) => modelByMode[resolveMode(mode)];
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const parseRecipientEmails = (value) => {
+  const rawEmails = Array.isArray(value)
+    ? value
+    : String(value || "")
+        .split(/[,\s;]+/)
+        .filter(Boolean);
+
+  const emails = [];
+  const seen = new Set();
+
+  rawEmails.forEach((item) => {
+    const email = String(item || "").trim();
+    const normalized = email.toLowerCase();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    emails.push(email);
+  });
+
+  return emails;
+};
+
 const insertIntoDB = async (payload) => {
   const mode = resolveMode(payload?.mode);
   const Model = getModelByMode(mode);
@@ -40,6 +63,21 @@ const sendInvoiceEmail = async (payload) => {
     savedHistory = [],
   } = payload;
 
+  const recipientEmails = parseRecipientEmails(clientEmail);
+  if (!recipientEmails.length) {
+    throw new ApiError(400, "At least one valid recipient email is required");
+  }
+
+  const invalidEmails = recipientEmails.filter(
+    (email) => !EMAIL_PATTERN.test(email),
+  );
+  if (invalidEmails.length) {
+    throw new ApiError(
+      400,
+      `Invalid recipient email: ${invalidEmails.join(", ")}`,
+    );
+  }
+
   const htmlContent = profitLossInvoiceTemplate({
     companyName: companyName || process.env.MAIL_BRAND_NAME,
     reportTitle: reportTitle || "Profit & Loss Invoice",
@@ -53,20 +91,37 @@ const sendInvoiceEmail = async (payload) => {
     supportEmail: process.env.MAIL_SUPPORT_EMAIL,
   });
 
-  const result = await sendEmail({
-    to: clientEmail,
-    subject: `Your Profit & Loss Invoice - ${invoiceNumber || ""}`,
-    htmlContent,
-  });
+  const failedEmails = [];
 
-  if (!result) {
-    const message = sendEmail.lastError?.message
-      ? `Invoice email could not be sent: ${sendEmail.lastError.message}`
-      : "Invoice email could not be sent";
-    throw new ApiError(400, message);
+  await Promise.all(
+    recipientEmails.map(async (email) => {
+      const result = await sendEmail({
+        to: email,
+        subject: `Your Profit & Loss Invoice - ${invoiceNumber || ""}`,
+        htmlContent,
+      });
+
+      if (!result) {
+        failedEmails.push({
+          email,
+          message: sendEmail.lastError?.message || "Email could not be sent",
+        });
+      }
+    }),
+  );
+
+  if (failedEmails.length) {
+    const failedList = failedEmails.map((item) => item.email).join(", ");
+    throw new ApiError(
+      400,
+      `Invoice email could not be sent to: ${failedList}`,
+    );
   }
 
-  return result;
+  return {
+    sent: true,
+    recipients: recipientEmails,
+  };
 };
 
 const getAllFromDB = async (filters, options) => {

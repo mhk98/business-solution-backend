@@ -12,7 +12,6 @@ router.post(
   auth(
     ENUM_USER_ROLE.SUPER_ADMIN,
     ENUM_USER_ROLE.ADMIN,
-    ENUM_USER_ROLE.ACCOUNTANT,
     ENUM_USER_ROLE.HR,
   ),
   applyApprovalWorkflow({ modelKey: "employee", entityLabel: "Employee" }),
@@ -26,7 +25,6 @@ router.delete(
   auth(
     ENUM_USER_ROLE.SUPER_ADMIN,
     ENUM_USER_ROLE.ADMIN,
-    ENUM_USER_ROLE.ACCOUNTANT,
     ENUM_USER_ROLE.HR,
   ),
   applyApprovalWorkflow({ modelKey: "employee", entityLabel: "Employee" }),
@@ -37,7 +35,6 @@ router.put(
   auth(
     ENUM_USER_ROLE.SUPER_ADMIN,
     ENUM_USER_ROLE.ADMIN,
-    ENUM_USER_ROLE.ACCOUNTANT,
     ENUM_USER_ROLE.HR,
   ),
   applyApprovalWorkflow({ modelKey: "employee", entityLabel: "Employee" }),
@@ -49,7 +46,6 @@ router.post(
   auth(
     ENUM_USER_ROLE.SUPER_ADMIN,
     ENUM_USER_ROLE.ADMIN,
-    ENUM_USER_ROLE.ACCOUNTANT,
     ENUM_USER_ROLE.HR,
   ),
   approvePendingWorkflow({ modelKey: "employee", entityLabel: "Employee" }),

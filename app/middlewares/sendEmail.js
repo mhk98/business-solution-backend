@@ -1,17 +1,38 @@
 const nodemailer = require("nodemailer");
 const path = require("path");
 
+const getEmailGatewayConfig = async () => {
+  try {
+    const db = require("../../models");
+    const setting = await db.apiGatewaySetting?.findOne({
+      where: { gatewayType: "email" },
+    });
+    if (setting && !setting.isEnabled) return { disabled: true };
+    return setting.config || null;
+  } catch (error) {
+    return null;
+  }
+};
+
 const sendEmail = async ({ to, subject, htmlContent, filePath = null }) => {
   sendEmail.lastError = null;
 
-  const smtpPort = Number(process.env.SMTP_PORT || 465);
+  const gatewayConfig = await getEmailGatewayConfig();
+  if (gatewayConfig?.disabled) return false;
+  const smtpPort = Number(gatewayConfig?.smtpPort || process.env.SMTP_PORT || 465);
   const smtpSecure =
-    String(process.env.SMTP_SECURE || "true").toLowerCase() === "true";
-  const smtpUser = process.env.SMTP_USER || "info@hadiyaworld.com";
-  const fromEmail = process.env.MAIL_FROM_EMAIL || smtpUser;
-  const fromName = process.env.MAIL_FROM_NAME || "Business Solution";
+    String(gatewayConfig?.smtpSecure ?? process.env.SMTP_SECURE ?? "true").toLowerCase() === "true";
+  const smtpUser =
+    gatewayConfig?.smtpUser || process.env.SMTP_USER || "info@hadiyaworld.com";
+  const smtpPass = gatewayConfig?.smtpPass || process.env.SMTP_PASS;
+  const fromEmail = gatewayConfig?.fromEmail || process.env.MAIL_FROM_EMAIL || smtpUser;
+  const fromName =
+    gatewayConfig?.fromName ||
+    gatewayConfig?.brandName ||
+    process.env.MAIL_FROM_NAME ||
+    "Business Solution";
 
-  if (!process.env.SMTP_PASS) {
+  if (!smtpPass) {
     const message = "SMTP_PASS is not configured.";
     sendEmail.lastError = { message };
     console.error("❌ Email error:", message);
@@ -19,12 +40,12 @@ const sendEmail = async ({ to, subject, htmlContent, filePath = null }) => {
   }
 
   const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || "smtp.hostinger.com",
+    host: gatewayConfig?.smtpHost || process.env.SMTP_HOST || "smtp.hostinger.com",
     port: smtpPort,
     secure: smtpSecure,
     auth: {
       user: smtpUser,
-      pass: process.env.SMTP_PASS,
+      pass: smtpPass,
     },
   });
 

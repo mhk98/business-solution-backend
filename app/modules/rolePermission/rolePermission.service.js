@@ -10,6 +10,9 @@ const RolePermission = db.rolePermission;
 
 const validRoles = Object.values(ENUM_USER_ROLE);
 const validMenuPermissionSet = new Set(ALL_MENU_PERMISSIONS);
+const EMAIL_NOTIFICATION_PERMISSION_PREFIX = "email_notify:";
+const SMS_NOTIFICATION_PERMISSION_PREFIX = "sms_notify:";
+const LEGACY_MOBILE_NOTIFICATION_PERMISSION_PREFIX = "mobile_notify:";
 const roleAliases = validRoles.reduce((acc, role) => {
   acc[String(role).toLowerCase()] = role;
   return acc;
@@ -45,7 +48,49 @@ const sanitizePermission = (permission) => {
     return permission;
   }
 
-  return permission.trim().toLowerCase();
+  const normalizedPermission = permission.trim().toLowerCase();
+  if (
+    normalizedPermission.startsWith(LEGACY_MOBILE_NOTIFICATION_PERMISSION_PREFIX)
+  ) {
+    return `${SMS_NOTIFICATION_PERMISSION_PREFIX}${normalizedPermission.slice(
+      LEGACY_MOBILE_NOTIFICATION_PERMISSION_PREFIX.length,
+    )}`;
+  }
+
+  return normalizedPermission;
+};
+
+const isValidMenuPermission = (permission) => {
+  if (validMenuPermissionSet.has(permission)) return true;
+
+  if (String(permission || "").startsWith(EMAIL_NOTIFICATION_PERMISSION_PREFIX)) {
+    const menuPermission = permission.slice(
+      EMAIL_NOTIFICATION_PERMISSION_PREFIX.length,
+    );
+    return validMenuPermissionSet.has(menuPermission);
+  }
+
+  if (
+    String(permission || "").startsWith(SMS_NOTIFICATION_PERMISSION_PREFIX)
+  ) {
+    const menuPermission = permission.slice(
+      SMS_NOTIFICATION_PERMISSION_PREFIX.length,
+    );
+    return validMenuPermissionSet.has(menuPermission);
+  }
+
+  if (
+    String(permission || "").startsWith(
+      LEGACY_MOBILE_NOTIFICATION_PERMISSION_PREFIX,
+    )
+  ) {
+    const menuPermission = permission.slice(
+      LEGACY_MOBILE_NOTIFICATION_PERMISSION_PREFIX.length,
+    );
+    return validMenuPermissionSet.has(menuPermission);
+  }
+
+  return false;
 };
 
 const normalizeMenuPermissions = (menuPermissions) => {
@@ -101,7 +146,7 @@ const validateMenuPermissions = (menuPermissions) => {
   }
 
   const invalidPermissions = uniq(normalizedPermissions).filter(
-    (permission) => !validMenuPermissionSet.has(permission),
+    (permission) => !isValidMenuPermission(permission),
   );
 
   if (invalidPermissions.length) {
@@ -150,6 +195,12 @@ const includeNewSettingsChildren = (role, permissions = []) => {
     "cod_charge",
     "delivery_advance",
     "delivery_charge",
+    "api_gateway",
+    "sms_gateway",
+    "email_notification_gateway",
+    "role_permissions",
+    "email_notification_permissions",
+    "sms_notification_permissions",
     "master_permission",
     "ads_campaign_kpi",
     "auto_profit_loss",

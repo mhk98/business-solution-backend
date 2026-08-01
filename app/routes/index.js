@@ -32,6 +32,7 @@ const EmployeeRoutes = require("../modules/employee/employee.routes");
 const NotificationRoutes = require("../modules/notification/notification.routes");
 const NoticeRoutes = require("../modules/notice/notice.routes");
 const ChargeSettingRoutes = require("../modules/chargeSetting/chargeSetting.routes");
+const ApiGatewaySettingRoutes = require("../modules/apiGatewaySetting/apiGatewaySetting.routes");
 const TaskRoutes = require("../modules/task/task.routes");
 const WarehouseRoutes = require("../modules/warehouse/warehouse.routes");
 const LogoRoutes = require("../modules/logo/logo.routes");
@@ -494,6 +495,10 @@ const moduleRoutes = [
   {
     path: "/charge-settings",
     route: ChargeSettingRoutes,
+  },
+  {
+    path: "/api-gateway-settings",
+    route: ApiGatewaySettingRoutes,
   },
   {
     path: "/task",

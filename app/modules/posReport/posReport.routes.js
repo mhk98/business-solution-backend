@@ -7,6 +7,23 @@ const {
 const PosReportController = require("./posReport.controller");
 const router = require("express").Router();
 
+const POS_REPORT_MANAGE_ROLES = [
+  ENUM_USER_ROLE.SUPER_ADMIN,
+  ENUM_USER_ROLE.ADMIN,
+  ENUM_USER_ROLE.MARKETER,
+  ENUM_USER_ROLE.LEADER,
+  ENUM_USER_ROLE.LEADER_CS,
+  ENUM_USER_ROLE.LEADER_LOGISTICS,
+  ENUM_USER_ROLE.INVENTOR,
+  ENUM_USER_ROLE.HR,
+  ENUM_USER_ROLE.LOGISTICS,
+  ENUM_USER_ROLE.UP,
+  ENUM_USER_ROLE.CS,
+  ENUM_USER_ROLE.STAFF,
+  ENUM_USER_ROLE.EMPLOYEE,
+  ENUM_USER_ROLE.USER,
+];
+
 router.post(
   "/create",
   auth(),
@@ -18,13 +35,13 @@ router.get("/all", auth(), PosReportController.getAllFromDBWithoutQuery);
 router.get("/", auth(), PosReportController.getDataById);
 router.delete(
   "/:id",
-  auth(),
+  auth(...POS_REPORT_MANAGE_ROLES),
   applyApprovalWorkflow({ modelKey: "posReport", entityLabel: "POS Report" }),
   PosReportController.deleteIdFromDB,
 );
 router.put(
   "/:id",
-  auth(),
+  auth(...POS_REPORT_MANAGE_ROLES),
   applyApprovalWorkflow({ modelKey: "posReport", entityLabel: "POS Report" }),
   PosReportController.updateOneFromDB,
 );

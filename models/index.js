@@ -477,6 +477,11 @@ db.deliveryAdvance =
     db.sequelize,
     DataTypes,
   );
+db.apiGatewaySetting =
+  require("../app/modules/apiGatewaySetting/apiGatewaySetting.model")(
+    db.sequelize,
+    DataTypes,
+  );
 db.task = require("../app/modules/task/task.model")(db.sequelize, DataTypes);
 db.chatConversation = require("../app/modules/chat/chatConversation.model")(
   db.sequelize,
