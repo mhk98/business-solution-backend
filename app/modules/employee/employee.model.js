@@ -89,6 +89,11 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: false,
       },
+      half_day_absent: {
+        type: DataTypes.DECIMAL(10, 2),
+        allowNull: false,
+        defaultValue: 0,
+      },
       friday_absent: {
         type: DataTypes.INTEGER(10),
         allowNull: false,

@@ -47,6 +47,7 @@ const WarrantyProductRoutes = require("../modules/warrantyProduct/warrantyProduc
 const MarketingBookRoutes = require("../modules/marketingBook/marketingBook.routes");
 const MarketingExpenseRoutes = require("../modules/marketingExpense/marketingExpense.routes");
 const AdsCampaignKPIRoutes = require("../modules/adsCampaignKPI/adsCampaignKPI.routes");
+const PerformanceTrackerRoutes = require("../modules/performanceTracker/performanceTracker.routes");
 const InventoryMasterRoutes = require("../modules/inventoryMaster/inventoryMaster.routes");
 const InventoryOverviewRoutes = require("../modules/inventoryOverview/inventoryOverview.routes");
 const DamageStockRoutes = require("../modules/damageStock/damageStock.routes");
@@ -339,6 +340,10 @@ const moduleRoutes = [
   {
     path: "/ads-campaign-kpi",
     route: AdsCampaignKPIRoutes,
+  },
+  {
+    path: "/performance-tracker",
+    route: PerformanceTrackerRoutes,
   },
   {
     path: "/profit-loss",

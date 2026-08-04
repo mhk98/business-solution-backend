@@ -2,6 +2,10 @@ const jwt = require("jsonwebtoken");
 const ApiError = require("../../error/ApiError");
 const RolePermissionService = require("../modules/rolePermission/rolePermission.service");
 const db = require("../../models");
+const {
+  hasDuplicateRequest,
+  registerPendingRequest,
+} = require("../utils/duplicateRequestGuard");
 
 const User = db.user;
 
@@ -51,6 +55,24 @@ const auth =
 
       req.menuPermissions =
         await RolePermissionService.getEffectiveMenuPermissions(plainUser.role);
+
+      // Prevent duplicate submissions for the same user on POST within 5 minutes.
+      if (req.method === "POST") {
+        const isDuplicate = await hasDuplicateRequest(req);
+        if (isDuplicate) {
+          return next(
+            new ApiError(
+              409,
+              "Duplicate entry blocked. Same entry cannot be submitted again within 5 minutes.",
+            ),
+          );
+        }
+      }
+
+      // Register pending POST request to block duplicate in-flight submissions.
+      if (req.method === "POST") {
+        registerPendingRequest(req, res);
+      }
 
       // Check if the user's role is one of the required roles
       if (requiredRoles.length && !requiredRoles.includes(plainUser.role)) {

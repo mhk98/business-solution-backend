@@ -267,6 +267,21 @@ db.adsAccount = require("../app/modules/adsCampaignKPI/adsAccount.model")(
   db.sequelize,
   DataTypes,
 );
+db.performanceTrackerChannel =
+  require("../app/modules/performanceTracker/performanceTrackerChannel.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.marketingPerformanceEntry =
+  require("../app/modules/performanceTracker/marketingPerformanceEntry.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.channelPerformanceTarget =
+  require("../app/modules/performanceTracker/channelPerformanceTarget.model")(
+    db.sequelize,
+    DataTypes,
+  );
 
 db.category = require("../app/modules/category/category.model")(
   db.sequelize,
@@ -757,6 +772,23 @@ db.product.hasMany(db.confirmOrder, {
 
 db.book.hasMany(db.cashInOut, { foreignKey: "bookId" });
 db.cashInOut.belongsTo(db.book, { foreignKey: "bookId" });
+
+db.performanceTrackerChannel.hasMany(db.marketingPerformanceEntry, {
+  foreignKey: "channel_id",
+  as: "entries",
+});
+db.marketingPerformanceEntry.belongsTo(db.performanceTrackerChannel, {
+  foreignKey: "channel_id",
+  as: "channel",
+});
+db.performanceTrackerChannel.hasOne(db.channelPerformanceTarget, {
+  foreignKey: "channel_id",
+  as: "target",
+});
+db.channelPerformanceTarget.belongsTo(db.performanceTrackerChannel, {
+  foreignKey: "channel_id",
+  as: "channel",
+});
 
 db.owner.hasMany(db.ownerTransaction, { foreignKey: "ownerId" });
 db.ownerTransaction.belongsTo(db.owner, {
@@ -1646,6 +1678,11 @@ const ensureEmployeeColumns = async () => {
   });
   await maybeAddColumn("festival_bonus", {
     type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("half_day_absent", {
+    type: DataTypes.DECIMAL(10, 2),
     allowNull: false,
     defaultValue: 0,
   });
