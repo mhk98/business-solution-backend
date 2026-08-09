@@ -78,6 +78,8 @@ const EmployeeWorkReportRoutes = require("../modules/employeeWorkReport/employee
 const LogisticWorkReportRoutes = require("../modules/logisticWorkReport/logisticWorkReport.routes");
 const LogisticUpdateRoutes = require("../modules/logisticUpdate/logisticUpdate.routes");
 const ShifaReportRoutes = require("../modules/shifaReport/shifaReport.routes");
+const ShifaAppointmentSerialRoutes = require("../modules/shifaAppointmentSerial/shifaAppointmentSerial.routes");
+const ShifaIncentiveRoutes = require("../modules/shifaIncentive/shifaIncentive.routes");
 const DepartmentRoutes = require("../modules/department/department.routes");
 const DesignationRoutes = require("../modules/designation/designation.routes");
 const TeamRoutes = require("../modules/team/team.routes");
@@ -135,6 +137,14 @@ const moduleRoutes = [
   {
     path: "/shifa-reports",
     route: ShifaReportRoutes,
+  },
+  {
+    path: "/shifa-appointment-serials",
+    route: ShifaAppointmentSerialRoutes,
+  },
+  {
+    path: "/shifa-incentives",
+    route: ShifaIncentiveRoutes,
   },
   {
     path: "/role-permissions",

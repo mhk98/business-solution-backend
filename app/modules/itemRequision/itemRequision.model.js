@@ -40,6 +40,11 @@ module.exports = (sequelize, DataTypes) => {
         defaultValue: 0,
         allowNull: true,
       },
+      unit: {
+        type: DataTypes.STRING,
+        defaultValue: "Pcs",
+        allowNull: true,
+      },
       amount: {
         type: DataTypes.INTEGER(10),
         defaultValue: 0,

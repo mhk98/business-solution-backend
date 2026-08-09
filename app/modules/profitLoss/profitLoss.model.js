@@ -106,6 +106,11 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
         defaultValue: "Active",
       },
+      emailSent: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
 
       deletedAt: {
         type: DataTypes.DATE,

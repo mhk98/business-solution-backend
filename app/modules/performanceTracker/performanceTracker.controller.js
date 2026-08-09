@@ -4,7 +4,8 @@ const pick = require("../../../shared/pick");
 const service = require("./performanceTracker.service");
 
 const channelFilters = ["searchTerm"];
-const entryFilters = ["channel_id", "startDate", "endDate", "searchTerm"];
+const childFilters = ["channel_id", "searchTerm"];
+const entryFilters = ["channel_id", "ads_account_id", "product_id", "startDate", "endDate", "searchTerm"];
 const optionsFields = ["limit", "page", "sortBy", "sortOrder"];
 
 const createChannel = catchAsync(async (req, res) => {
@@ -57,6 +58,114 @@ const deleteChannel = catchAsync(async (req, res) => {
     statusCode: 200,
     success: true,
     message: "Performance tracker channel deleted successfully!",
+    data: result,
+  });
+});
+
+const createAdsAccount = catchAsync(async (req, res) => {
+  const result = await service.createAdsAccount(req.body, req.user);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Performance tracker ads account created successfully!",
+    data: result,
+  });
+});
+
+const getAdsAccounts = catchAsync(async (req, res) => {
+  const result = await service.getAdsAccounts(
+    pick(req.query, childFilters),
+    pick(req.query, optionsFields),
+  );
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Performance tracker ads accounts fetched successfully!",
+    meta: result.meta,
+    data: result.data,
+  });
+});
+
+const getAllAdsAccounts = catchAsync(async (req, res) => {
+  const result = await service.getAllAdsAccounts(pick(req.query, childFilters));
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Performance tracker ads accounts fetched successfully!",
+    data: result,
+  });
+});
+
+const updateAdsAccount = catchAsync(async (req, res) => {
+  const result = await service.updateAdsAccount(req.params.id, req.body, req.user);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Performance tracker ads account updated successfully!",
+    data: result,
+  });
+});
+
+const deleteAdsAccount = catchAsync(async (req, res) => {
+  const result = await service.deleteAdsAccount(req.params.id);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Performance tracker ads account deleted successfully!",
+    data: result,
+  });
+});
+
+const createProduct = catchAsync(async (req, res) => {
+  const result = await service.createProduct(req.body, req.user);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Performance tracker product created successfully!",
+    data: result,
+  });
+});
+
+const getProducts = catchAsync(async (req, res) => {
+  const result = await service.getProducts(
+    pick(req.query, childFilters),
+    pick(req.query, optionsFields),
+  );
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Performance tracker products fetched successfully!",
+    meta: result.meta,
+    data: result.data,
+  });
+});
+
+const getAllProducts = catchAsync(async (req, res) => {
+  const result = await service.getAllProducts(pick(req.query, childFilters));
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Performance tracker products fetched successfully!",
+    data: result,
+  });
+});
+
+const updateProduct = catchAsync(async (req, res) => {
+  const result = await service.updateProduct(req.params.id, req.body, req.user);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Performance tracker product updated successfully!",
+    data: result,
+  });
+});
+
+const deleteProduct = catchAsync(async (req, res) => {
+  const result = await service.deleteProduct(req.params.id);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Performance tracker product deleted successfully!",
     data: result,
   });
 });
@@ -147,7 +256,7 @@ const getDashboard = catchAsync(async (req, res) => {
 
 const getCompare = catchAsync(async (req, res) => {
   const result = await service.getCompare(
-    pick(req.query, [...entryFilters, "channel_ids"]),
+    pick(req.query, [...entryFilters, "channel_ids", "ads_account_ids", "product_ids"]),
   );
   sendResponse(res, {
     statusCode: 200,
@@ -163,6 +272,16 @@ module.exports = {
   getAllChannels,
   updateChannel,
   deleteChannel,
+  createAdsAccount,
+  getAdsAccounts,
+  getAllAdsAccounts,
+  updateAdsAccount,
+  deleteAdsAccount,
+  createProduct,
+  getProducts,
+  getAllProducts,
+  updateProduct,
+  deleteProduct,
   createEntry,
   getEntries,
   getAllEntries,

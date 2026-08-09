@@ -1,6 +1,9 @@
 const { Op } = require("sequelize");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const {
+  getInventoryDisplayQuantity,
+} = require("../../../shared/variantQuantity");
 
 const ReceivedProduct = db.receivedProduct;
 const PurchaseReturnProduct = db.purchaseReturnProduct;
@@ -16,6 +19,17 @@ const DamageStock = db.damageStock;
 const DamageReparingStock = db.damageReparingStock;
 
 const n = (v) => Number(v || 0);
+const REPORT_STOCK_FIELDS = [
+  "Id",
+  "name",
+  "quantity",
+  "date",
+  "createdAt",
+  "productId",
+  "variants",
+  "purchase_price",
+  "sale_price",
+];
 
 const overviewSources = [
   {
@@ -319,6 +333,138 @@ const calcRowSaleValue = (row) => {
   return n(row.sale_price);
 };
 
+const buildInventoryReportWhere = (Model, filters = {}) => {
+  const { from, to, name } = filters;
+  const modelAttributes = Model.rawAttributes || {};
+  const where = {
+    ...buildNameWhere(name),
+  };
+
+  if (from || to) {
+    const dateWhere = buildDateWhere(from, to);
+    const dateField = modelAttributes.date ? "date" : "createdAt";
+    where[dateField] = dateWhere.date;
+  }
+
+  return where;
+};
+
+const getInventoryReportAttributes = (Model) => {
+  const modelAttributes = Model.rawAttributes || {};
+  return REPORT_STOCK_FIELDS.filter((attribute) => modelAttributes[attribute]);
+};
+
+const getRowProductKey = (row = {}) => {
+  const productId = row.productId ? `product:${row.productId}` : "";
+  if (productId) return productId;
+  return `name:${String(row.name || "").trim().toLowerCase()}`;
+};
+
+const getReportRowValue = (row, priceField, { priceIsTotal = false } = {}) => {
+  const variants = parseRowVariants(row);
+
+  if (variants.length) {
+    const hasVariantPrices = variants.some((variant) => n(variant?.[priceField]) > 0);
+    if (hasVariantPrices) {
+      return variants.reduce(
+        (sum, variant) => sum + n(variant?.quantity) * n(variant?.[priceField]),
+        0,
+      );
+    }
+    if (priceIsTotal) return n(row?.[priceField]);
+  }
+
+  return priceIsTotal
+    ? n(row?.[priceField])
+    : n(getInventoryDisplayQuantity(row)) * n(row?.[priceField]);
+};
+
+const addInventoryReportRows = (
+  reportMap,
+  rows = [],
+  quantityKey,
+  { priceIsTotal = false } = {},
+) => {
+  rows.forEach((row) => {
+    const plain = typeof row?.get === "function" ? row.get({ plain: true }) : row;
+    const key = getRowProductKey(plain);
+    if (!key || key === "name:") return;
+
+    const existing = reportMap.get(key) || {
+      productId: plain.productId || null,
+      productsName: plain.name || "-",
+      stockProduct: 0,
+      damageStock: 0,
+      repairingStock: 0,
+      totalProducts: 0,
+      totalPurchaseCost: 0,
+      totalSalesCost: 0,
+    };
+
+    const quantity = n(getInventoryDisplayQuantity(plain));
+    existing.productId = existing.productId || plain.productId || null;
+    existing.productsName = existing.productsName || plain.name || "-";
+    existing[quantityKey] += quantity;
+    existing.totalProducts += quantity;
+    existing.totalPurchaseCost += getReportRowValue(plain, "purchase_price", {
+      priceIsTotal,
+    });
+    existing.totalSalesCost += getReportRowValue(plain, "sale_price", {
+      priceIsTotal,
+    });
+
+    reportMap.set(key, existing);
+  });
+};
+
+const getInventoryReportsFromDB = async (filters) => {
+  const page = Math.max(1, Number(filters.page || 1));
+  const limit = Math.max(1, Number(filters.limit || 10));
+  const skip = (page - 1) * limit;
+
+  const [stockRows, damageRows, repairingRows] = await Promise.all([
+    InventoryMaster.findAll({
+      where: buildInventoryReportWhere(InventoryMaster, filters),
+      attributes: getInventoryReportAttributes(InventoryMaster),
+    }),
+    DamageStock.findAll({
+      where: buildInventoryReportWhere(DamageStock, filters),
+      attributes: getInventoryReportAttributes(DamageStock),
+    }),
+    DamageReparingStock.findAll({
+      where: buildInventoryReportWhere(DamageReparingStock, filters),
+      attributes: getInventoryReportAttributes(DamageReparingStock),
+    }),
+  ]);
+
+  const reportMap = new Map();
+  addInventoryReportRows(reportMap, stockRows, "stockProduct");
+  addInventoryReportRows(reportMap, damageRows, "damageStock", { priceIsTotal: true });
+  addInventoryReportRows(reportMap, repairingRows, "repairingStock", {
+    priceIsTotal: true,
+  });
+
+  const all = Array.from(reportMap.values()).sort((a, b) =>
+    String(a.productsName).localeCompare(String(b.productsName)),
+  );
+
+  return {
+    meta: {
+      from: filters.from || null,
+      to: filters.to || null,
+      name: filters.name || null,
+      page,
+      limit,
+      count: all.length,
+      totalQuantity: all.reduce((sum, row) => sum + n(row.totalProducts), 0),
+      totalPurchaseValue: all.reduce((sum, row) => sum + n(row.totalPurchaseCost), 0),
+      totalSaleValue: all.reduce((sum, row) => sum + n(row.totalSalesCost), 0),
+      totalPages: Math.max(1, Math.ceil(all.length / limit)),
+    },
+    data: all.slice(skip, skip + limit),
+  };
+};
+
 const getInventoryOverviewListFromDB = async (filters) => {
   const { from, to, name, source, totalQuantity: requestedTotalQuantity } = filters;
 
@@ -433,4 +579,5 @@ const getInventoryOverviewSummaryFromDB = async (filters) => {
 module.exports = {
   getInventoryOverviewListFromDB,
   getInventoryOverviewSummaryFromDB,
+  getInventoryReportsFromDB,
 };

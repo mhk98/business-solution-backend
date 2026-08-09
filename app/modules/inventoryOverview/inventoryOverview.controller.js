@@ -87,7 +87,23 @@ const getInventoryOverviewSummary = catchAsync(async (req, res) => {
   });
 });
 
+// ✅ GET /inventory/reports?from=&to=&name=&page=&limit=
+const getInventoryReports = catchAsync(async (req, res) => {
+  const filters = pick(req.query, InventoryOverviewFilterAbleFileds);
+
+  const result = await InventoryOverviewService.getInventoryReportsFromDB(filters);
+
+  return sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Inventory reports fetched!",
+    meta: result.meta,
+    data: result.data,
+  });
+});
+
 module.exports = {
   getInventoryOverviewList,
   getInventoryOverviewSummary,
+  getInventoryReports,
 };

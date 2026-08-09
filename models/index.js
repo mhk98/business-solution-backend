@@ -272,6 +272,16 @@ db.performanceTrackerChannel =
     db.sequelize,
     DataTypes,
   );
+db.performanceTrackerAdsAccount =
+  require("../app/modules/performanceTracker/performanceTrackerAdsAccount.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.performanceTrackerProduct =
+  require("../app/modules/performanceTracker/performanceTrackerProduct.model")(
+    db.sequelize,
+    DataTypes,
+  );
 db.marketingPerformanceEntry =
   require("../app/modules/performanceTracker/marketingPerformanceEntry.model")(
     db.sequelize,
@@ -382,6 +392,15 @@ db.logisticUpdate =
     DataTypes,
   );
 db.shifaReport = require("../app/modules/shifaReport/shifaReport.model")(
+  db.sequelize,
+  DataTypes,
+);
+db.shifaAppointmentSerial =
+  require("../app/modules/shifaAppointmentSerial/shifaAppointmentSerial.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.shifaIncentive = require("../app/modules/shifaIncentive/shifaIncentive.model")(
   db.sequelize,
   DataTypes,
 );
@@ -780,6 +799,38 @@ db.performanceTrackerChannel.hasMany(db.marketingPerformanceEntry, {
 db.marketingPerformanceEntry.belongsTo(db.performanceTrackerChannel, {
   foreignKey: "channel_id",
   as: "channel",
+});
+db.performanceTrackerChannel.hasMany(db.performanceTrackerAdsAccount, {
+  foreignKey: "channel_id",
+  as: "adsAccounts",
+});
+db.performanceTrackerAdsAccount.belongsTo(db.performanceTrackerChannel, {
+  foreignKey: "channel_id",
+  as: "channel",
+});
+db.performanceTrackerChannel.hasMany(db.performanceTrackerProduct, {
+  foreignKey: "channel_id",
+  as: "products",
+});
+db.performanceTrackerProduct.belongsTo(db.performanceTrackerChannel, {
+  foreignKey: "channel_id",
+  as: "channel",
+});
+db.performanceTrackerAdsAccount.hasMany(db.marketingPerformanceEntry, {
+  foreignKey: "ads_account_id",
+  as: "entries",
+});
+db.marketingPerformanceEntry.belongsTo(db.performanceTrackerAdsAccount, {
+  foreignKey: "ads_account_id",
+  as: "adsAccount",
+});
+db.performanceTrackerProduct.hasMany(db.marketingPerformanceEntry, {
+  foreignKey: "product_id",
+  as: "entries",
+});
+db.marketingPerformanceEntry.belongsTo(db.performanceTrackerProduct, {
+  foreignKey: "product_id",
+  as: "product",
 });
 db.performanceTrackerChannel.hasOne(db.channelPerformanceTarget, {
   foreignKey: "channel_id",
@@ -1532,6 +1583,26 @@ const ensureHolidayRangeColumns = async () => {
   );
 };
 
+const ensurePerformanceTrackerEntryColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.marketingPerformanceEntry.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.ads_account_id) {
+    await queryInterface.addColumn(tableName, "ads_account_id", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+
+  if (!tableDefinition.product_id) {
+    await queryInterface.addColumn(tableName, "product_id", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+};
+
 const ensureAttendanceDeviceApiKeyColumn = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.attendanceDevice.getTableName();
@@ -1905,6 +1976,20 @@ const ensureShifaReportColumns = async () => {
   });
 };
 
+const ensureShifaIncentiveColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.shifaIncentive.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.thousandPlusAmount) {
+    await queryInterface.addColumn(tableName, "thousandPlusAmount", {
+      type: DataTypes.DECIMAL(14, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
+};
+
 const ensureDailyWorkReportTaskColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.dailyWorkReportTask.getTableName();
@@ -2152,6 +2237,20 @@ const ensurePurchaseRequisitionItemsColumn = async () => {
   }
 };
 
+const ensureItemRequisitionUnitColumn = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.itemRequisition.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.unit) {
+    await queryInterface.addColumn(tableName, "unit", {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: "Pcs",
+    });
+  }
+};
+
 const ensurePackagingItemPurchaseColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.packagingItemPurchase.getTableName();
@@ -2287,6 +2386,14 @@ const ensureProfitLossColumns = async (modelKey) => {
       type: DataTypes.DECIMAL(8, 2),
       allowNull: false,
       defaultValue: 0,
+    });
+  }
+
+  if (!tableDefinition.emailSent) {
+    await queryInterface.addColumn(tableName, "emailSent", {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
     });
   }
 };
@@ -3065,12 +3172,14 @@ db.sequelize
   .sync({ force: false })
   .then(async () => {
     await ensureHolidayRangeColumns();
+    await ensurePerformanceTrackerEntryColumns();
     await ensureAttendanceDeviceApiKeyColumn();
     await ensureEmployeeListColumns();
     await ensureEmployeeColumns();
     await ensureEmployeeWorkReportColumns();
     await ensureLogisticWorkReportColumns();
     await ensureShifaReportColumns();
+    await ensureShifaIncentiveColumns();
     await ensureDailyWorkReportColumns();
     await ensureDailyWorkReportTaskColumns();
     await ensureKPIColumns();
@@ -3138,6 +3247,7 @@ db.sequelize
     await ensureAssetIdColumn("assetsRequisition");
     await ensurePurchaseRequisitionAssetColumns();
     await ensurePurchaseRequisitionItemsColumn();
+    await ensureItemRequisitionUnitColumn();
     await ensurePackagingItemPurchaseColumns();
     await ensurePurchaseReturnProductItemsColumn();
     await ensureManufactureVariantColumns();

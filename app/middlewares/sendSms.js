@@ -1,5 +1,19 @@
 const axios = require("axios");
 
+const parseConfig = (config = {}) => {
+  if (!config) return {};
+  if (typeof config === "object" && !Array.isArray(config)) return config;
+
+  try {
+    const parsed = JSON.parse(config);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch (error) {
+    return {};
+  }
+};
+
 const getSmsGatewayConfig = async () => {
   try {
     const db = require("../../models");
@@ -7,7 +21,7 @@ const getSmsGatewayConfig = async () => {
       where: { gatewayType: "sms" },
     });
     if (setting && !setting.isEnabled) return { disabled: true };
-    return setting.config || null;
+    return parseConfig(setting?.config);
   } catch (error) {
     return null;
   }
@@ -50,12 +64,20 @@ const parseJsonEnv = (envName, fallback = null) => {
 };
 
 const buildPayload = ({ to, message, config = {} }) => {
+  const senderId = config.senderId || process.env.SMS_API_SENDER_ID || "";
+  const apiKey = config.apiKey || process.env.SMS_API_KEY || "";
+  const smsType = config.smsType || process.env.SMS_API_TYPE || "text";
   const replacements = {
+    apiKey,
+    smsType,
+    type: smsType,
     to,
     phone: to,
     mobile: to,
     message,
     encodedMessage: encodeURIComponent(message),
+    senderId,
+    sender: senderId,
   };
 
   const bodyTemplate =
@@ -66,11 +88,19 @@ const buildPayload = ({ to, message, config = {} }) => {
   const toField = config.toField || process.env.SMS_API_TO_FIELD || "to";
   const messageField =
     config.messageField || process.env.SMS_API_MESSAGE_FIELD || "message";
-
-  return {
+  const senderField = config.senderField || process.env.SMS_API_SENDER_FIELD;
+  const apiKeyField = config.apiKeyField || process.env.SMS_API_KEY_FIELD;
+  const typeField = config.typeField || process.env.SMS_API_TYPE_FIELD;
+  const payload = {
     [toField]: to,
     [messageField]: message,
   };
+
+  if (senderField && senderId) payload[senderField] = senderId;
+  if (apiKeyField && apiKey) payload[apiKeyField] = apiKey;
+  if (typeField && smsType) payload[typeField] = smsType;
+
+  return payload;
 };
 
 const buildQuery = ({ to, message, config = {} }) => {
@@ -79,12 +109,21 @@ const buildQuery = ({ to, message, config = {} }) => {
     parseJsonEnv("SMS_API_QUERY_TEMPLATE");
   if (!queryTemplate) return null;
 
+  const senderId = config.senderId || process.env.SMS_API_SENDER_ID || "";
+  const apiKey = config.apiKey || process.env.SMS_API_KEY || "";
+  const smsType = config.smsType || process.env.SMS_API_TYPE || "text";
+
   return replacePlaceholders(queryTemplate, {
+    apiKey,
+    smsType,
+    type: smsType,
     to,
     phone: to,
     mobile: to,
     message,
     encodedMessage: encodeURIComponent(message),
+    senderId,
+    sender: senderId,
   });
 };
 

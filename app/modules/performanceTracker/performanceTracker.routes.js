@@ -16,6 +16,18 @@ router.get("/channels/all", auth(), requireAnyPermission(permissions), controlle
 router.put("/channels/:id", auth(), requireAnyPermission(permissions), controller.updateChannel);
 router.delete("/channels/:id", auth(), requireAnyPermission(permissions), controller.deleteChannel);
 
+router.post("/ads-accounts/create", auth(), requireAnyPermission(permissions), controller.createAdsAccount);
+router.get("/ads-accounts", auth(), requireAnyPermission(permissions), controller.getAdsAccounts);
+router.get("/ads-accounts/all", auth(), requireAnyPermission(permissions), controller.getAllAdsAccounts);
+router.put("/ads-accounts/:id", auth(), requireAnyPermission(permissions), controller.updateAdsAccount);
+router.delete("/ads-accounts/:id", auth(), requireAnyPermission(permissions), controller.deleteAdsAccount);
+
+router.post("/products/create", auth(), requireAnyPermission(permissions), controller.createProduct);
+router.get("/products", auth(), requireAnyPermission(permissions), controller.getProducts);
+router.get("/products/all", auth(), requireAnyPermission(permissions), controller.getAllProducts);
+router.put("/products/:id", auth(), requireAnyPermission(permissions), controller.updateProduct);
+router.delete("/products/:id", auth(), requireAnyPermission(permissions), controller.deleteProduct);
+
 router.post("/entries/create", auth(), requireAnyPermission(permissions), controller.createEntry);
 router.get("/entries", auth(), requireAnyPermission(permissions), controller.getEntries);
 router.get("/entries/all", auth(), requireAnyPermission(permissions), controller.getAllEntries);

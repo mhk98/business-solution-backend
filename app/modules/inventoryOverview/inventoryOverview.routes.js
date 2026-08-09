@@ -13,6 +13,14 @@ router.get(
   InventoryOverviewController.getInventoryOverviewList,
 );
 
+// ✅ PRODUCT-WISE INVENTORY REPORT (Reports submenu এর জন্য)
+router.get(
+  "/reports",
+  auth(),
+  requireMenuPermission("inventory_overview"),
+  InventoryOverviewController.getInventoryReports,
+);
+
 // ✅ SUMMARY (cards এর জন্য)
 router.get(
   "/summary",

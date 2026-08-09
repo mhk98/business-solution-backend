@@ -52,6 +52,8 @@ const insertIntoDB = async (payload) => {
 const sendInvoiceEmail = async (payload) => {
   const {
     clientEmail,
+    mode,
+    profitLossId,
     invoiceNumber,
     companyName,
     reportTitle,
@@ -115,6 +117,14 @@ const sendInvoiceEmail = async (payload) => {
     throw new ApiError(
       400,
       `Invoice email could not be sent to: ${failedList}`,
+    );
+  }
+
+  if (profitLossId) {
+    const Model = getModelByMode(mode);
+    await Model.update(
+      { emailSent: true },
+      { where: { Id: profitLossId } },
     );
   }
 

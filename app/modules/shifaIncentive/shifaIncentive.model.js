@@ -1,6 +1,6 @@
 module.exports = (sequelize, DataTypes) => {
-  const MarketingPerformanceEntry = sequelize.define(
-    "MarketingPerformanceEntry",
+  const ShifaIncentive = sequelize.define(
+    "ShifaIncentive",
     {
       Id: {
         type: DataTypes.INTEGER(10),
@@ -8,53 +8,50 @@ module.exports = (sequelize, DataTypes) => {
         autoIncrement: true,
         allowNull: false,
       },
-      channel_id: {
+      userId: {
         type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
+      employeeId: {
+        type: DataTypes.STRING(80),
         allowNull: false,
       },
-      ads_account_id: {
+      totalOrder: {
         type: DataTypes.INTEGER(10),
-        allowNull: true,
+        allowNull: false,
+        defaultValue: 0,
       },
-      product_id: {
+      totalAmount: {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      thousandPlusAmount: {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      returnOrder: {
         type: DataTypes.INTEGER(10),
-        allowNull: true,
+        allowNull: false,
+        defaultValue: 0,
+      },
+      returnMinus: {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: false,
+        defaultValue: 0,
+      },
+      totalIncentive: {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: false,
+        defaultValue: 0,
       },
       date: {
         type: DataTypes.DATEONLY,
-        allowNull: false,
-      },
-      spend_usd: {
-        type: DataTypes.DECIMAL(15, 2),
-        allowNull: false,
-        defaultValue: 0,
-      },
-      usd_rate: {
-        type: DataTypes.DECIMAL(15, 4),
-        allowNull: false,
-        defaultValue: 0,
-      },
-      spend_local: {
-        type: DataTypes.DECIMAL(15, 2),
-        allowNull: false,
-        defaultValue: 0,
-      },
-      total_revenue_local: {
-        type: DataTypes.DECIMAL(15, 2),
-        allowNull: false,
-        defaultValue: 0,
-      },
-      total_orders: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
-        defaultValue: 0,
+        allowNull: true,
       },
       note: {
         type: DataTypes.TEXT,
-        allowNull: true,
-      },
-      created_by: {
-        type: DataTypes.INTEGER(10),
         allowNull: true,
       },
       deletedAt: {
@@ -63,11 +60,15 @@ module.exports = (sequelize, DataTypes) => {
       },
     },
     {
-      tableName: "marketing_performance_entries",
       timestamps: true,
       paranoid: true,
+      tableName: "ShifaIncentives",
+      indexes: [
+        { fields: ["employeeId"] },
+        { fields: ["date"] },
+      ],
     },
   );
 
-  return MarketingPerformanceEntry;
+  return ShifaIncentive;
 };

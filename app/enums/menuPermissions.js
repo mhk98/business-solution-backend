@@ -110,6 +110,8 @@ const MENU_PERMISSIONS = {
   SHIFA_STARTING_SITUATION: "shifa_starting_situation",
   SHIFA_PROBLEM_HISTORY: "shifa_problem_history",
   SHIFA_PATIENT_UPDATE: "shifa_patient_update",
+  SHIFA_APPOINTMENT_SERIAL: "shifa_appointment_serial",
+  SHIFA_INCENTIVE: "shifa_incentive",
   PAYROLL_MANAGEMENT: "payroll_management",
   PAYSLIP: "payslip",
   EMPLOYEE_PROFILE: "employee_profile",
