@@ -20,6 +20,9 @@ const roleAliases = validRoles.reduce((acc, role) => {
 
 const uniq = (items = []) => [...new Set(items)];
 
+const isSuperAdminRole = (role) =>
+  normalizeRole(role) === ENUM_USER_ROLE.SUPER_ADMIN;
+
 const normalizeRole = (role, fallbackRole = null) => {
   if (role == null || role === "") return fallbackRole;
   return roleAliases[String(role).trim().toLowerCase()] || role;
@@ -160,6 +163,10 @@ const validateMenuPermissions = (menuPermissions) => {
 };
 
 const includeNewSettingsChildren = (role, permissions = []) => {
+  if (isSuperAdminRole(role)) {
+    return getDefaultPermissionsForRole(role);
+  }
+
   const permissionSet = new Set(normalizeMenuPermissions(permissions));
   const defaults = DEFAULT_ROLE_MENU_PERMISSIONS[role] || [];
 
@@ -245,6 +252,10 @@ const getEffectiveMenuPermissions = async (role) => {
     normalizeRole(role, ENUM_USER_ROLE.USER),
   );
 
+  if (isSuperAdminRole(normalizedRole)) {
+    return validateMenuPermissions(getDefaultPermissionsForRole(normalizedRole));
+  }
+
   const record = await RolePermission.findOne({
     where: { role: normalizedRole },
   });
@@ -281,7 +292,9 @@ const getRolePermissionByRole = async (role) => {
 
 const updateRolePermissions = async (role, menuPermissions) => {
   const normalizedRole = validateRole(role);
-  const normalizedPermissions = validateMenuPermissions(menuPermissions);
+  const normalizedPermissions = isSuperAdminRole(normalizedRole)
+    ? validateMenuPermissions(getDefaultPermissionsForRole(normalizedRole))
+    : validateMenuPermissions(menuPermissions);
 
   await RolePermission.upsert({
     role: normalizedRole,

@@ -400,10 +400,11 @@ db.shifaAppointmentSerial =
     db.sequelize,
     DataTypes,
   );
-db.shifaIncentive = require("../app/modules/shifaIncentive/shifaIncentive.model")(
-  db.sequelize,
-  DataTypes,
-);
+db.shifaIncentive =
+  require("../app/modules/shifaIncentive/shifaIncentive.model")(
+    db.sequelize,
+    DataTypes,
+  );
 
 db.department = require("../app/modules/department/department.model")(
   db.sequelize,
@@ -791,6 +792,14 @@ db.product.hasMany(db.confirmOrder, {
 
 db.book.hasMany(db.cashInOut, { foreignKey: "bookId" });
 db.cashInOut.belongsTo(db.book, { foreignKey: "bookId" });
+db.category.hasMany(db.cashInOut, {
+  foreignKey: "categoryId",
+  as: "cashInOuts",
+});
+db.cashInOut.belongsTo(db.category, {
+  foreignKey: "categoryId",
+  as: "categoryInfo",
+});
 
 db.performanceTrackerChannel.hasMany(db.marketingPerformanceEntry, {
   foreignKey: "channel_id",
@@ -2820,6 +2829,62 @@ const ensureCashInOutLoanColumns = async () => {
   }
 };
 
+const normalizeLookupText = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
+
+const ensureCashInOutCategoryRelation = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.cashInOut.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.categoryId) {
+    await queryInterface.addColumn(tableName, "categoryId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+
+  const [categories, rows] = await Promise.all([
+    db.category.findAll({ paranoid: false }),
+    db.cashInOut.findAll({
+      attributes: ["Id", "category", "categoryId"],
+      where: {
+        category: { [Op.ne]: null },
+      },
+      paranoid: false,
+    }),
+  ]);
+
+  const categoryByName = new Map();
+  categories.forEach((category) => {
+    const key = normalizeLookupText(category.name);
+    if (key) categoryByName.set(key, category);
+  });
+
+  for (const row of rows) {
+    const categoryName = String(row.category || "").trim();
+    const key = normalizeLookupText(categoryName);
+    if (!key) continue;
+
+    let category = categoryByName.get(key);
+    if (!category) {
+      category = await db.category.create({ name: categoryName });
+      categoryByName.set(key, category);
+    } else if (typeof category.restore === "function" && category.deletedAt) {
+      await category.restore();
+    }
+
+    if (Number(row.categoryId) !== Number(category.Id)) {
+      await db.cashInOut.update(
+        { categoryId: category.Id, category: category.name },
+        { where: { Id: row.Id }, paranoid: false },
+      );
+    }
+  }
+};
+
 const syncLoanRowsFromCashInOut = async () => {
   const loanRows = await db.cashInOut.findAll({
     attributes: [
@@ -3260,6 +3325,7 @@ db.sequelize
     );
     await ensureCreditLedgerColumns();
     await ensureCashInOutLoanColumns();
+    await ensureCashInOutCategoryRelation();
     await syncLoanRowsFromCashInOut();
     await ensureInventoryMinimumStockColumn();
     await ensureAssetsStockColumns();

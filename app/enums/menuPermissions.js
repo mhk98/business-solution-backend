@@ -60,6 +60,7 @@ const MENU_PERMISSIONS = {
   ACCOUNTING_OVERVIEW: "accounting_overview",
   ACCOUNTING_SUPPLIER: "accounting_supplier",
   BOOK: "book",
+  CATEGORY: "category",
   PETTY_CASH_REQUISITION: "petty_cash_requisition",
   PETTY_CASH: "petty_cash",
   LOAN: "loan",

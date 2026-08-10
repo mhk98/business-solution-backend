@@ -73,7 +73,8 @@ const buildPayload = async (data = {}, existing = null, options = {}) => {
         ? data.procurement || null
         : existing?.procurement || null,
     quantity,
-    unit: data.unit !== undefined ? data.unit || "Pcs" : existing?.unit || "Pcs",
+    unit:
+      data.unit !== undefined ? data.unit || "Pcs" : existing?.unit || "Pcs",
     amount,
     status:
       data.status !== undefined ? data.status || "Pending" : existing?.status,

@@ -8,6 +8,7 @@ const Notification = db.notification;
 const User = db.user;
 const SupplierHistory = db.supplierHistory;
 const Loan = db.loan;
+const Category = db.category;
 
 const formatDateOnly = (date) => {
   const year = date.getFullYear();
@@ -55,6 +56,62 @@ const generateMonthlyVoucherNo = async (date, voucherPrefix, transaction) => {
   });
 
   return `${prefix}${String(count + 1).padStart(4, "0")}`;
+};
+
+const normalizeCategoryName = (value) => {
+  if (value === undefined || value === null) return null;
+
+  const text = String(value).trim();
+  if (!text || ["undefined", "null"].includes(text.toLowerCase())) {
+    return null;
+  }
+
+  return text;
+};
+
+const resolveCategoryFields = async (data, transaction) => {
+  const hasCategoryId =
+    data.categoryId !== undefined &&
+    data.categoryId !== null &&
+    String(data.categoryId).trim() !== "";
+
+  if (hasCategoryId) {
+    const categoryId = Number(data.categoryId);
+    if (Number.isNaN(categoryId)) {
+      throw new ApiError(400, "CategoryId must be a valid number");
+    }
+
+    const category = await Category.findByPk(categoryId, { transaction });
+    if (!category) {
+      throw new ApiError(404, "Category not found");
+    }
+
+    return { categoryId: category.Id, category: category.name };
+  }
+
+  const categoryName = normalizeCategoryName(data.category);
+  if (!categoryName) return { categoryId: null, category: null };
+
+  const categories = await Category.findAll({
+    paranoid: false,
+    transaction,
+  });
+  const existing = categories.find(
+    (category) =>
+      String(category.name || "").trim().toLowerCase() ===
+      categoryName.toLowerCase(),
+  );
+
+  if (existing) {
+    if (typeof existing.restore === "function" && existing.deletedAt) {
+      await existing.restore({ transaction });
+    }
+
+    return { categoryId: existing.Id, category: existing.name };
+  }
+
+  const created = await Category.create({ name: categoryName }, { transaction });
+  return { categoryId: created.Id, category: created.name };
 };
 
 const buildLoanWhere = (filters = {}, extraConditions = []) => {
@@ -149,8 +206,14 @@ const insertIntoDB = async (data) => {
     const voucherNo = await generateMonthlyVoucherNo(date, voucherPrefix, t);
     const { date: normalizedDate } = getMonthRange(date);
     const { voucherPrefix: _voucherPrefix, ...cashInOutData } = data;
+    const categoryFields = await resolveCategoryFields(cashInOutData, t);
     const result = await CashInOut.create(
-      { ...cashInOutData, date: date || normalizedDate, voucherNo },
+      {
+        ...cashInOutData,
+        ...categoryFields,
+        date: date || normalizedDate,
+        voucherNo,
+      },
       { transaction: t },
     );
 
@@ -382,6 +445,7 @@ const getAllFromDB = async (filters, options) => {
     paymentMode,
     paymentStatus,
     bookId,
+    categoryId,
     voucherNo,
     ...otherFilters
   } = filters;
@@ -452,6 +516,10 @@ const getAllFromDB = async (filters, options) => {
     baseConditions.push({ bookId: { [Op.eq]: bookId } });
   }
 
+  if (categoryId) {
+    baseConditions.push({ categoryId: { [Op.eq]: categoryId } });
+  }
+
   if (voucherNo && String(voucherNo).trim()) {
     baseConditions.push({
       voucherNo: { [Op.like]: `%${String(voucherNo).trim()}%` },
@@ -486,7 +554,10 @@ const getAllFromDB = async (filters, options) => {
 
   const data = await CashInOut.findAll({
     where: listWhere,
-    include: [{ model: Loan, as: "loan", required: false }],
+    include: [
+      { model: Loan, as: "loan", required: false },
+      { model: Category, as: "categoryInfo", required: false },
+    ],
     offset: skip,
     limit,
     paranoid: true,
@@ -630,6 +701,10 @@ const getDataById = async (id) => {
     where: {
       bookId: id,
     },
+    include: [
+      { model: Loan, as: "loan", required: false },
+      { model: Category, as: "categoryInfo", required: false },
+    ],
     paranoid: true,
     order: [["date", "DESC"]],
   });
@@ -657,12 +732,26 @@ const updateOneFromDB = async (id, payload) => {
 
   console.log("supplierDetails", payload);
   return db.sequelize.transaction(async (t) => {
-    const [updatedCount] = await CashInOut.update(payload, {
+    const shouldResolveCategory =
+      (payload.categoryId !== undefined &&
+        payload.categoryId !== null &&
+        String(payload.categoryId).trim() !== "") ||
+      (payload.category !== undefined &&
+        payload.category !== null &&
+        String(payload.category).trim() !== "");
+    const categoryFields = shouldResolveCategory
+      ? await resolveCategoryFields(payload, t)
+      : {};
+
+    const [updatedCount] = await CashInOut.update(
+      { ...payload, ...categoryFields },
+      {
       where: {
         Id: id,
       },
       transaction: t,
-    });
+      },
+    );
 
     if (hasSupplierId) {
       const supplierData = {
@@ -712,6 +801,10 @@ const updateOneFromDB = async (id, payload) => {
 
 const getAllFromDBWithoutQuery = async () => {
   const result = await CashInOut.findAll({
+    include: [
+      { model: Loan, as: "loan", required: false },
+      { model: Category, as: "categoryInfo", required: false },
+    ],
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });
