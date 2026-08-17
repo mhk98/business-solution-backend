@@ -190,7 +190,7 @@ const loanSumAttributes = [
 ];
 
 const insertIntoDB = async (data) => {
-  const { amount, date, bookId, supplierId, employeeId, file, voucherPrefix } =
+  const { amount, date, bookId, supplierId, employeeId, file, voucherPrefix, note } =
     data;
   const hasSupplierId =
     supplierId !== undefined &&
@@ -225,6 +225,7 @@ const insertIntoDB = async (data) => {
         status: "Paid",
         date,
         file,
+        note,
       };
 
       console.log("supplierData", supplierData);
@@ -761,12 +762,10 @@ const updateOneFromDB = async (id, payload) => {
         status: "Paid",
         date,
         file,
+        note,
       };
 
-      await SupplierHistory.update(supplierData, {
-        where: { supplierId },
-        transaction: t,
-      });
+      await SupplierHistory.create(supplierData, { transaction: t });
     }
 
     const users = await User.findAll({

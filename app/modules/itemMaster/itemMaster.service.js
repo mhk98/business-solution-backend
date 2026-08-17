@@ -2,14 +2,35 @@ const { Op } = require("sequelize"); // Ensure Op is imported
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const {
   formatStockForDisplay,
+  toBaseStockPayload,
 } = require("../../../helpers/unitConversionHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const { ItemMasterSearchableFields } = require("./itemMaster.constants");
 const ItemMaster = db.itemMaster;
 
+const normalizeStockPayload = (payload = {}) => {
+  if (
+    payload.unit === undefined &&
+    payload.unitValue === undefined
+  ) {
+    return payload;
+  }
+
+  const normalized = toBaseStockPayload(
+    payload.unit || "Pcs",
+    payload.unitValue,
+  );
+
+  return {
+    ...payload,
+    unit: normalized.unit,
+    unitValue: normalized.unitValue,
+  };
+};
+
 const insertIntoDB = async (data) => {
-  const result = await ItemMaster.create(data);
+  const result = await ItemMaster.create(normalizeStockPayload(data));
 
   return result;
 };
@@ -110,7 +131,7 @@ const deleteIdFromDB = async (id) => {
 };
 
 const updateOneFromDB = async (id, payload) => {
-  const result = await ItemMaster.update(payload, {
+  const result = await ItemMaster.update(normalizeStockPayload(payload), {
     where: {
       Id: id,
     },

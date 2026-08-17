@@ -169,6 +169,10 @@ const getAllUserFromDB = async (filters, options) => {
     deletedAt: { [Op.is]: null }, // Only include records with deletedAt as null (not deleted)
   });
 
+  andConditions.push({
+    role: { [Op.ne]: ENUM_USER_ROLE.SUPER_ADMIN },
+  });
+
   const whereConditions =
     andConditions.length > 0 ? { [Op.and]: andConditions } : {};
 
@@ -192,13 +196,20 @@ const getAllUserFromDB = async (filters, options) => {
   };
 };
 
-const getUserById = async (id) => {
+const getUserById = async (id, actor) => {
   const result = await User.findOne({
     where: {
       Id: id,
     },
     attributes: { exclude: ["Password"] },
   });
+
+  if (
+    result?.role === ENUM_USER_ROLE.SUPER_ADMIN &&
+    Number(actor?.Id) !== Number(result.Id)
+  ) {
+    throw new ApiError(403, "Access denied.");
+  }
 
   return result;
 };
@@ -213,7 +224,7 @@ const deleteUserFromDB = async (id) => {
   return result;
 };
 
-const updateUserFromDB = async (id, payload) => {
+const updateUserFromDB = async (id, payload, actor) => {
   const existing = await User.findOne({
     where: { Id: id },
   });
@@ -235,7 +246,7 @@ const updateUserFromDB = async (id, payload) => {
     },
   });
 
-  return getUserById(id);
+  return getUserById(id, actor);
 };
 
 const updateUserStatusFromDB = async (actor, id, status) => {

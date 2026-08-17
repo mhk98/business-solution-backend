@@ -70,6 +70,15 @@ const normalizeUnitPayload = (unit, unitValue) => {
   return toBaseStockPayload(unit, unitValue);
 };
 
+const formatManufactureForDisplay = (record) => {
+  const formatted = formatStockForDisplay(record);
+  const relatedItemName = formatted?.Item?.name;
+
+  return relatedItemName
+    ? { ...formatted, name: relatedItemName }
+    : formatted;
+};
+
 const adjustStockBalance = async ({
   Model,
   stockLabel,
@@ -270,6 +279,8 @@ const insertIntoDB = async (payload) => {
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
   const { searchTerm, startDate, endDate, ...otherFilters } = filters;
+  const itemNameFilter = String(otherFilters.name || "").trim();
+  delete otherFilters.name;
 
   const andConditions = [];
 
@@ -287,6 +298,22 @@ const getAllFromDB = async (filters, options) => {
         [key]: { [Op.eq]: value },
       })),
     );
+  }
+
+  if (itemNameFilter) {
+    const matchingItems = await Item.findAll({
+      attributes: ["Id"],
+      where: { name: { [Op.eq]: itemNameFilter } },
+      paranoid: true,
+    });
+    const itemIds = matchingItems.map((item) => item.Id);
+
+    andConditions.push({
+      [Op.or]: [
+        { name: { [Op.eq]: itemNameFilter } },
+        ...(itemIds.length ? [{ itemId: { [Op.in]: itemIds } }] : []),
+      ],
+    });
   }
 
   if (startDate && endDate) {
@@ -318,6 +345,10 @@ const getAllFromDB = async (filters, options) => {
           as: "supplier",
           attributes: ["Id", "name"],
         },
+        {
+          model: Item,
+          attributes: ["Id", "name"],
+        },
       ],
       paranoid: true,
       order:
@@ -330,7 +361,7 @@ const getAllFromDB = async (filters, options) => {
 
   return {
     meta: { page, limit, count },
-    data: data.map(formatStockForDisplay),
+    data: data.map(formatManufactureForDisplay),
   };
 };
 

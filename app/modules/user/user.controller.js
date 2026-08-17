@@ -117,7 +117,7 @@ const getAllUserFromDB = catchAsync(async (req, res) => {
 });
 
 const getUserById = catchAsync(async (req, res) => {
-  const result = await UserService.getUserById(req.params.id);
+  const result = await UserService.getUserById(req.params.id, req.user);
   sendResponse(res, {
     statusCode: 200,
     success: true,
@@ -174,7 +174,7 @@ const updateUserFromDB = catchAsync(async (req, res) => {
     guardianIdCard: getUploadedDocumentPath(req.files, "guardianIdCard"),
   };
 
-  const result = await UserService.updateUserFromDB(id, data);
+  const result = await UserService.updateUserFromDB(id, data, req.user);
   sendResponse(res, {
     statusCode: 200,
     success: true,

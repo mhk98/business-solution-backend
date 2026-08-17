@@ -17,7 +17,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
 });
 
 const sendInvoiceEmail = catchAsync(async (req, res) => {
-  const result = await ProfitLossService.sendInvoiceEmail(req.body);
+  const result = await ProfitLossService.sendInvoiceEmail(req.body, req.user);
 
   if (!result) {
     throw new ApiError(400, "Invoice email could not be sent");

@@ -25,6 +25,17 @@ const getAllFromDB = catchAsync(async (req, res) => {
   });
 });
 
+const getEmailOptions = catchAsync(async (req, res) => {
+  const result = await MasterPermissionService.getEmailOptions();
+
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Master permission email options retrieved successfully",
+    data: result,
+  });
+});
+
 const insertIntoDB = catchAsync(async (req, res) => {
   const result = await MasterPermissionService.insertIntoDB(req.body, req.user);
 
@@ -49,6 +60,7 @@ const deleteFromDB = catchAsync(async (req, res) => {
 
 module.exports = {
   getSelfPermission,
+  getEmailOptions,
   getAllFromDB,
   insertIntoDB,
   deleteFromDB,

@@ -4,6 +4,52 @@ const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const { ItemSearchableFields } = require("./item.constants");
 const Item = db.item;
+const ItemMaster = db.itemMaster;
+const Manufacture = db.manufacture;
+const ManufactureStock = db.manufactureStock;
+const ManufactureProduction = db.manufactureProduction;
+const ItemRequisition = db.itemRequisition;
+const StockAdjustment = db.stockAdjustment;
+const StockMovement = db.stockMovement;
+
+const isBlank = (value) =>
+  value === undefined || value === null || String(value).trim() === "";
+
+const buildItemRenameWhere = (itemId, previousName) => {
+  const conditions = [{ itemId: Number(itemId) }];
+  if (!isBlank(previousName)) {
+    conditions.push({ name: String(previousName).trim() });
+  }
+
+  return { [Op.or]: conditions };
+};
+
+const syncItemNameReferences = async ({
+  itemId,
+  previousName,
+  nextName,
+  transaction,
+}) => {
+  if (isBlank(nextName) || String(previousName || "").trim() === String(nextName).trim()) {
+    return;
+  }
+
+  const whereConditions = buildItemRenameWhere(itemId, previousName);
+  const renameOptions = { where: whereConditions, transaction };
+
+  await Promise.all([
+    ItemMaster.update({ name: nextName }, renameOptions),
+    Manufacture.update({ name: nextName }, renameOptions),
+    ManufactureStock.update({ name: nextName }, renameOptions),
+    ManufactureProduction.update({ name: nextName }, renameOptions),
+    ItemRequisition.update({ name: nextName }, renameOptions),
+    StockAdjustment.update({ name: nextName }, renameOptions),
+    StockMovement.update(
+      { name: nextName },
+      { ...renameOptions, hooks: false },
+    ),
+  ]);
+};
 
 const insertIntoDB = async (data) => {
   const { name } = data;
@@ -108,10 +154,33 @@ const updateOneFromDB = async (id, payload) => {
   const data = {
     name,
   };
-  const result = await Item.update(data, {
-    where: {
-      Id: id,
-    },
+
+  const result = await db.sequelize.transaction(async (transaction) => {
+    const existing = await Item.findOne({
+      where: { Id: id },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+
+    if (!existing) {
+      throw new ApiError(404, "Item not found");
+    }
+
+    const [updatedCount] = await Item.update(data, {
+      where: {
+        Id: id,
+      },
+      transaction,
+    });
+
+    await syncItemNameReferences({
+      itemId: id,
+      previousName: existing.name,
+      nextName: name,
+      transaction,
+    });
+
+    return [updatedCount];
   });
 
   return result;

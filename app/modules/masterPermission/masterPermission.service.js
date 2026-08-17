@@ -20,6 +20,11 @@ const getAllFromDB = async () => {
   });
 };
 
+const getEmailOptions = async () => {
+  const rows = await getAllFromDB();
+  return rows.map((row) => ({ email: row.email }));
+};
+
 const isMasterEmail = async (email) => {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) return false;
@@ -85,6 +90,7 @@ module.exports = {
   normalizeEmail,
   ensureDefaultMasterPermission,
   getAllFromDB,
+  getEmailOptions,
   getSelfPermission,
   isMasterEmail,
   assertMasterUser,

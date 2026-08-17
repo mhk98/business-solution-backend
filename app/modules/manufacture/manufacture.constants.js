@@ -3,6 +3,7 @@ const ManufactureFilterAbleFileds = [
   "startDate",
   "endDate",
   "name",
+  "itemId",
 ];
 
 const ManufactureSearchableFields = ["searchTerm", "name"];

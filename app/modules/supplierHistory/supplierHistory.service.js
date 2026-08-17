@@ -10,6 +10,150 @@ const SupplierHistory = db.supplierHistory;
 const Supplier = db.supplier;
 const Warehouse = db.warehouse;
 const Book = db.book;
+const LedgerHistory = db.ledgerHistory;
+const PackagingItemPurchase = db.packagingItemPurchase;
+
+const toPlain = (row) => (row?.get ? row.get({ plain: true }) : row);
+
+const resolveSupplierHistoryStatus = ({ row, advanceIds, dueIds }) => {
+  const id = Number(row.Id || row.id);
+  const note = String(row.note || "").toLowerCase();
+
+  if (advanceIds.has(id)) return "Advance";
+  if (
+    dueIds.has(id) ||
+    note.includes("packaging item purchase") ||
+    note.includes("item purchase") ||
+    note.includes("purchase requisition") ||
+    row.status === "Unpaid"
+  ) {
+    return "Due";
+  }
+  if (row.bookId) return "Paid";
+  if (row.status === "Paid") return "Advance";
+
+  return row.status || "Paid";
+};
+
+const getSupplierHistorySourceSets = async (supplierHistoryIds) => {
+  const ids = supplierHistoryIds.map(Number).filter(Boolean);
+
+  if (!ids.length) {
+    return { advanceIds: new Set(), dueIds: new Set() };
+  }
+
+  try {
+    const [ledgerRows, packagingRows] = await Promise.all([
+      LedgerHistory.findAll({
+        attributes: ["supplierHistoryId"],
+        where: { supplierHistoryId: { [Op.in]: ids } },
+        raw: true,
+      }),
+      PackagingItemPurchase.findAll({
+        attributes: ["supplierHistoryId"],
+        where: { supplierHistoryId: { [Op.in]: ids } },
+        raw: true,
+      }),
+    ]);
+
+    return {
+      advanceIds: new Set(
+        ledgerRows.map((row) => Number(row.supplierHistoryId)).filter(Boolean),
+      ),
+      dueIds: new Set(
+        packagingRows.map((row) => Number(row.supplierHistoryId)).filter(Boolean),
+      ),
+    };
+  } catch (error) {
+    console.warn(
+      "Supplier history source lookup failed; falling back to status/book calculation:",
+      error.message,
+    );
+    return { advanceIds: new Set(), dueIds: new Set() };
+  }
+};
+
+const addComputedStatus = async (rows) => {
+  const plainRows = rows.map(toPlain);
+  const { advanceIds, dueIds } = await getSupplierHistorySourceSets(
+    plainRows.map((row) => row.Id || row.id),
+  );
+
+  return plainRows.map((row) => {
+    const computedStatus = resolveSupplierHistoryStatus({
+      row,
+      advanceIds,
+      dueIds,
+    });
+
+    return {
+      ...row,
+      rawStatus: row.status,
+      status: computedStatus,
+      displayStatus: computedStatus,
+    };
+  });
+};
+
+const getFallbackSummary = async (where) => {
+  const [total, totalPaid, totalUnpaid] = await Promise.all([
+    SupplierHistory.count({ where }),
+    SupplierHistory.sum("amount", { where: { ...where, status: "Paid" } }),
+    SupplierHistory.sum("amount", { where: { ...where, status: "Unpaid" } }),
+  ]);
+
+  const paid = Number(totalPaid || 0);
+  const grossDue = Number(totalUnpaid || 0);
+
+  return {
+    total,
+    totalPaid: paid,
+    totalAdvance: Math.max(paid - grossDue, 0),
+    grossDue,
+    totalDue: Math.max(grossDue - paid, 0),
+  };
+};
+
+const getComputedSummary = async (where) => {
+  let annotatedRows = [];
+
+  try {
+    const rows = await SupplierHistory.findAll({
+      attributes: ["Id", "amount", "status", "bookId", "note"],
+      where,
+      paranoid: true,
+      raw: true,
+    });
+    annotatedRows = await addComputedStatus(rows);
+  } catch (error) {
+    console.warn(
+      "Supplier history detailed summary failed; falling back to status aggregate:",
+      error.message,
+    );
+    return getFallbackSummary(where);
+  }
+
+  const summary = annotatedRows.reduce(
+    (summary, row) => {
+      const amount = Number(row.amount || 0);
+      summary.total += 1;
+
+      if (row.displayStatus === "Advance") summary.totalAdvance += amount;
+      else if (row.displayStatus === "Due") summary.grossDue += amount;
+      else summary.totalPaid += amount;
+
+      return summary;
+    },
+    { total: 0, totalPaid: 0, totalAdvance: 0, grossDue: 0 },
+  );
+
+  return {
+    ...summary,
+    totalDue: Math.max(summary.grossDue - summary.totalPaid, 0),
+    totalAdvance:
+      summary.totalAdvance + Math.max(summary.totalPaid - summary.grossDue, 0),
+  };
+};
 
 const insertIntoDB = async (data) => {
   const result = await SupplierHistory.create(data);
@@ -161,13 +305,6 @@ const getAllFromDB = async (filters, options) => {
     ? { [Op.and]: andConditions }
     : {};
 
-  // helper for adding status condition safely
-  const makeStatusWhere = (status) => ({
-    ...(andConditions.length
-      ? { [Op.and]: [...andConditions, { status }] }
-      : { status }),
-  });
-
   // ✅ paginated data
   const data = await SupplierHistory.findAll({
     where: whereConditions,
@@ -192,30 +329,24 @@ const getAllFromDB = async (filters, options) => {
         : [["createdAt", "DESC"]],
   });
 
-  const [totalCount, totalPaid, totalUnpaid] = await Promise.all([
+  const [totalCount, computedSummary, annotatedData] = await Promise.all([
     SupplierHistory.count({ where: whereConditions }),
-    SupplierHistory.sum("amount", {
-      where: makeStatusWhere("Paid"),
-    }),
-    SupplierHistory.sum("amount", {
-      where: makeStatusWhere("Unpaid"),
-    }),
+    getComputedSummary(whereConditions),
+    addComputedStatus(data),
   ]);
-
-  const paid = Number(totalPaid || 0);
-  const unpaid = Number(totalUnpaid || 0);
-  const netBalance = paid - unpaid;
 
   return {
     meta: {
       total: totalCount,
-      totalPaid: paid,
-      totalUnpaid: unpaid,
-      netBalance,
+      totalPaid: computedSummary.totalPaid,
+      totalAdvance: computedSummary.totalAdvance,
+      totalDue: computedSummary.totalDue,
+      totalUnpaid: computedSummary.totalDue,
+      netBalance: computedSummary.totalAdvance,
       page,
       limit,
     },
-    data,
+    data: annotatedData,
   };
 };
 const getDataById = async (id) => {
@@ -249,39 +380,26 @@ const updateOneFromDB = async (id, payload) => {
 };
 
 const getAllFromDBWithoutQuery = async () => {
-  const andConditions = [];
-  const makeStatusWhere = (status) => ({
-    ...(andConditions.length
-      ? { [Op.and]: [...andConditions, { status }] }
-      : { status }),
-  });
   const result = await SupplierHistory.findAll({
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });
 
-  const [totalCount, totalPaid, totalUnpaid] = await Promise.all([
-    SupplierHistory.count(),
-    SupplierHistory.sum("amount", {
-      where: makeStatusWhere("Paid"),
-    }),
-    SupplierHistory.sum("amount", {
-      where: makeStatusWhere("Unpaid"),
-    }),
+  const [computedSummary, annotatedResult] = await Promise.all([
+    getComputedSummary({}),
+    addComputedStatus(result),
   ]);
-
-  const paid = Number(totalPaid || 0);
-  const unpaid = Number(totalUnpaid || 0);
-  const netBalance = paid - unpaid;
 
   return {
     meta: {
-      total: totalCount,
-      totalPaid: paid,
-      totalUnpaid: unpaid,
-      netBalance,
+      total: computedSummary.total,
+      totalPaid: computedSummary.totalPaid,
+      totalAdvance: computedSummary.totalAdvance,
+      totalDue: computedSummary.totalDue,
+      totalUnpaid: computedSummary.totalDue,
+      netBalance: computedSummary.totalAdvance,
     },
-    result,
+    result: annotatedResult,
   };
 };
 

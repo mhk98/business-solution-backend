@@ -5,6 +5,7 @@ const ApiError = require("../../../error/ApiError");
 const { ProfitLossSearchableFields } = require("./profitLoss.constants");
 const profitLossInvoiceTemplate = require("../../utils/emailTemplates/profitLossInvoice");
 const sendEmail = require("../../middlewares/sendEmail");
+const MasterPermissionService = require("../masterPermission/masterPermission.service");
 const ProfitLoss = db.profitLoss;
 const Notification = db.notification;
 const User = db.user;
@@ -42,6 +43,29 @@ const parseRecipientEmails = (value) => {
   return emails;
 };
 
+const ensureInvoiceEmailRecipientsAllowed = async (actor, recipientEmails) => {
+  const actorIsMaster = await MasterPermissionService.isMasterEmail(
+    actor?.Email || actor?.email,
+  );
+
+  if (actorIsMaster) return;
+
+  const disallowedEmails = [];
+  await Promise.all(
+    recipientEmails.map(async (email) => {
+      const allowed = await MasterPermissionService.isMasterEmail(email);
+      if (!allowed) disallowedEmails.push(email);
+    }),
+  );
+
+  if (disallowedEmails.length) {
+    throw new ApiError(
+      403,
+      "You can only send invoice emails to master permission users",
+    );
+  }
+};
+
 const insertIntoDB = async (payload) => {
   const mode = resolveMode(payload?.mode);
   const Model = getModelByMode(mode);
@@ -49,7 +73,7 @@ const insertIntoDB = async (payload) => {
   return result;
 };
 
-const sendInvoiceEmail = async (payload) => {
+const sendInvoiceEmail = async (payload, actor) => {
   const {
     clientEmail,
     mode,
@@ -79,6 +103,8 @@ const sendInvoiceEmail = async (payload) => {
       `Invalid recipient email: ${invalidEmails.join(", ")}`,
     );
   }
+
+  await ensureInvoiceEmailRecipientsAllowed(actor, recipientEmails);
 
   const htmlContent = profitLossInvoiceTemplate({
     companyName: companyName || process.env.MAIL_BRAND_NAME,

@@ -19,13 +19,18 @@ const sendEmail = async ({ to, subject, htmlContent, filePath = null }) => {
 
   const gatewayConfig = await getEmailGatewayConfig();
   if (gatewayConfig?.disabled) return false;
-  const smtpPort = Number(gatewayConfig?.smtpPort || process.env.SMTP_PORT || 465);
+  const smtpPort = Number(
+    gatewayConfig?.smtpPort || process.env.SMTP_PORT || 465,
+  );
   const smtpSecure =
-    String(gatewayConfig?.smtpSecure ?? process.env.SMTP_SECURE ?? "true").toLowerCase() === "true";
+    String(
+      gatewayConfig?.smtpSecure ?? process.env.SMTP_SECURE ?? "true",
+    ).toLowerCase() === "true";
   const smtpUser =
     gatewayConfig?.smtpUser || process.env.SMTP_USER || "info@hadiyaworld.com";
   const smtpPass = gatewayConfig?.smtpPass || process.env.SMTP_PASS;
-  const fromEmail = gatewayConfig?.fromEmail || process.env.MAIL_FROM_EMAIL || smtpUser;
+  const fromEmail =
+    gatewayConfig?.fromEmail || process.env.MAIL_FROM_EMAIL || smtpUser;
   const fromName =
     gatewayConfig?.fromName ||
     gatewayConfig?.brandName ||
@@ -40,7 +45,8 @@ const sendEmail = async ({ to, subject, htmlContent, filePath = null }) => {
   }
 
   const transporter = nodemailer.createTransport({
-    host: gatewayConfig?.smtpHost || process.env.SMTP_HOST || "smtp.hostinger.com",
+    host:
+      gatewayConfig?.smtpHost || process.env.SMTP_HOST || "smtp.hostinger.com",
     port: smtpPort,
     secure: smtpSecure,
     auth: {

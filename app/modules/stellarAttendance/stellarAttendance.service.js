@@ -4,7 +4,7 @@ const db = require("../../../models");
 
 const JSON_API_URL = "https://rumytechnologies.com/rams/json_api";
 const GPS_LOG_URL = "https://rumytechnologies.com/rams/service/get_gps_log";
-const DEFAULT_ACCESS_ID = process.env.STELLAR_ATTENDANCE_DEFAULT_ACCESS_ID ?? 122790737;
+const DEFAULT_ACCESS_ID = Number(process.env.STELLAR_ATTENDANCE_DEFAULT_ACCESS_ID || 122790737);
 const CACHE_TTL_MS = Number(process.env.STELLAR_ATTENDANCE_CACHE_TTL_MS || 5 * 60 * 1000);
 const CHUNK_CONCURRENCY = Math.max(
   1,
@@ -130,15 +130,7 @@ const normalizeRequest = (query = {}) => {
 const shouldSyncFromQuery = (query = {}) =>
   query.sync === true || query.sync === "true" || query.forceSync === "true";
 
-const getSyncKey = (request) =>
-  JSON.stringify({
-    operation: request.operation,
-    start_date: request.start_date,
-    end_date: request.end_date,
-    start_time: request.start_time,
-    end_time: request.end_time,
-    access_id: request.access_id,
-  });
+const getSyncKey = (request) => `stellar_attendance:${request.operation}`;
 
 const getSyncState = async (request) => {
   if (!StellarAttendanceSyncState) return null;
@@ -309,6 +301,17 @@ const saveLogsToDB = async (rows = []) => {
   };
 };
 
+const getHighestSavedAccessId = async () => {
+  if (!StellarAttendanceLog) return DEFAULT_ACCESS_ID;
+
+  const highest = await StellarAttendanceLog.max("accessId");
+  const parsedHighest = Number(highest);
+
+  return Number.isFinite(parsedHighest) && parsedHighest > DEFAULT_ACCESS_ID
+    ? parsedHighest
+    : DEFAULT_ACCESS_ID;
+};
+
 const mapDBLogToStellarRow = (row) => ({
   ...(row.rawPayload || {}),
   access_id: row.accessId,
@@ -432,7 +435,7 @@ const fetchLogs = async (query) => {
   const request = normalizeRequest(query);
   const endpoint = request.operation === "fetch_gps_log" ? GPS_LOG_URL : JSON_API_URL;
   const dateSpanDays = getDateSpanDays(request.start_date, request.end_date);
-  const shouldChunk = request.operation === "fetch_log" && dateSpanDays > 2;
+  const shouldChunk = false;
   const syncRequested = shouldSyncFromQuery(query);
   const buildLogMeta = (rows, normalizedRequest) => ({
     count: rows.length,
@@ -484,25 +487,38 @@ const fetchLogs = async (query) => {
     });
   }
 
+  const highestSavedAccessId = await getHighestSavedAccessId();
+  const syncRequest = {
+    ...request,
+    access_id: highestSavedAccessId,
+  };
+
   if (!shouldChunk) {
     try {
       const result = await postStellar({
-        request,
+        request: syncRequest,
         endpoint,
         normalizeData: normalizeRows,
         buildMeta: buildLogMeta,
       });
       const dbSync = await saveLogsToDB(result.rows);
       const nextSyncLock = await markSyncAttempt(syncState, "success", "Stellar sync completed");
+      const storedResult = await buildStoredResult({
+        status: result.cache?.status || "live",
+        reason: "Stellar incremental sync completed",
+        syncLock: nextSyncLock,
+      });
       return {
-        ...result,
+        ...storedResult,
         meta: {
-          ...result.meta,
+          ...storedResult.meta,
           dbSync,
+          liveSync: result.meta,
+          requestedAccessId: highestSavedAccessId,
           syncLock: nextSyncLock,
         },
         cache: {
-          ...result.cache,
+          ...storedResult.cache,
           syncLock: nextSyncLock,
         },
       };

@@ -65,6 +65,34 @@ const getBulkItems = (data = {}) => {
   }));
 };
 
+const createSupplierDueHistory = async ({
+  supplierId,
+  bookId,
+  amount,
+  date,
+  file,
+  note,
+  transaction,
+}) => {
+  const finalSupplierId = Number(supplierId) || null;
+  const finalAmount = toNumber(amount);
+
+  if (!finalSupplierId || finalAmount <= 0) return null;
+
+  return SupplierHistory.create(
+    {
+      supplierId: finalSupplierId,
+      bookId: normalizeNullableId(bookId),
+      amount: finalAmount,
+      status: "Unpaid",
+      date,
+      file,
+      note: note || "Item purchase",
+    },
+    { transaction },
+  );
+};
+
 const syncProductStockId = async (productData, stockId, transaction) => {
   if (!productData || !stockId) return;
 
@@ -498,22 +526,15 @@ const insertIntoDB = async (data, file) => {
 
     const result = await ReceivedProduct.create(payload, { transaction: t });
 
-    // =========================
-    // SupplierHistory
-    // =========================
-    const normalizedBookId = normalizeNullableId(bookId);
-
-    // await SupplierHistory.create(
-    //   {
-    //     supplierId,
-    //     bookId: normalizedBookId,
-    //     amount: Number(purchase_price || 0) * Number(quantity || 0),
-    //     status: "Unpaid",
-    //     date,
-    //     file,
-    //   },
-    //   { transaction: t },
-    // );
+    await createSupplierDueHistory({
+      supplierId,
+      bookId,
+      amount: Number(purchase_price || 0) * Number(quantity || 0),
+      date,
+      file,
+      note: note || `Item purchase: ${productData.name}`,
+      transaction: t,
+    });
 
     // =========================
     // CashInOut
@@ -764,6 +785,24 @@ const insertBulkIntoDB = async (data, file, preparedItems = null) => {
       results.push(result);
     }
     const result = results[0];
+
+    const totalPurchaseAmount = normalizedItems.reduce(
+      (sum, item) =>
+        sum + toNumber(item.purchase_price) * toNumber(item.quantity),
+      0,
+    );
+
+    await createSupplierDueHistory({
+      supplierId,
+      bookId: data.bookId,
+      amount: totalPurchaseAmount,
+      date,
+      file,
+      note:
+        note ||
+        `Item purchase: ${normalizedItems.map((item) => item.name).join(", ")}`,
+      transaction: t,
+    });
 
     await sendReceivedProductNotifications({
       userId,

@@ -83,8 +83,38 @@ const toBaseStockPayload = (unit, unitValue) => {
 
 const formatUnitValue = (value) => Number(toNumber(value).toFixed(2));
 
+const isRawAttor = (record) =>
+  String(record?.name || "")
+    .trim()
+    .toLowerCase() === "raw attor";
+
+const formatRawAttorStockForDisplay = (record) => {
+  const unitKey = String(record?.unit || "").trim().toLowerCase();
+
+  if (!isRawAttor(record) || !["kg", "gram"].includes(unitKey)) {
+    return null;
+  }
+
+  const unitValue = toNumber(record.unitValue);
+  const literValue = unitKey === "gram" ? unitValue / 1000 : unitValue;
+
+  return {
+    ...record,
+    unit: "Liter",
+    unitValue: formatUnitValue(literValue),
+    baseUnit: record.unit,
+    baseUnitValue: formatUnitValue(unitValue),
+  };
+};
+
 const formatStockForDisplay = (record) => {
   const plainRecord = record?.toJSON ? record.toJSON() : { ...record };
+  const rawAttorDisplay = formatRawAttorStockForDisplay(plainRecord);
+
+  if (rawAttorDisplay) {
+    return rawAttorDisplay;
+  }
+
   const basePayload = toBaseStockPayload(plainRecord.unit, plainRecord.unitValue);
 
   if (!basePayload.isConvertedUnit) {

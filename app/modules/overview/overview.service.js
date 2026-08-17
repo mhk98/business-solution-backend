@@ -289,6 +289,25 @@ const sumField = async (Model, field, where = {}) => {
   return n(total);
 };
 
+const getDmBalanceSummary = async (where = {}) => {
+  const [cashIn, cashOut] = await Promise.all([
+    sumField(MarketingExpense, "amount", {
+      ...where,
+      paymentStatus: "CashIn",
+    }),
+    sumField(MarketingExpense, "amount", {
+      ...where,
+      paymentStatus: "CashOut",
+    }),
+  ]);
+
+  return {
+    cashIn,
+    cashOut,
+    balance: n(cashIn - cashOut),
+  };
+};
+
 const sumExcludedCashOutAmount = async (where = {}) => {
   const total = await CashInOut.sum("amount", {
     where: activeWhere(CashInOut, {
@@ -296,7 +315,7 @@ const sumExcludedCashOutAmount = async (where = {}) => {
       paymentStatus: "CashOut",
       [Op.and]: [
         db.Sequelize.literal(
-          "LOWER(category) IN ('loan', 'advance', 'product purchase')",
+          "LOWER(category) IN ('loan', 'advance', 'product purchase', 'purchase of products')",
         ),
       ],
     }),
@@ -685,6 +704,7 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
 
   const [
     totalMetaAmount,
+    totalDmCashInAmount,
     totalAssetsBalance,
     totalReceiveableAmount,
     totalPayableAmount,
@@ -715,6 +735,10 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     sumField(MarketingExpense, "amount", {
       ...transactionDateWhere,
       paymentStatus: "CashOut",
+    }),
+    sumField(MarketingExpense, "amount", {
+      ...transactionDateWhere,
+      paymentStatus: "CashIn",
     }),
     sumQuantityValue(AssetsStock, {}, "price"),
     sumField(Receiveable, "amount", transactionDateWhere),
@@ -781,6 +805,7 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
   const netPurchase = n(inTransitPurchaseAmount - salesReturnPurchaseAmount);
   const grossProfit = n(netRevenue - netPurchase);
   const netProfitLoss = n(grossProfit - othersExpense);
+  const dmBalance = n(totalDmCashInAmount - totalMetaAmount);
   const totalPendingApprovalCount = n(
     pendingPurchaseRequisitionCount +
       pendingPettyCashRequisitionCount +
@@ -792,6 +817,9 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     from: from || null,
     to: to || null,
     totalMetaAmount,
+    totalDmCashInAmount,
+    totalDmCashOutAmount: totalMetaAmount,
+    dmBalance,
     totalAssetsBalance,
     totalReceiveableAmount,
     totalPayableAmount,
@@ -1217,6 +1245,7 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
   const [
     currentSummary,
     previousSummary,
+    currentDmBalance,
     currentSales,
     previousSales,
     totalProductCount,
@@ -1238,6 +1267,7 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
       to: previousRange.to,
       applyFilter: true,
     }),
+    getDmBalanceSummary(),
     getSalesTotals(currentDateWhere),
     getSalesTotals(previousDateWhere),
     countWhere(Product, {}),
@@ -1265,6 +1295,7 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
         currentSummary.netRevenue,
         previousSummary.netRevenue,
       ),
+      dmBalance: makeSnapshotMetric(currentDmBalance.balance),
       totalSales: makeMetric(currentSales.revenue, previousSales.revenue),
       totalOrders: makeMetric(currentSales.orders, previousSales.orders),
       totalProducts: {
@@ -1277,7 +1308,7 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
         ),
       },
       lowStockItems: makeSnapshotMetric(inventorySnapshot.lowStock.count),
-      stockValue: makeSnapshotMetric(currentSummary.totalInventoryRetailValue),
+      stockValue: makeSnapshotMetric(currentSummary.totalInventoryOverview),
     },
     salesOverview,
     inventorySummary: {
