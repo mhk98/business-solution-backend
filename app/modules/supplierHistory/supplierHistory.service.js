@@ -17,7 +17,8 @@ const toPlain = (row) => (row?.get ? row.get({ plain: true }) : row);
 
 const resolveSupplierHistoryStatus = ({ row, advanceIds, dueIds }) => {
   const id = Number(row.Id || row.id);
-  const note = String(row.note || "").toLowerCase();
+  const note = typeof row.note === "string" ? row.note.toLowerCase() : "";
+  const hasBookReference = !!row.bookId;
 
   if (advanceIds.has(id)) return "Advance";
   if (
@@ -29,7 +30,7 @@ const resolveSupplierHistoryStatus = ({ row, advanceIds, dueIds }) => {
   ) {
     return "Due";
   }
-  if (row.bookId) return "Paid";
+  if (hasBookReference) return "Paid";
   if (row.status === "Paid") return "Advance";
 
   return row.status || "Paid";
@@ -61,7 +62,9 @@ const getSupplierHistorySourceSets = async (supplierHistoryIds) => {
         ledgerRows.map((row) => Number(row.supplierHistoryId)).filter(Boolean),
       ),
       dueIds: new Set(
-        packagingRows.map((row) => Number(row.supplierHistoryId)).filter(Boolean),
+        packagingRows
+          .map((row) => Number(row.supplierHistoryId))
+          .filter(Boolean),
       ),
     };
   } catch (error) {
@@ -119,7 +122,7 @@ const getComputedSummary = async (where) => {
 
   try {
     const rows = await SupplierHistory.findAll({
-      attributes: ["Id", "amount", "status", "bookId", "note"],
+      attributes: ["Id", "amount", "status"],
       where,
       paranoid: true,
       raw: true,

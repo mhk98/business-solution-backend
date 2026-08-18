@@ -1,4 +1,3 @@
-const { Op } = require("sequelize");
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const {
   formatStockForDisplay,
@@ -15,6 +14,7 @@ const User = db.user;
 const Item = db.item;
 const Supplier = db.supplier;
 const ItemMaster = db.itemMaster;
+const { Op, Sequelize } = require("sequelize");
 
 const parseVariantPayload = (value) => {
   if (!value) return null;
@@ -74,9 +74,7 @@ const formatManufactureForDisplay = (record) => {
   const formatted = formatStockForDisplay(record);
   const relatedItemName = formatted?.Item?.name;
 
-  return relatedItemName
-    ? { ...formatted, name: relatedItemName }
-    : formatted;
+  return relatedItemName ? { ...formatted, name: relatedItemName } : formatted;
 };
 
 const adjustStockBalance = async ({
@@ -172,7 +170,9 @@ const adjustStockBalance = async ({
       name,
       variant,
       variantKey: variantKey || null,
-      unit: currentStockPayload.isConvertedUnit ? currentStockPayload.unit : unit,
+      unit: currentStockPayload.isConvertedUnit
+        ? currentStockPayload.unit
+        : unit,
       unitValue: nextQuantity,
       cost: nextCost,
     },
@@ -276,46 +276,163 @@ const insertIntoDB = async (payload) => {
   });
 };
 
+// const getAllFromDB = async (filters, options) => {
+//   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
+//   const { searchTerm, startDate, endDate, ...otherFilters } = filters;
+//   const itemNameFilter = String(otherFilters.name || "").trim();
+//   delete otherFilters.name;
+
+//   const andConditions = [];
+
+//   if (searchTerm && searchTerm.trim()) {
+//     andConditions.push({
+//       [Op.or]: ManufactureSearchableFields.map((field) => ({
+//         [field]: { [Op.iLike]: `%${searchTerm.trim()}%` },
+//       })),
+//     });
+//   }
+
+//   if (Object.keys(otherFilters).length) {
+//     andConditions.push(
+//       ...Object.entries(otherFilters).map(([key, value]) => ({
+//         [key]: { [Op.eq]: value },
+//       })),
+//     );
+//   }
+
+//   if (itemNameFilter) {
+//     const matchingItems = await Item.findAll({
+//       attributes: ["Id"],
+//       where: { name: { [Op.eq]: itemNameFilter } },
+//       paranoid: true,
+//     });
+//     const itemIds = matchingItems.map((item) => item.Id);
+
+//     andConditions.push({
+//       [Op.or]: [
+//         { name: { [Op.eq]: itemNameFilter } },
+//         ...(itemIds.length ? [{ itemId: { [Op.in]: itemIds } }] : []),
+//       ],
+//     });
+//   }
+
+//   if (startDate && endDate) {
+//     const start = new Date(startDate);
+//     start.setHours(0, 0, 0, 0);
+
+//     const end = new Date(endDate);
+//     end.setHours(23, 59, 59, 999);
+
+//     andConditions.push({
+//       date: { [Op.between]: [start, end] },
+//     });
+//   }
+
+//   andConditions.push({ deletedAt: { [Op.is]: null } });
+
+//   const whereConditions = andConditions.length
+//     ? { [Op.and]: andConditions }
+//     : {};
+
+//   const [data, count] = await Promise.all([
+//     Manufacture.findAll({
+//       where: whereConditions,
+//       offset: skip,
+//       limit,
+//       include: [
+//         {
+//           model: Supplier,
+//           as: "supplier",
+//           attributes: ["Id", "name"],
+//         },
+//         {
+//           model: Item,
+//           attributes: ["Id", "name"],
+//         },
+//       ],
+//       paranoid: true,
+//       order:
+//         options.sortBy && options.sortOrder
+//           ? [[options.sortBy, options.sortOrder.toUpperCase()]]
+//           : [["createdAt", "DESC"]],
+//     }),
+//     Manufacture.count({ where: whereConditions }),
+//   ]);
+
+//   return {
+//     meta: { page, limit, count },
+//     data: data.map(formatManufactureForDisplay),
+//   };
+// };
+
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
+
   const { searchTerm, startDate, endDate, ...otherFilters } = filters;
+
   const itemNameFilter = String(otherFilters.name || "").trim();
   delete otherFilters.name;
 
   const andConditions = [];
 
+  // Search
   if (searchTerm && searchTerm.trim()) {
     andConditions.push({
       [Op.or]: ManufactureSearchableFields.map((field) => ({
-        [field]: { [Op.iLike]: `%${searchTerm.trim()}%` },
+        [field]: {
+          [Op.iLike]: `%${searchTerm.trim()}%`,
+        },
       })),
     });
   }
 
+  // Other filters
   if (Object.keys(otherFilters).length) {
     andConditions.push(
       ...Object.entries(otherFilters).map(([key, value]) => ({
-        [key]: { [Op.eq]: value },
+        [key]: {
+          [Op.eq]: value,
+        },
       })),
     );
   }
 
+  // Item name filter
   if (itemNameFilter) {
     const matchingItems = await Item.findAll({
       attributes: ["Id"],
-      where: { name: { [Op.eq]: itemNameFilter } },
+      where: {
+        name: {
+          [Op.eq]: itemNameFilter,
+        },
+      },
       paranoid: true,
     });
+
     const itemIds = matchingItems.map((item) => item.Id);
 
     andConditions.push({
       [Op.or]: [
-        { name: { [Op.eq]: itemNameFilter } },
-        ...(itemIds.length ? [{ itemId: { [Op.in]: itemIds } }] : []),
+        {
+          name: {
+            [Op.eq]: itemNameFilter,
+          },
+        },
+
+        ...(itemIds.length
+          ? [
+              {
+                itemId: {
+                  [Op.in]: itemIds,
+                },
+              },
+            ]
+          : []),
       ],
     });
   }
 
+  // Date filter
   if (startDate && endDate) {
     const start = new Date(startDate);
     start.setHours(0, 0, 0, 0);
@@ -324,43 +441,86 @@ const getAllFromDB = async (filters, options) => {
     end.setHours(23, 59, 59, 999);
 
     andConditions.push({
-      date: { [Op.between]: [start, end] },
+      date: {
+        [Op.between]: [start, end],
+      },
     });
   }
 
-  andConditions.push({ deletedAt: { [Op.is]: null } });
+  // Soft delete filter
+  andConditions.push({
+    deletedAt: {
+      [Op.is]: null,
+    },
+  });
 
   const whereConditions = andConditions.length
-    ? { [Op.and]: andConditions }
+    ? {
+        [Op.and]: andConditions,
+      }
     : {};
 
-  const [data, count] = await Promise.all([
+  const [data, count, totalPurchaseResult] = await Promise.all([
+    // Data
     Manufacture.findAll({
       where: whereConditions,
+
       offset: skip,
+
       limit,
+
       include: [
         {
           model: Supplier,
           as: "supplier",
           attributes: ["Id", "name"],
         },
+
         {
           model: Item,
           attributes: ["Id", "name"],
         },
       ],
+
       paranoid: true,
+
       order:
         options.sortBy && options.sortOrder
           ? [[options.sortBy, options.sortOrder.toUpperCase()]]
           : [["createdAt", "DESC"]],
     }),
-    Manufacture.count({ where: whereConditions }),
+
+    // Total entries
+    Manufacture.count({
+      where: whereConditions,
+    }),
+
+    // Total purchase amount
+    Manufacture.findOne({
+      where: whereConditions,
+
+      attributes: [
+        [
+          Sequelize.fn("SUM", Sequelize.literal("unitValue * cost")),
+          "totalPurchaseAmount",
+        ],
+      ],
+
+      raw: true,
+    }),
   ]);
 
   return {
-    meta: { page, limit, count },
+    meta: {
+      page,
+      limit,
+      count,
+
+      totalPurchaseAmount: Number(
+        totalPurchaseResult?.totalPurchaseAmount || 0,
+      ),
+    },
+
     data: data.map(formatManufactureForDisplay),
   };
 };
@@ -491,9 +651,13 @@ const updateOneFromDB = async (id, payload) => {
   const nextProductId =
     productId === "" || productId == null ? existing.productId : productId;
   const nextVariant =
-    variant === undefined ? parseVariantPayload(existing.variant) : parseVariantPayload(variant);
+    variant === undefined
+      ? parseVariantPayload(existing.variant)
+      : parseVariantPayload(variant);
   const nextVariantKey =
-    variantKey === undefined ? existing.variantKey : variantKey || buildVariantKey(nextVariant);
+    variantKey === undefined
+      ? existing.variantKey
+      : variantKey || buildVariantKey(nextVariant);
   const nextName = name === "" || name == null ? nextItem.name : name;
 
   const data = {
