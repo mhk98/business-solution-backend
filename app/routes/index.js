@@ -28,6 +28,7 @@ const OwnerTransactionRoutes = require("../modules/ownerTransaction/ownerTransac
 const CategoryRoutes = require("../modules/category/category.routes");
 const BankAccountRoutes = require("../modules/bankAccount/bankAccount.routes");
 const DamageProductRoutes = require("../modules/damageProduct/damageProduct.routes");
+const DamageReturnRoutes = require("../modules/damageReturn/damageReturn.routes");
 const EmployeeRoutes = require("../modules/employee/employee.routes");
 const NotificationRoutes = require("../modules/notification/notification.routes");
 const NoticeRoutes = require("../modules/notice/notice.routes");
@@ -38,6 +39,7 @@ const WarehouseRoutes = require("../modules/warehouse/warehouse.routes");
 const LogoRoutes = require("../modules/logo/logo.routes");
 const SalaryRoutes = require("../modules/salary/salary.routes");
 const DamageRepairRoutes = require("../modules/damageRepair/damageRepair.routes");
+const DamageRepairReturnRoutes = require("../modules/damageRepairReturn/damageRepairReturn.routes");
 const DamageRepairedRoutes = require("../modules/damageRepaired/damageRepaired.routes");
 const PurchaseRequisitionRoutes = require("../modules/purchaseRequision/purchaseRequisition.routes");
 const ItemRequisitionRoutes = require("../modules/itemRequision/itemRequision.routes");
@@ -260,6 +262,10 @@ const moduleRoutes = [
     route: DamageProductRoutes,
   },
   {
+    path: "/damage-return",
+    route: DamageReturnRoutes,
+  },
+  {
     path: "/damage-stock",
     route: DamageStockRoutes,
   },
@@ -270,6 +276,10 @@ const moduleRoutes = [
   {
     path: "/damage-repair",
     route: DamageRepairRoutes,
+  },
+  {
+    path: "/damage-repair-return",
+    route: DamageRepairReturnRoutes,
   },
   {
     path: "/damage-repaired",

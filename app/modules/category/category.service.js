@@ -1,12 +1,37 @@
-const { Op, where } = require("sequelize"); // Ensure Op is imported
+const { Op } = require("sequelize");
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
-const { CategorySearchableFields } = require("./category.constants");
 const Category = db.category;
 
+const normalizeStatus = (value) => {
+  const status = String(value || "Expense").trim();
+  if (!status || status === "Active") return "Expense";
+  if (!["Expense", "Not Expense"].includes(status)) {
+    throw new ApiError(400, "Category status must be Expense or Not Expense");
+  }
+  return status;
+};
+
+const normalizePayload = (payload = {}, { defaultStatus = false } = {}) => {
+  const normalized = { ...payload };
+
+  if (payload.name !== undefined) {
+    normalized.name = String(payload.name || "").trim();
+    if (!normalized.name) throw new ApiError(400, "Category name is required");
+  }
+
+  if (payload.status !== undefined || defaultStatus) {
+    normalized.status = normalizeStatus(payload.status);
+  }
+
+  return normalized;
+};
+
 const insertIntoDB = async (data) => {
-  const result = await Category.create(data);
+  const payload = normalizePayload(data, { defaultStatus: true });
+  if (!payload.name) throw new ApiError(400, "Category name is required");
+  const result = await Category.create(payload);
   return result;
 };
 
@@ -96,13 +121,13 @@ const deleteIdFromDB = async (id) => {
 };
 
 const updateOneFromDB = async (id, payload) => {
-  const result = await Category.update(payload, {
-    where: {
-      Id: id,
-    },
-  });
+  const category = await Category.findByPk(id);
+  if (!category) throw new ApiError(404, "Category not found");
 
-  return result;
+  await category.update(normalizePayload(payload));
+  await category.reload();
+
+  return category;
 };
 
 const getAllFromDBWithoutQuery = async () => {

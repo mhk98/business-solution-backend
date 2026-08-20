@@ -18,6 +18,11 @@ module.exports = (sequelize, DataTypes) => {
           notEmpty: true, // Ensure name is not empty
         },
       },
+      status: {
+        type: DataTypes.STRING(32),
+        allowNull: false,
+        defaultValue: "Expense",
+      },
       deletedAt: {
         type: DataTypes.DATE,
         allowNull: true, // This will be used for soft delete

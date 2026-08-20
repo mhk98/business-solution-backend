@@ -1356,6 +1356,9 @@ db.ledgerHistory.belongsTo(db.employeeList, {
 db.supplier.hasMany(db.cashInOut, { foreignKey: "supplierId" });
 db.cashInOut.belongsTo(db.supplier, { foreignKey: "supplierId" });
 
+db.owner.hasMany(db.cashInOut, { foreignKey: "ownerId" });
+db.cashInOut.belongsTo(db.owner, { foreignKey: "ownerId", as: "owner" });
+
 db.loan.hasMany(db.cashInOut, { foreignKey: "loanId" });
 db.cashInOut.belongsTo(db.loan, { foreignKey: "loanId", as: "loan" });
 
@@ -2821,6 +2824,13 @@ const ensureCashInOutLoanColumns = async () => {
     });
   }
 
+  if (!tableDefinition.ownerId) {
+    await queryInterface.addColumn(tableName, "ownerId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+
   if (!tableDefinition.voucherNo) {
     await queryInterface.addColumn(tableName, "voucherNo", {
       type: DataTypes.STRING,
@@ -2833,6 +2843,30 @@ const normalizeLookupText = (value) =>
   String(value || "")
     .trim()
     .toLowerCase();
+
+const ensureCategoryStatusColumn = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.category.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.status) {
+    await queryInterface.addColumn(tableName, "status", {
+      type: DataTypes.STRING(32),
+      allowNull: false,
+      defaultValue: "Expense",
+    });
+  }
+
+  await db.category.update(
+    { status: "Expense" },
+    {
+      where: {
+        [Op.or]: [{ status: null }, { status: "" }, { status: "Active" }],
+      },
+      paranoid: false,
+    },
+  );
+};
 
 const ensureCashInOutCategoryRelation = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
@@ -3325,6 +3359,7 @@ db.sequelize
     );
     await ensureCreditLedgerColumns();
     await ensureCashInOutLoanColumns();
+    await ensureCategoryStatusColumn();
     await ensureCashInOutCategoryRelation();
     await syncLoanRowsFromCashInOut();
     await ensureInventoryMinimumStockColumn();

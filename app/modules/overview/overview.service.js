@@ -20,6 +20,7 @@ const AssetsPurchase = db.assetsPurchase;
 const AssetsSale = db.assetsSale;
 const AssetsDamage = db.assetsDamage;
 const CashInOut = db.cashInOut;
+const Category = db.category;
 const Product = db.product;
 const InventoryMaster = db.inventoryMaster;
 const ConfirmOrder = db.confirmOrder;
@@ -309,20 +310,27 @@ const getDmBalanceSummary = async (where = {}) => {
 };
 
 const sumExcludedCashOutAmount = async (where = {}) => {
-  const total = await CashInOut.sum("amount", {
+  const rows = await CashInOut.findAll({
+    attributes: ["amount"],
     where: activeWhere(CashInOut, {
       ...where,
       paymentStatus: "CashOut",
-      [Op.and]: [
-        db.Sequelize.literal(
-          "LOWER(category) IN ('loan', 'advance', 'product purchase', 'purchase of products')",
-        ),
-      ],
     }),
+    include: [
+      {
+        model: Category,
+        as: "categoryInfo",
+        attributes: ["status"],
+        required: false,
+      },
+    ],
     paranoid: true,
   });
 
-  return n(total);
+  return rows.reduce((total, row) => {
+    const status = row.categoryInfo?.status || "Expense";
+    return status === "Not Expense" ? n(total + n(row.amount)) : total;
+  }, 0);
 };
 
 const countWhere = async (Model, where = {}) => {
@@ -792,7 +800,7 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     inTransitSalesAmount - salesReturnSalesAmount,
   );
   const othersExpense = Math.max(
-    n(totalCashOutAmount - excludedCashOutAmount),
+    n(totalCashOutAmount) - n(excludedCashOutAmount),
     0,
   );
   const netRevenue = n(

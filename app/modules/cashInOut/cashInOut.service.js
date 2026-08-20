@@ -9,6 +9,17 @@ const User = db.user;
 const SupplierHistory = db.supplierHistory;
 const Loan = db.loan;
 const Category = db.category;
+const Owner = db.owner;
+const Book = db.book;
+const OwnerTransaction = db.ownerTransaction;
+
+const normalizeOptionalId = (value) => {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return null;
+  }
+  const numberValue = Number(value);
+  return Number.isNaN(numberValue) ? null : numberValue;
+};
 
 const formatDateOnly = (date) => {
   const year = date.getFullYear();
@@ -117,9 +128,17 @@ const resolveCategoryFields = async (data, transaction) => {
 const buildLoanWhere = (filters = {}, extraConditions = []) => {
   const { searchTerm, startDate, endDate, lender, loanId } = filters;
   const conditions = [
-    db.Sequelize.where(db.Sequelize.fn("LOWER", db.Sequelize.col("category")), {
-      [Op.eq]: "loan",
-    }),
+    {
+      [Op.or]: [
+        db.Sequelize.where(
+          db.Sequelize.fn("LOWER", db.Sequelize.col("category")),
+          {
+            [Op.eq]: "loan",
+          },
+        ),
+        { loanId: { [Op.ne]: null } },
+      ],
+    },
     ...extraConditions,
   ];
 
@@ -190,12 +209,28 @@ const loanSumAttributes = [
 ];
 
 const insertIntoDB = async (data) => {
-  const { amount, date, bookId, supplierId, employeeId, file, voucherPrefix, note } =
-    data;
+  const {
+    amount,
+    date,
+    bookId,
+    supplierId,
+    ownerId,
+    employeeId,
+    file,
+    voucherPrefix,
+    note,
+    paymentStatus,
+    remarks,
+    status,
+  } = data;
   const hasSupplierId =
     supplierId !== undefined &&
     supplierId !== null &&
     String(supplierId) !== "";
+  const finalOwnerId = normalizeOptionalId(ownerId);
+  const finalBookId = normalizeOptionalId(bookId);
+  const shouldSyncOwnerTransaction = ownerId !== undefined;
+  const hasOwnerId = shouldSyncOwnerTransaction && Boolean(finalOwnerId);
 
   // const hasEmployeeId =
   //   employeeId !== undefined &&
@@ -203,6 +238,16 @@ const insertIntoDB = async (data) => {
   //   String(employeeId) !== "";
 
   return db.sequelize.transaction(async (t) => {
+    if (hasOwnerId) {
+      if (!finalBookId) throw new ApiError(400, "Book is required!");
+      const [owner, book] = await Promise.all([
+        Owner.findByPk(finalOwnerId, { transaction: t }),
+        Book.findByPk(finalBookId, { transaction: t }),
+      ]);
+      if (!owner) throw new ApiError(404, "Owner not found");
+      if (!book) throw new ApiError(404, "Book not found");
+    }
+
     const voucherNo = await generateMonthlyVoucherNo(date, voucherPrefix, t);
     const { date: normalizedDate } = getMonthRange(date);
     const { voucherPrefix: _voucherPrefix, ...cashInOutData } = data;
@@ -231,6 +276,22 @@ const insertIntoDB = async (data) => {
       console.log("supplierData", supplierData);
 
       await SupplierHistory.create(supplierData, { transaction: t });
+    }
+
+    if (hasOwnerId) {
+      await OwnerTransaction.create(
+        {
+          ownerId: finalOwnerId,
+          bookId: finalBookId,
+          cashInOutId: result.Id,
+          type: paymentStatus === "CashOut" ? "Withdraw" : "Deposit",
+          amount,
+          remarks: remarks || note || "",
+          date: date || normalizedDate,
+          status: status || "Active",
+        },
+        { transaction: t },
+      );
     }
 
     return result;
@@ -557,6 +618,7 @@ const getAllFromDB = async (filters, options) => {
     where: listWhere,
     include: [
       { model: Loan, as: "loan", required: false },
+      { model: Owner, as: "owner", required: false },
       { model: Category, as: "categoryInfo", required: false },
     ],
     offset: skip,
@@ -704,6 +766,7 @@ const getDataById = async (id) => {
     },
     include: [
       { model: Loan, as: "loan", required: false },
+      { model: Owner, as: "owner", required: false },
       { model: Category, as: "categoryInfo", required: false },
     ],
     paranoid: true,
@@ -724,15 +787,40 @@ const deleteIdFromDB = async (id) => {
 };
 
 const updateOneFromDB = async (id, payload) => {
-  const { note, status, amount, userId, bookId, supplierId, date, file } =
-    payload;
+  const {
+    note,
+    status,
+    amount,
+    userId,
+    bookId,
+    supplierId,
+    ownerId,
+    date,
+    file,
+    paymentStatus,
+    remarks,
+  } = payload;
   const hasSupplierId =
     supplierId !== undefined &&
     supplierId !== null &&
     String(supplierId) !== "";
+  const finalOwnerId = normalizeOptionalId(ownerId);
+  const finalBookId = normalizeOptionalId(bookId);
+  const shouldSyncOwnerTransaction = ownerId !== undefined;
+  const hasOwnerId = shouldSyncOwnerTransaction && Boolean(finalOwnerId);
 
   console.log("supplierDetails", payload);
   return db.sequelize.transaction(async (t) => {
+    if (hasOwnerId) {
+      if (!finalBookId) throw new ApiError(400, "Book is required!");
+      const [owner, book] = await Promise.all([
+        Owner.findByPk(finalOwnerId, { transaction: t }),
+        Book.findByPk(finalBookId, { transaction: t }),
+      ]);
+      if (!owner) throw new ApiError(404, "Owner not found");
+      if (!book) throw new ApiError(404, "Book not found");
+    }
+
     const shouldResolveCategory =
       (payload.categoryId !== undefined &&
         payload.categoryId !== null &&
@@ -766,6 +854,43 @@ const updateOneFromDB = async (id, payload) => {
       };
 
       await SupplierHistory.create(supplierData, { transaction: t });
+    }
+
+    const existingOwnerTransaction = shouldSyncOwnerTransaction
+      ? await OwnerTransaction.findOne({
+          where: { cashInOutId: id },
+          transaction: t,
+          paranoid: false,
+        })
+      : null;
+
+    if (hasOwnerId) {
+      const ownerTransactionData = {
+        ownerId: finalOwnerId,
+        bookId: finalBookId,
+        cashInOutId: id,
+        type: paymentStatus === "CashOut" ? "Withdraw" : "Deposit",
+        amount,
+        remarks: remarks || note || "",
+        date,
+        status: status || "Active",
+      };
+
+      if (existingOwnerTransaction) {
+        if (
+          existingOwnerTransaction.deletedAt &&
+          typeof existingOwnerTransaction.restore === "function"
+        ) {
+          await existingOwnerTransaction.restore({ transaction: t });
+        }
+        await existingOwnerTransaction.update(ownerTransactionData, {
+          transaction: t,
+        });
+      } else {
+        await OwnerTransaction.create(ownerTransactionData, { transaction: t });
+      }
+    } else if (shouldSyncOwnerTransaction && existingOwnerTransaction) {
+      await existingOwnerTransaction.destroy({ transaction: t });
     }
 
     const users = await User.findAll({
@@ -802,6 +927,7 @@ const getAllFromDBWithoutQuery = async () => {
   const result = await CashInOut.findAll({
     include: [
       { model: Loan, as: "loan", required: false },
+      { model: Owner, as: "owner", required: false },
       { model: Category, as: "categoryInfo", required: false },
     ],
     paranoid: true,

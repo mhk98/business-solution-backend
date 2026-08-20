@@ -47,6 +47,10 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      ownerId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       paymentStatus: {
         type: DataTypes.STRING,
         allowNull: true,

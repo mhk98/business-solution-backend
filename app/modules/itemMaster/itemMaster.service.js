@@ -94,15 +94,17 @@ const getAllFromDB = async (filters, options) => {
         : [["createdAt", "DESC"]],
   });
 
-  const [count, totalQuantity] = await Promise.all([
+  const [count, totalQuantity, totalBalance] = await Promise.all([
     ItemMaster.count({ where: whereConditions }),
     ItemMaster.sum("unitValue", { where: whereConditions }),
+    ItemMaster.sum("cost", { where: whereConditions }),
   ]);
 
   return {
     meta: {
       count,
       totalQuantity: totalQuantity || 0,
+      totalBalance: Number(totalBalance || 0),
       page,
       limit,
     },

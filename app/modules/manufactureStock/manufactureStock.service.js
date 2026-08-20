@@ -49,7 +49,7 @@ const getAllFromDB = async (filters, options) => {
     ? { [Op.and]: andConditions }
     : {};
 
-  const [data, count, totalQuantity] = await Promise.all([
+  const [data, count, totalQuantity, totalBalance] = await Promise.all([
     ManufactureStock.findAll({
       where: whereConditions,
       offset: skip,
@@ -62,10 +62,17 @@ const getAllFromDB = async (filters, options) => {
     }),
     ManufactureStock.count({ where: whereConditions }),
     ManufactureStock.sum("unitValue", { where: whereConditions }),
+    ManufactureStock.sum("cost", { where: whereConditions }),
   ]);
 
   return {
-    meta: { count, page, limit, totalQuantity: totalQuantity || 0 },
+    meta: {
+      count,
+      page,
+      limit,
+      totalQuantity: totalQuantity || 0,
+      totalBalance: Number(totalBalance || 0),
+    },
     data: data.map(formatStockForDisplay),
   };
 };

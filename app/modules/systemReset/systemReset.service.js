@@ -108,11 +108,65 @@ const deletePercentageFromModel = async (model, transaction, percentage) => {
   return { deleted, total };
 };
 
-const resetData = async ({ mode, percentage, confirmation, user }) => {
+const deleteDateRangeFromModel = async (model, transaction, startDate, endDate) => {
+  const rawAttrs = model.rawAttributes || {};
+  const dateConditions = [];
+
+  if (rawAttrs.date) {
+    dateConditions.push({
+      date: { [Op.between]: [startDate, endDate] },
+    });
+  }
+
+  if (rawAttrs.createdAt) {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    dateConditions.push({
+      createdAt: { [Op.between]: [start, end] },
+    });
+  }
+
+  if (!dateConditions.length) {
+    return { deleted: 0, total: 0 };
+  }
+
+  const whereClause =
+    dateConditions.length === 1
+      ? dateConditions[0]
+      : { [Op.or]: dateConditions };
+
+  const total = await model.count({ where: whereClause, paranoid: false, transaction });
+  if (!total) return { deleted: 0, total: 0 };
+
+  const deleted = await model.destroy({
+    where: whereClause,
+    force: true,
+    hooks: false,
+    individualHooks: false,
+    transaction,
+  });
+
+  return { deleted, total };
+};
+
+const resetData = async ({ mode, percentage, startDate, endDate, confirmation, user }) => {
   await assertResetAccess(user, confirmation);
 
-  const normalizedMode = mode === "all" ? "all" : "percentage";
-  const deletePercentage = normalizeDeletePercentage(normalizedMode, percentage);
+  const normalizedMode =
+    mode === "all" ? "all" : mode === "dateRange" ? "dateRange" : "percentage";
+
+  if (normalizedMode === "dateRange") {
+    if (!startDate || !endDate) {
+      throw new ApiError(400, "Start date and end date are required for date range delete.");
+    }
+  }
+
+  const deletePercentage =
+    normalizedMode === "percentage"
+      ? normalizeDeletePercentage("percentage", percentage)
+      : 100;
   const resettableModels = getResettableModels();
   const transaction = await db.sequelize.transaction();
 
@@ -121,10 +175,14 @@ const resetData = async ({ mode, percentage, confirmation, user }) => {
 
     const results = [];
     for (const { key, model } of resettableModels) {
-      const result =
-        normalizedMode === "all"
-          ? await deleteAllFromModel(model, transaction)
-          : await deletePercentageFromModel(model, transaction, deletePercentage);
+      let result;
+      if (normalizedMode === "all") {
+        result = await deleteAllFromModel(model, transaction);
+      } else if (normalizedMode === "dateRange") {
+        result = await deleteDateRangeFromModel(model, transaction, startDate, endDate);
+      } else {
+        result = await deletePercentageFromModel(model, transaction, deletePercentage);
+      }
 
       results.push({ model: key, ...result });
     }
@@ -135,6 +193,8 @@ const resetData = async ({ mode, percentage, confirmation, user }) => {
     return {
       mode: normalizedMode,
       deletePercentage,
+      startDate: normalizedMode === "dateRange" ? startDate : null,
+      endDate: normalizedMode === "dateRange" ? endDate : null,
       protectedModels: Array.from(PROTECTED_MODEL_KEYS),
       deletedTotal: results.reduce((sum, item) => sum + Number(item.deleted || 0), 0),
       results,

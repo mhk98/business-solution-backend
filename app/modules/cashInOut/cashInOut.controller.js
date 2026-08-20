@@ -44,9 +44,11 @@ const getTodayYmd = () => {
   }
 };
 
-const resolveLoanFields = async ({ category, loanId, lender }) => {
+const resolveLoanFields = async ({ category, partyType, loanId, lender }) => {
   const isLoan = String(category || "").trim().toLowerCase() === "loan";
-  if (!isLoan) {
+  const isLenderParty =
+    String(partyType || "").trim().toLowerCase() === "lender";
+  if (!isLoan && !isLenderParty) {
     return { loanId: null, lender: null };
   }
 
@@ -200,6 +202,8 @@ const insertIntoDB = catchAsync(async (req, res) => {
     loanId,
     bookId,
     supplierId,
+    ownerId,
+    partyType,
     voucherPrefix,
   } = req.body;
 
@@ -244,9 +248,26 @@ const insertIntoDB = catchAsync(async (req, res) => {
     throw new ApiError(400, "SupplierId must be a valid number");
   }
 
+  const finalOwnerId =
+    isCashOut &&
+    ownerId !== undefined &&
+    ownerId !== null &&
+    String(ownerId).trim() !== ""
+      ? Number(ownerId)
+      : null;
+
+  if (isCashOut && finalOwnerId !== null && Number.isNaN(finalOwnerId)) {
+    throw new ApiError(400, "OwnerId must be a valid number");
+  }
+
   const normalizedNote = normalizeOptionalText(note);
   const finalStatus = String(status || "").trim() || "Active";
-  const loanFields = await resolveLoanFields({ category, loanId, lender });
+  const loanFields = await resolveLoanFields({
+    category,
+    partyType,
+    loanId,
+    lender,
+  });
 
   const data = {
     name: name || null,
@@ -266,6 +287,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     categoryId,
     bookId,
     supplierId: finalSupplierId, // ✅ only CashOut হলে value যাবে, নাহলে null
+    ownerId: finalOwnerId,
     voucherPrefix: normalizeOptionalText(voucherPrefix) || "KM-",
   };
 
@@ -420,6 +442,8 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     lender,
     loanId,
     supplierId,
+    ownerId,
+    partyType,
   } = req.body;
 
   // ✅ file optional safe (new file না দিলে আগেরটা থাকবে - service এ handle করা ভাল)
@@ -467,7 +491,28 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     String(status || "").trim() ||
     String(existing.status || "").trim() ||
     "Active";
-  const loanFields = await resolveLoanFields({ category, loanId, lender });
+  const isCashOut = paymentStatus === "CashOut";
+  const finalOwnerId =
+    isCashOut &&
+    ownerId !== undefined &&
+    ownerId !== null &&
+    String(ownerId).trim() !== ""
+      ? Number(ownerId)
+      : null;
+
+  if (isCashOut && finalOwnerId !== null && Number.isNaN(finalOwnerId)) {
+    throw new ApiError(400, "OwnerId must be a valid number");
+  }
+
+  const loanFields = await resolveLoanFields({
+    category,
+    partyType,
+    loanId,
+    lender,
+  });
+  const shouldTrackLoan =
+    String(category || "").trim().toLowerCase() === "loan" ||
+    String(partyType || "").trim().toLowerCase() === "lender";
 
   const data = {
     name: name ?? undefined,
@@ -481,10 +526,11 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     date: (date && String(date).slice(0, 10)) || undefined,
     category,
     categoryId,
-    lender: category ? loanFields.lender : undefined,
-    loanId: category ? loanFields.loanId : undefined,
+    lender: shouldTrackLoan ? loanFields.lender : null,
+    loanId: shouldTrackLoan ? loanFields.loanId : null,
     bookId: bookId || undefined,
-    supplierId: supplierId || undefined,
+    supplierId: supplierId !== undefined ? supplierId || null : undefined,
+    ownerId: ownerId !== undefined ? finalOwnerId : undefined,
     ...(amountNumber !== undefined ? { amount: amountNumber } : {}),
 
     // ✅ file only include if uploaded

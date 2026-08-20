@@ -128,18 +128,37 @@ const sendCreateNotifications = async ({ userId, status, note, date }, t) => {
 
 const insertIntoDB = async (data = {}) => {
   const finalStatus = "Pending";
+  let items = [];
+
+  if (typeof data.items === "string") {
+    try {
+      items = JSON.parse(data.items);
+    } catch (e) {
+      items = [];
+    }
+  } else if (Array.isArray(data.items)) {
+    items = data.items;
+  }
+
+  if (!items.length) {
+    items = [data];
+  }
 
   return db.sequelize.transaction(async (t) => {
-    const payload = await buildPayload(
-      {
-        ...data,
-        status: finalStatus,
-      },
-      null,
-      { transaction: t },
-    );
+    const createdRecords = [];
 
-    const result = await ItemRequisition.create(payload, { transaction: t });
+    for (const itemData of items) {
+      const mergedData = {
+        ...data,
+        ...itemData,
+        status: finalStatus,
+      };
+      delete mergedData.items;
+
+      const payload = await buildPayload(mergedData, null, { transaction: t });
+      const result = await ItemRequisition.create(payload, { transaction: t });
+      createdRecords.push(result);
+    }
 
     await sendCreateNotifications(
       {
@@ -151,7 +170,7 @@ const insertIntoDB = async (data = {}) => {
       t,
     );
 
-    return result;
+    return createdRecords.length === 1 ? createdRecords[0] : createdRecords;
   });
 };
 
