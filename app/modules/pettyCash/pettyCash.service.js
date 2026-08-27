@@ -314,6 +314,10 @@ const approveRequisition = async (id, actor = {}, updates = {}) => {
           status: "Active",
           date: requisition.date || new Date(),
           note: approvedNote || "Petty cash requisition approved",
+          category: requisition.category,
+          paymentMode: requisition.paymentMode,
+          bankName: requisition.bankName,
+          remarks: requisition.remarks,
         },
         { transaction },
       );

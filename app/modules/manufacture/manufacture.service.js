@@ -366,7 +366,11 @@ const insertIntoDB = async (payload) => {
 // };
 
 const getAllFromDB = async (filters, options) => {
-  const { page, limit, skip } = paginationHelpers.calculatePagination(options);
+  // maxLimit raised so the report export (Item Purchase History PDF) can
+  // pull the full filtered data set in one request, not just a page.
+  const { page, limit, skip } = paginationHelpers.calculatePagination(options, {
+    maxLimit: 5000,
+  });
 
   const { searchTerm, startDate, endDate, ...otherFilters } = filters;
 
@@ -495,16 +499,13 @@ const getAllFromDB = async (filters, options) => {
       where: whereConditions,
     }),
 
-    // Total purchase amount
+    // Total purchase amount — `cost` already stores the line's total cost
+    // (unitValue * unit cost, set at insert time), so it must be summed
+    // as-is rather than multiplied by unitValue again.
     Manufacture.findOne({
       where: whereConditions,
 
-      attributes: [
-        [
-          Sequelize.fn("SUM", Sequelize.literal("unitValue * cost")),
-          "totalPurchaseAmount",
-        ],
-      ],
+      attributes: [[Sequelize.fn("SUM", Sequelize.col("cost")), "totalPurchaseAmount"]],
 
       raw: true,
     }),

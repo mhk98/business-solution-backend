@@ -203,14 +203,20 @@ const insertIntoDB = catchAsync(async (req, res) => {
     bookId,
     supplierId,
     ownerId,
+    directorId,
     partyType,
     voucherPrefix,
+    refNo,
   } = req.body;
 
   const file = req.file?.path ? req.file.path.replace(/\\/g, "/") : null;
 
   const isBank = paymentMode === "Bank";
   const isCashOut = paymentStatus === "CashOut";
+  const isOwnerParty =
+    String(partyType || "").trim().toLowerCase() === "owner";
+  const isDirectorParty =
+    String(partyType || "").trim().toLowerCase() === "director";
 
   // ✅ bankAccount sanitize
   const bankAccountNumber =
@@ -249,15 +255,31 @@ const insertIntoDB = catchAsync(async (req, res) => {
   }
 
   const finalOwnerId =
-    isCashOut &&
-    ownerId !== undefined &&
-    ownerId !== null &&
-    String(ownerId).trim() !== ""
+    ownerId !== undefined && ownerId !== null && String(ownerId).trim() !== ""
       ? Number(ownerId)
       : null;
 
-  if (isCashOut && finalOwnerId !== null && Number.isNaN(finalOwnerId)) {
+  if (finalOwnerId !== null && Number.isNaN(finalOwnerId)) {
     throw new ApiError(400, "OwnerId must be a valid number");
+  }
+
+  if (isOwnerParty && !finalOwnerId) {
+    throw new ApiError(400, "Owner is required");
+  }
+
+  const finalDirectorId =
+    directorId !== undefined &&
+    directorId !== null &&
+    String(directorId).trim() !== ""
+      ? Number(directorId)
+      : null;
+
+  if (finalDirectorId !== null && Number.isNaN(finalDirectorId)) {
+    throw new ApiError(400, "DirectorId must be a valid number");
+  }
+
+  if (isDirectorParty && !finalDirectorId) {
+    throw new ApiError(400, "Director is required");
   }
 
   const normalizedNote = normalizeOptionalText(note);
@@ -280,6 +302,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     status: finalStatus || "---",
     note: normalizedNote,
     date,
+    refNo: normalizeOptionalText(refNo),
     lender: loanFields.lender,
     loanId: loanFields.loanId,
     file,
@@ -288,6 +311,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     bookId,
     supplierId: finalSupplierId, // ✅ only CashOut হলে value যাবে, নাহলে null
     ownerId: finalOwnerId,
+    directorId: finalDirectorId,
     voucherPrefix: normalizeOptionalText(voucherPrefix) || "KM-",
   };
 
@@ -443,7 +467,9 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     loanId,
     supplierId,
     ownerId,
+    directorId,
     partyType,
+    refNo,
   } = req.body;
 
   // ✅ file optional safe (new file না দিলে আগেরটা থাকবে - service এ handle করা ভাল)
@@ -491,17 +517,36 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     String(status || "").trim() ||
     String(existing.status || "").trim() ||
     "Active";
-  const isCashOut = paymentStatus === "CashOut";
+  const isOwnerParty =
+    String(partyType || "").trim().toLowerCase() === "owner";
+  const isDirectorParty =
+    String(partyType || "").trim().toLowerCase() === "director";
   const finalOwnerId =
-    isCashOut &&
-    ownerId !== undefined &&
-    ownerId !== null &&
-    String(ownerId).trim() !== ""
+    ownerId !== undefined && ownerId !== null && String(ownerId).trim() !== ""
       ? Number(ownerId)
       : null;
 
-  if (isCashOut && finalOwnerId !== null && Number.isNaN(finalOwnerId)) {
+  if (finalOwnerId !== null && Number.isNaN(finalOwnerId)) {
     throw new ApiError(400, "OwnerId must be a valid number");
+  }
+
+  if (isOwnerParty && !finalOwnerId) {
+    throw new ApiError(400, "Owner is required");
+  }
+
+  const finalDirectorId =
+    directorId !== undefined &&
+    directorId !== null &&
+    String(directorId).trim() !== ""
+      ? Number(directorId)
+      : null;
+
+  if (finalDirectorId !== null && Number.isNaN(finalDirectorId)) {
+    throw new ApiError(400, "DirectorId must be a valid number");
+  }
+
+  if (isDirectorParty && !finalDirectorId) {
+    throw new ApiError(400, "Director is required");
   }
 
   const loanFields = await resolveLoanFields({
@@ -523,6 +568,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     remarks: remarks ?? undefined,
     note: finalStatus === "Approved" ? null : newNote,
     status: finalStatus,
+    refNo: refNo !== undefined ? normalizeOptionalText(refNo) : undefined,
     date: (date && String(date).slice(0, 10)) || undefined,
     category,
     categoryId,
@@ -531,6 +577,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     bookId: bookId || undefined,
     supplierId: supplierId !== undefined ? supplierId || null : undefined,
     ownerId: ownerId !== undefined ? finalOwnerId : undefined,
+    directorId: directorId !== undefined ? finalDirectorId : undefined,
     ...(amountNumber !== undefined ? { amount: amountNumber } : {}),
 
     // ✅ file only include if uploaded

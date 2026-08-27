@@ -25,8 +25,14 @@ const SupplierRoutes = require("../modules/supplier/supplier.routes");
 const LoanRoutes = require("../modules/loan/loan.routes");
 const OwnerRoutes = require("../modules/owner/owner.routes");
 const OwnerTransactionRoutes = require("../modules/ownerTransaction/ownerTransaction.routes");
+const DirectorRoutes = require("../modules/director/director.routes");
+const DirectorProfitShareRoutes = require("../modules/directorProfitShare/directorProfitShare.routes");
+const MonthlyReportingBookRoutes = require("../modules/monthlyReportingBook/monthlyReportingBook.routes");
+const CompanyInfoRoutes = require("../modules/companyInfo/companyInfo.routes");
 const CategoryRoutes = require("../modules/category/category.routes");
 const BankAccountRoutes = require("../modules/bankAccount/bankAccount.routes");
+const FundTransferRoutes = require("../modules/fundTransfer/fundTransfer.routes");
+const AccountBalanceRoutes = require("../modules/accountBalance/accountBalance.routes");
 const DamageProductRoutes = require("../modules/damageProduct/damageProduct.routes");
 const DamageReturnRoutes = require("../modules/damageReturn/damageReturn.routes");
 const EmployeeRoutes = require("../modules/employee/employee.routes");
@@ -378,6 +384,14 @@ const moduleRoutes = [
     route: BankAccountRoutes,
   },
   {
+    path: "/fund-transfer",
+    route: FundTransferRoutes,
+  },
+  {
+    path: "/account-balance",
+    route: AccountBalanceRoutes,
+  },
+  {
     path: "/supplier",
     route: SupplierRoutes,
   },
@@ -392,6 +406,22 @@ const moduleRoutes = [
   {
     path: "/owner-transaction",
     route: OwnerTransactionRoutes,
+  },
+  {
+    path: "/director",
+    route: DirectorRoutes,
+  },
+  {
+    path: "/director-profit-share",
+    route: DirectorProfitShareRoutes,
+  },
+  {
+    path: "/monthly-reporting-book",
+    route: MonthlyReportingBookRoutes,
+  },
+  {
+    path: "/company-info",
+    route: CompanyInfoRoutes,
   },
   {
     path: "/supplier-history",

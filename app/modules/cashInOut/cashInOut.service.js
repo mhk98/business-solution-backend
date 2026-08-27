@@ -10,8 +10,19 @@ const SupplierHistory = db.supplierHistory;
 const Loan = db.loan;
 const Category = db.category;
 const Owner = db.owner;
+const Director = db.director;
 const Book = db.book;
 const OwnerTransaction = db.ownerTransaction;
+const DirectorProfitShare = db.directorProfitShare;
+
+const toDateOnly = (value) => {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10);
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+};
 
 const normalizeOptionalId = (value) => {
   if (value === undefined || value === null || String(value).trim() === "") {
@@ -55,7 +66,7 @@ const normalizeVoucherPrefix = (value) => {
 };
 
 const generateMonthlyVoucherNo = async (date, voucherPrefix, transaction) => {
-  const { start, end } = getMonthRange(date);
+  const { start, end, date: normalizedDate } = getMonthRange(date);
   const prefix = normalizeVoucherPrefix(voucherPrefix);
   const count = await CashInOut.count({
     where: {
@@ -66,7 +77,10 @@ const generateMonthlyVoucherNo = async (date, voucherPrefix, transaction) => {
     transaction,
   });
 
-  return `${prefix}${String(count + 1).padStart(4, "0")}`;
+  const [year, month] = normalizedDate.split("-");
+  const monthYearSuffix = `${month}${year.slice(-2)}`;
+
+  return `${prefix}${String(count + 1).padStart(4, "0")}${monthYearSuffix}`;
 };
 
 const normalizeCategoryName = (value) => {
@@ -215,6 +229,7 @@ const insertIntoDB = async (data) => {
     bookId,
     supplierId,
     ownerId,
+    directorId,
     employeeId,
     file,
     voucherPrefix,
@@ -228,9 +243,13 @@ const insertIntoDB = async (data) => {
     supplierId !== null &&
     String(supplierId) !== "";
   const finalOwnerId = normalizeOptionalId(ownerId);
+  const finalDirectorId = normalizeOptionalId(directorId);
   const finalBookId = normalizeOptionalId(bookId);
   const shouldSyncOwnerTransaction = ownerId !== undefined;
   const hasOwnerId = shouldSyncOwnerTransaction && Boolean(finalOwnerId);
+  const shouldSyncDirectorProfitShare = directorId !== undefined;
+  const hasDirectorId =
+    shouldSyncDirectorProfitShare && Boolean(finalDirectorId);
 
   // const hasEmployeeId =
   //   employeeId !== undefined &&
@@ -245,6 +264,16 @@ const insertIntoDB = async (data) => {
         Book.findByPk(finalBookId, { transaction: t }),
       ]);
       if (!owner) throw new ApiError(404, "Owner not found");
+      if (!book) throw new ApiError(404, "Book not found");
+    }
+
+    if (hasDirectorId) {
+      if (!finalBookId) throw new ApiError(400, "Book is required!");
+      const [director, book] = await Promise.all([
+        Director.findByPk(finalDirectorId, { transaction: t }),
+        Book.findByPk(finalBookId, { transaction: t }),
+      ]);
+      if (!director) throw new ApiError(404, "Director not found");
       if (!book) throw new ApiError(404, "Book not found");
     }
 
@@ -285,6 +314,22 @@ const insertIntoDB = async (data) => {
           bookId: finalBookId,
           cashInOutId: result.Id,
           type: paymentStatus === "CashOut" ? "Withdraw" : "Deposit",
+          amount,
+          remarks: remarks || note || "",
+          date: date || normalizedDate,
+          status: status || "Active",
+        },
+        { transaction: t },
+      );
+    }
+
+    if (hasDirectorId) {
+      await DirectorProfitShare.create(
+        {
+          directorId: finalDirectorId,
+          bookId: finalBookId,
+          cashInOutId: result.Id,
+          type: paymentStatus === "CashOut" ? "Profit" : "Invest",
           amount,
           remarks: remarks || note || "",
           date: date || normalizedDate,
@@ -526,6 +571,7 @@ const getAllFromDB = async (filters, options) => {
         { category: { [Op.like]: `%${term}%` } },
         { bankAccount: { [Op.like]: `%${term}%` } },
         { voucherNo: { [Op.like]: `%${term}%` } },
+        { refNo: { [Op.like]: `%${term}%` } },
 
         db.Sequelize.where(
           db.Sequelize.cast(db.Sequelize.col("amount"), "CHAR"),
@@ -541,28 +587,16 @@ const getAllFromDB = async (filters, options) => {
   }
 
   if (startDate && endDate) {
-    const start = new Date(startDate);
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
-
     baseConditions.push({
-      date: { [Op.between]: [start, end] },
+      date: { [Op.between]: [toDateOnly(startDate), toDateOnly(endDate)] },
     });
   } else if (startDate) {
-    const start = new Date(startDate);
-    start.setHours(0, 0, 0, 0);
-
     baseConditions.push({
-      date: { [Op.gte]: start },
+      date: { [Op.gte]: toDateOnly(startDate) },
     });
   } else if (endDate) {
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
-
     baseConditions.push({
-      date: { [Op.lte]: end },
+      date: { [Op.lte]: toDateOnly(endDate) },
     });
   }
 
@@ -619,6 +653,7 @@ const getAllFromDB = async (filters, options) => {
     include: [
       { model: Loan, as: "loan", required: false },
       { model: Owner, as: "owner", required: false },
+      { model: Director, as: "director", required: false },
       { model: Category, as: "categoryInfo", required: false },
     ],
     offset: skip,
@@ -767,6 +802,7 @@ const getDataById = async (id) => {
     include: [
       { model: Loan, as: "loan", required: false },
       { model: Owner, as: "owner", required: false },
+      { model: Director, as: "director", required: false },
       { model: Category, as: "categoryInfo", required: false },
     ],
     paranoid: true,
@@ -795,6 +831,7 @@ const updateOneFromDB = async (id, payload) => {
     bookId,
     supplierId,
     ownerId,
+    directorId,
     date,
     file,
     paymentStatus,
@@ -805,9 +842,13 @@ const updateOneFromDB = async (id, payload) => {
     supplierId !== null &&
     String(supplierId) !== "";
   const finalOwnerId = normalizeOptionalId(ownerId);
+  const finalDirectorId = normalizeOptionalId(directorId);
   const finalBookId = normalizeOptionalId(bookId);
   const shouldSyncOwnerTransaction = ownerId !== undefined;
   const hasOwnerId = shouldSyncOwnerTransaction && Boolean(finalOwnerId);
+  const shouldSyncDirectorProfitShare = directorId !== undefined;
+  const hasDirectorId =
+    shouldSyncDirectorProfitShare && Boolean(finalDirectorId);
 
   console.log("supplierDetails", payload);
   return db.sequelize.transaction(async (t) => {
@@ -818,6 +859,16 @@ const updateOneFromDB = async (id, payload) => {
         Book.findByPk(finalBookId, { transaction: t }),
       ]);
       if (!owner) throw new ApiError(404, "Owner not found");
+      if (!book) throw new ApiError(404, "Book not found");
+    }
+
+    if (hasDirectorId) {
+      if (!finalBookId) throw new ApiError(400, "Book is required!");
+      const [director, book] = await Promise.all([
+        Director.findByPk(finalDirectorId, { transaction: t }),
+        Book.findByPk(finalBookId, { transaction: t }),
+      ]);
+      if (!director) throw new ApiError(404, "Director not found");
       if (!book) throw new ApiError(404, "Book not found");
     }
 
@@ -863,6 +914,13 @@ const updateOneFromDB = async (id, payload) => {
           paranoid: false,
         })
       : null;
+    const existingDirectorProfitShare = shouldSyncDirectorProfitShare
+      ? await DirectorProfitShare.findOne({
+          where: { cashInOutId: id },
+          transaction: t,
+          paranoid: false,
+        })
+      : null;
 
     if (hasOwnerId) {
       const ownerTransactionData = {
@@ -891,6 +949,37 @@ const updateOneFromDB = async (id, payload) => {
       }
     } else if (shouldSyncOwnerTransaction && existingOwnerTransaction) {
       await existingOwnerTransaction.destroy({ transaction: t });
+    }
+
+    if (hasDirectorId) {
+      const directorProfitShareData = {
+        directorId: finalDirectorId,
+        bookId: finalBookId,
+        cashInOutId: id,
+        type: paymentStatus === "CashOut" ? "Profit" : "Invest",
+        amount,
+        remarks: remarks || note || "",
+        date,
+        status: status || "Active",
+      };
+
+      if (existingDirectorProfitShare) {
+        if (
+          existingDirectorProfitShare.deletedAt &&
+          typeof existingDirectorProfitShare.restore === "function"
+        ) {
+          await existingDirectorProfitShare.restore({ transaction: t });
+        }
+        await existingDirectorProfitShare.update(directorProfitShareData, {
+          transaction: t,
+        });
+      } else {
+        await DirectorProfitShare.create(directorProfitShareData, {
+          transaction: t,
+        });
+      }
+    } else if (shouldSyncDirectorProfitShare && existingDirectorProfitShare) {
+      await existingDirectorProfitShare.destroy({ transaction: t });
     }
 
     const users = await User.findAll({
@@ -928,6 +1017,7 @@ const getAllFromDBWithoutQuery = async () => {
     include: [
       { model: Loan, as: "loan", required: false },
       { model: Owner, as: "owner", required: false },
+      { model: Director, as: "director", required: false },
       { model: Category, as: "categoryInfo", required: false },
     ],
     paranoid: true,

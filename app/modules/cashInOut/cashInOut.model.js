@@ -51,6 +51,10 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      directorId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       paymentStatus: {
         type: DataTypes.STRING,
         allowNull: true,
@@ -67,6 +71,10 @@ module.exports = (sequelize, DataTypes) => {
         },
       },
       voucherNo: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
+      refNo: {
         type: DataTypes.STRING,
         allowNull: true,
       },

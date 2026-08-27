@@ -25,7 +25,6 @@ const addBalancesToLoans = async (loans, filters = {}) => {
   const dateCondition = buildDateCondition(filters);
   const where = {
     loanId: { [Op.in]: loanIds },
-    category: { [Op.like]: "loan" },
   };
 
   if (dateCondition) where.date = dateCondition;

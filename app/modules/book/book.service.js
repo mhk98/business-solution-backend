@@ -5,6 +5,111 @@ const ApiError = require("../../../error/ApiError");
 const { BookSearchableFields } = require("./book.constants");
 const Book = db.book;
 const CashInOut = db.cashInOut;
+const FundTransfer = db.fundTransfer;
+
+// Cash has no account id of its own (unlike Bank), so its balance is tracked
+// per book by netting CashInOut's Cash-mode entries against FundTransfer legs
+// that moved money into/out of Cash for that book.
+const computeCashBalance = async (bookId) => {
+  const [cashInOutNet, transferOut, transferIn] = await Promise.all([
+    CashInOut.findOne({
+      attributes: [
+        [
+          db.Sequelize.fn(
+            "SUM",
+            db.Sequelize.literal(
+              "CASE WHEN paymentStatus = 'CashIn' THEN amount WHEN paymentStatus = 'CashOut' THEN -amount ELSE 0 END",
+            ),
+          ),
+          "net",
+        ],
+      ],
+      where: { paymentMode: "Cash", bookId },
+      raw: true,
+    }),
+    FundTransfer
+      ? FundTransfer.sum("amount", { where: { bookId, fromPaymentMode: "Cash" } })
+      : 0,
+    FundTransfer
+      ? FundTransfer.sum("amount", { where: { bookId, toPaymentMode: "Cash" } })
+      : 0,
+  ]);
+
+  return Number(cashInOutNet?.net || 0) + Number(transferIn || 0) - Number(transferOut || 0);
+};
+
+// Batched version of computeCashBalance for every book at once (used by the
+// Account Balance dashboard) so it doesn't run N queries for N books.
+const getCashBalancesByBook = async () => {
+  const [cashInOutRows, transferOutRows, transferInRows] = await Promise.all([
+    CashInOut.findAll({
+      attributes: [
+        "bookId",
+        [
+          db.Sequelize.fn(
+            "SUM",
+            db.Sequelize.literal(
+              "CASE WHEN paymentStatus = 'CashIn' THEN amount WHEN paymentStatus = 'CashOut' THEN -amount ELSE 0 END",
+            ),
+          ),
+          "net",
+        ],
+      ],
+      where: { paymentMode: "Cash", bookId: { [Op.ne]: null } },
+      group: ["bookId"],
+      raw: true,
+    }),
+    FundTransfer.findAll({
+      attributes: [
+        "bookId",
+        [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "totalOut"],
+      ],
+      where: { fromPaymentMode: "Cash" },
+      group: ["bookId"],
+      raw: true,
+    }),
+    FundTransfer.findAll({
+      attributes: [
+        "bookId",
+        [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "totalIn"],
+      ],
+      where: { toPaymentMode: "Cash" },
+      group: ["bookId"],
+      raw: true,
+    }),
+  ]);
+
+  const netByBook = new Map();
+  cashInOutRows.forEach((row) => netByBook.set(row.bookId, Number(row.net || 0)));
+
+  const outByBook = new Map();
+  transferOutRows.forEach((row) =>
+    outByBook.set(row.bookId, Number(row.totalOut || 0)),
+  );
+
+  const inByBook = new Map();
+  transferInRows.forEach((row) =>
+    inByBook.set(row.bookId, Number(row.totalIn || 0)),
+  );
+
+  const bookIds = new Set([
+    ...netByBook.keys(),
+    ...outByBook.keys(),
+    ...inByBook.keys(),
+  ]);
+
+  const balanceByBookId = new Map();
+  bookIds.forEach((bookId) => {
+    balanceByBookId.set(
+      bookId,
+      (netByBook.get(bookId) || 0) +
+        (inByBook.get(bookId) || 0) -
+        (outByBook.get(bookId) || 0),
+    );
+  });
+
+  return balanceByBookId;
+};
 
 const insertIntoDB = async (data) => {
   const result = await Book.create(data);
@@ -97,7 +202,12 @@ const getDataById = async (id) => {
     ],
   });
 
-  return result;
+  if (!result) return result;
+
+  const cashBalance = await computeCashBalance(id);
+  const plain = result.get({ plain: true });
+
+  return { ...plain, cashBalance };
 };
 
 const deleteIdFromDB = async (id) => {
@@ -145,6 +255,8 @@ const BookService = {
   updateOneFromDB,
   getDataById,
   getAllFromDBWithoutQuery,
+  computeCashBalance,
+  getCashBalancesByBook,
 };
 
 module.exports = BookService;

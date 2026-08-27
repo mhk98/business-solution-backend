@@ -303,6 +303,11 @@ db.bankAccount = require("../app/modules/bankAccount/bankAccount.model")(
   DataTypes,
 );
 
+db.fundTransfer = require("../app/modules/fundTransfer/fundTransfer.model")(
+  db.sequelize,
+  DataTypes,
+);
+
 db.supplier = require("../app/modules/supplier/supplier.model")(
   db.sequelize,
   DataTypes,
@@ -312,6 +317,15 @@ db.loan = require("../app/modules/loan/loan.model")(db.sequelize, DataTypes);
 db.owner = require("../app/modules/owner/owner.model")(db.sequelize, DataTypes);
 db.ownerTransaction =
   require("../app/modules/ownerTransaction/ownerTransaction.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.director = require("../app/modules/director/director.model")(
+  db.sequelize,
+  DataTypes,
+);
+db.directorProfitShare =
+  require("../app/modules/directorProfitShare/directorProfitShare.model")(
     db.sequelize,
     DataTypes,
   );
@@ -533,6 +547,11 @@ db.salary = require("../app/modules/salary/salary.model")(
 );
 
 db.logo = require("../app/modules/logo/logo.model")(db.sequelize, DataTypes);
+
+db.companyInfo = require("../app/modules/companyInfo/companyInfo.model")(
+  db.sequelize,
+  DataTypes,
+);
 
 db.purchaseRequisition =
   require("../app/modules/purchaseRequision/purchaseRequisition.model")(
@@ -792,6 +811,25 @@ db.product.hasMany(db.confirmOrder, {
 
 db.book.hasMany(db.cashInOut, { foreignKey: "bookId" });
 db.cashInOut.belongsTo(db.book, { foreignKey: "bookId" });
+
+db.book.hasMany(db.fundTransfer, { foreignKey: "bookId" });
+db.fundTransfer.belongsTo(db.book, { foreignKey: "bookId", as: "book" });
+db.bankAccount.hasMany(db.fundTransfer, {
+  foreignKey: "fromBankAccount",
+  as: "fundTransfersFrom",
+});
+db.fundTransfer.belongsTo(db.bankAccount, {
+  foreignKey: "fromBankAccount",
+  as: "fromBank",
+});
+db.bankAccount.hasMany(db.fundTransfer, {
+  foreignKey: "toBankAccount",
+  as: "fundTransfersTo",
+});
+db.fundTransfer.belongsTo(db.bankAccount, {
+  foreignKey: "toBankAccount",
+  as: "toBank",
+});
 db.category.hasMany(db.cashInOut, {
   foreignKey: "categoryId",
   as: "cashInOuts",
@@ -864,6 +902,24 @@ db.ownerTransaction.belongsTo(db.book, {
 
 db.cashInOut.hasOne(db.ownerTransaction, { foreignKey: "cashInOutId" });
 db.ownerTransaction.belongsTo(db.cashInOut, {
+  foreignKey: "cashInOutId",
+  as: "cashInOut",
+});
+
+db.director.hasMany(db.directorProfitShare, { foreignKey: "directorId" });
+db.directorProfitShare.belongsTo(db.director, {
+  foreignKey: "directorId",
+  as: "director",
+});
+
+db.book.hasMany(db.directorProfitShare, { foreignKey: "bookId" });
+db.directorProfitShare.belongsTo(db.book, {
+  foreignKey: "bookId",
+  as: "book",
+});
+
+db.cashInOut.hasOne(db.directorProfitShare, { foreignKey: "cashInOutId" });
+db.directorProfitShare.belongsTo(db.cashInOut, {
   foreignKey: "cashInOutId",
   as: "cashInOut",
 });
@@ -1358,6 +1414,12 @@ db.cashInOut.belongsTo(db.supplier, { foreignKey: "supplierId" });
 
 db.owner.hasMany(db.cashInOut, { foreignKey: "ownerId" });
 db.cashInOut.belongsTo(db.owner, { foreignKey: "ownerId", as: "owner" });
+
+db.director.hasMany(db.cashInOut, { foreignKey: "directorId" });
+db.cashInOut.belongsTo(db.director, {
+  foreignKey: "directorId",
+  as: "director",
+});
 
 db.loan.hasMany(db.cashInOut, { foreignKey: "loanId" });
 db.cashInOut.belongsTo(db.loan, { foreignKey: "loanId", as: "loan" });
@@ -2831,6 +2893,13 @@ const ensureCashInOutLoanColumns = async () => {
     });
   }
 
+  if (!tableDefinition.directorId) {
+    await queryInterface.addColumn(tableName, "directorId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+
   if (!tableDefinition.voucherNo) {
     await queryInterface.addColumn(tableName, "voucherNo", {
       type: DataTypes.STRING,
@@ -3267,9 +3336,23 @@ const ensureAdsCampaignKPIColumns = async () => {
   );
 };
 
+const ensureCashInOutRefNoColumn = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.cashInOut.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.refNo) {
+    await queryInterface.addColumn(tableName, "refNo", {
+      type: DataTypes.STRING,
+      allowNull: true,
+    });
+  }
+};
+
 db.sequelize
   .sync({ force: false })
   .then(async () => {
+    await ensureCashInOutRefNoColumn();
     await ensureHolidayRangeColumns();
     await ensurePerformanceTrackerEntryColumns();
     await ensureAttendanceDeviceApiKeyColumn();

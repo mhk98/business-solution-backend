@@ -9,9 +9,11 @@ const CashInOutFilterAbleFields = [
   "lender",
   "loanId",
   "voucherNo",
+  "refNo",
   "bookId",
   "supplierId",
   "ownerId",
+  "directorId",
 ];
 
 const CashInOutSearchableFields = [

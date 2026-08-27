@@ -12,6 +12,10 @@ const routes = require("./app/routes");
 const ApiError = require("./error/ApiError");
 const userLogHistory = require("./app/middlewares/userLogHistory");
 const { initializeChatSocket } = require("./app/realtime/socket");
+const {
+  startStellarAttendanceSync,
+  stopStellarAttendanceSync,
+} = require("./app/jobs/stellarAttendanceSync.job");
 
 const app = express();
 const server = http.createServer(app);
@@ -180,6 +184,8 @@ const startServer = async () => {
     server.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
     });
+
+    startStellarAttendanceSync();
   } catch (error) {
     console.error("❌ Failed to connect to database:", error.message);
     if (error.original?.code === "ER_USER_LIMIT_REACHED") {
@@ -199,6 +205,7 @@ startServer();
 
 process.on("SIGTERM", async () => {
   console.log("SIGTERM received. Shutting down gracefully...");
+  stopStellarAttendanceSync();
   await db.sequelize.close();
   server.close(() => {
     console.log("Server closed");
@@ -208,6 +215,7 @@ process.on("SIGTERM", async () => {
 
 process.on("SIGINT", async () => {
   console.log("SIGINT received. Shutting down gracefully...");
+  stopStellarAttendanceSync();
   await db.sequelize.close();
   server.close(() => {
     console.log("Server closed");

@@ -197,6 +197,20 @@ const includeNewSettingsChildren = (role, permissions = []) => {
     permissionSet.add("owner_transaction");
   }
 
+  if (
+    defaults.includes("director_profit_share") &&
+    !permissionSet.has("director_profit_share")
+  ) {
+    permissionSet.add("director_profit_share");
+  }
+
+  if (
+    defaults.includes("director_profit_share_transaction") &&
+    !permissionSet.has("director_profit_share_transaction")
+  ) {
+    permissionSet.add("director_profit_share_transaction");
+  }
+
   [
     "cod_change",
     "cod_charge",

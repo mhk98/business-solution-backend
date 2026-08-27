@@ -292,46 +292,49 @@ const parseRowVariants = (row) => {
   try { return JSON.parse(row.variants || "[]"); } catch { return []; }
 };
 
-// ReceivedProduct stores unit prices (purchase_price = unit price, must × quantity).
-// All other sources store pre-computed totals in purchase_price/sale_price.
-const SOURCE_STORES_UNIT_PRICE = "Received Product";
+const normalizeProductNameKey = (name) => String(name || "").trim().toLowerCase();
 
-const calcRowPurchaseValue = (row) => {
-  const variants = parseRowVariants(row);
+// Purchase Price / Sale Price for every row (and the Total Purchase/Total
+// Sale summary cards) are driven by ONE source: the Stock Product's current
+// catalog price — never each movement's own recorded purchase_price/sale_price
+// field. Those movement-level fields are inconsistent across sources (some
+// store a unit price, some a pre-computed total, some leave it at 0) and
+// drift out of sync with the catalog over time, which previously made the
+// numbers on screen hard to trust. Using the Stock Product price everywhere
+// means the displayed unit price always matches what's summed into the
+// totals — if that price is 0, both correctly show/add 0.
+const getStockPriceMap = async (rows) => {
+  const rawNames = Array.from(
+    new Set(rows.map((row) => String(row.name || "").trim()).filter(Boolean)),
+  );
 
-  if (variants.length) {
-    const hasVariantPrices = variants.some((v) => n(v?.purchase_price) > 0);
-    if (hasVariantPrices) {
-      // Variants carry unit prices (ReceivedProduct style)
-      return variants.reduce((sum, v) => sum + n(v?.quantity) * n(v?.purchase_price), 0);
+  const priceByName = new Map();
+  if (!rawNames.length) return priceByName;
+
+  const stockRows = await InventoryMaster.findAll({
+    where: { name: { [Op.in]: rawNames } },
+    attributes: ["name", "purchase_price", "sale_price"],
+    paranoid: true,
+  });
+
+  stockRows.forEach((stockRow) => {
+    const key = normalizeProductNameKey(stockRow.name);
+    if (key && !priceByName.has(key)) {
+      priceByName.set(key, {
+        purchase_price: n(stockRow.purchase_price),
+        sale_price: n(stockRow.sale_price),
+      });
     }
-    // Variants have no prices → row.purchase_price is already the total
-    return n(row.purchase_price);
-  }
+  });
 
-  if (row.source === SOURCE_STORES_UNIT_PRICE) {
-    return n(row.quantity) * n(row.purchase_price);
-  }
-  // All other sources store total in purchase_price
-  return n(row.purchase_price);
+  return priceByName;
 };
 
-const calcRowSaleValue = (row) => {
-  const variants = parseRowVariants(row);
-
-  if (variants.length) {
-    const hasVariantPrices = variants.some((v) => n(v?.sale_price) > 0);
-    if (hasVariantPrices) {
-      return variants.reduce((sum, v) => sum + n(v?.quantity) * n(v?.sale_price), 0);
-    }
-    return n(row.sale_price);
-  }
-
-  if (row.source === SOURCE_STORES_UNIT_PRICE) {
-    return n(row.quantity) * n(row.sale_price);
-  }
-  return n(row.sale_price);
-};
+const getStockPriceForRow = (priceByName, row) =>
+  priceByName.get(normalizeProductNameKey(row.name)) || {
+    purchase_price: 0,
+    sale_price: 0,
+  };
 
 const buildInventoryReportWhere = (Model, filters = {}) => {
   const { from, to, name } = filters;
@@ -465,6 +468,23 @@ const getInventoryReportsFromDB = async (filters) => {
   };
 };
 
+const attachRowUnitPricing = (rows, priceByName) =>
+  rows.map((row) => {
+    const stockPrice = getStockPriceForRow(priceByName, row);
+
+    return {
+      ...row,
+      unitPurchasePrice: stockPrice.purchase_price,
+      unitSalePrice: stockPrice.sale_price,
+      // This movement's own variant/quantity split (e.g. which batches went
+      // into this specific Intransit entry) — parsed since it can arrive as
+      // a raw JSON string rather than an already-decoded array. Shown for
+      // reference only; pricing for these is the same flat Stock Product
+      // price as the row, not tracked per variant.
+      variants: parseRowVariants(row),
+    };
+  });
+
 const getInventoryOverviewListFromDB = async (filters) => {
   const { from, to, name, source, totalQuantity: requestedTotalQuantity } = filters;
 
@@ -492,11 +512,19 @@ const getInventoryOverviewListFromDB = async (filters) => {
     if (dbb !== da) return dbb - da;
     return (b.Id || 0) - (a.Id || 0);
   });
-  const totalQuantity = all.reduce((sum, row) => sum + n(row.quantity), 0);
-  const totalPurchaseValue = all.reduce((sum, row) => sum + calcRowPurchaseValue(row), 0);
-  const totalSaleValue = all.reduce((sum, row) => sum + calcRowSaleValue(row), 0);
+  const priceByName = await getStockPriceMap(all);
 
-  const paged = all.slice(skip, skip + limit);
+  const totalQuantity = all.reduce((sum, row) => sum + n(row.quantity), 0);
+  const totalPurchaseValue = all.reduce((sum, row) => {
+    const stockPrice = getStockPriceForRow(priceByName, row);
+    return sum + n(row.quantity) * stockPrice.purchase_price;
+  }, 0);
+  const totalSaleValue = all.reduce((sum, row) => {
+    const stockPrice = getStockPriceForRow(priceByName, row);
+    return sum + n(row.quantity) * stockPrice.sale_price;
+  }, 0);
+
+  const paged = attachRowUnitPricing(all.slice(skip, skip + limit), priceByName);
 
   return {
     meta: {

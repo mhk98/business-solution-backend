@@ -496,8 +496,22 @@ const getSalesRowsByDate = async (from, to) => {
     where: activeWhere(ConfirmOrder, buildDateWhere(from, to, "date")),
     attributes: [
       "date",
-      [db.Sequelize.fn("COALESCE", db.Sequelize.fn("SUM", db.Sequelize.col("sale_price")), 0), "revenue"],
-      [db.Sequelize.fn("COALESCE", db.Sequelize.fn("SUM", db.Sequelize.col("quantity")), 0), "quantity"],
+      [
+        db.Sequelize.fn(
+          "COALESCE",
+          db.Sequelize.fn("SUM", db.Sequelize.col("sale_price")),
+          0,
+        ),
+        "revenue",
+      ],
+      [
+        db.Sequelize.fn(
+          "COALESCE",
+          db.Sequelize.fn("SUM", db.Sequelize.col("quantity")),
+          0,
+        ),
+        "quantity",
+      ],
       [db.Sequelize.fn("COUNT", db.Sequelize.col("Id")), "orders"],
     ],
     group: ["date"],
@@ -532,11 +546,15 @@ const getSalesOverviewChart = async (from, to) => {
       date,
       previousDate,
       currentRevenue: n(currentRows[date]?.revenue),
-      previousRevenue: previousDate ? n(previousRows[previousDate]?.revenue) : 0,
+      previousRevenue: previousDate
+        ? n(previousRows[previousDate]?.revenue)
+        : 0,
       currentOrders: n(currentRows[date]?.orders),
       previousOrders: previousDate ? n(previousRows[previousDate]?.orders) : 0,
       currentQuantity: n(currentRows[date]?.quantity),
-      previousQuantity: previousDate ? n(previousRows[previousDate]?.quantity) : 0,
+      previousQuantity: previousDate
+        ? n(previousRows[previousDate]?.quantity)
+        : 0,
     };
   });
 };
@@ -567,7 +585,8 @@ const getInventorySnapshot = async () => {
     ]);
 
   const products = inventoryRows.map((row) => {
-    const plain = typeof row?.get === "function" ? row.get({ plain: true }) : row;
+    const plain =
+      typeof row?.get === "function" ? row.get({ plain: true }) : row;
     const currentStock = n(getInventoryDisplayQuantity(plain));
     const minimumStock = n(plain.minimumStock);
 
@@ -593,15 +612,24 @@ const getInventorySnapshot = async () => {
   );
 
   return {
-    totalItems: products.reduce((total, product) => total + product.currentStock, 0),
+    totalItems: products.reduce(
+      (total, product) => total + product.currentStock,
+      0,
+    ),
     totalProducts: products.length,
     inStock: {
       count: inStockProducts.length,
-      quantity: inStockProducts.reduce((total, product) => total + product.currentStock, 0),
+      quantity: inStockProducts.reduce(
+        (total, product) => total + product.currentStock,
+        0,
+      ),
     },
     lowStock: {
       count: lowStockProducts.length,
-      quantity: lowStockProducts.reduce((total, product) => total + product.currentStock, 0),
+      quantity: lowStockProducts.reduce(
+        (total, product) => total + product.currentStock,
+        0,
+      ),
     },
     outOfStock: {
       count: outOfStockProducts.length,
@@ -626,8 +654,22 @@ const getTopSellingProducts = async (where = {}, limit = 5) => {
     where: activeWhere(ConfirmOrder, where),
     attributes: [
       "name",
-      [db.Sequelize.fn("COALESCE", db.Sequelize.fn("SUM", db.Sequelize.col("quantity")), 0), "soldQty"],
-      [db.Sequelize.fn("COALESCE", db.Sequelize.fn("SUM", db.Sequelize.col("sale_price")), 0), "revenue"],
+      [
+        db.Sequelize.fn(
+          "COALESCE",
+          db.Sequelize.fn("SUM", db.Sequelize.col("quantity")),
+          0,
+        ),
+        "soldQty",
+      ],
+      [
+        db.Sequelize.fn(
+          "COALESCE",
+          db.Sequelize.fn("SUM", db.Sequelize.col("sale_price")),
+          0,
+        ),
+        "revenue",
+      ],
     ],
     group: ["name"],
     order: [[db.Sequelize.literal("revenue"), "DESC"]],
@@ -757,7 +799,11 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
       "purchase_price",
     ),
     sumDisplayQuantity(InventoryMaster, snapshotWhere),
-    sumInventoryDisplayQuantityValue(InventoryMaster, snapshotWhere, "sale_price"),
+    sumInventoryDisplayQuantityValue(
+      InventoryMaster,
+      snapshotWhere,
+      "sale_price",
+    ),
     sumField(DamageStock, "purchase_price", snapshotWhere),
     sumDisplayQuantity(DamageStock, snapshotWhere),
     sumField(DamageReparingStock, "purchase_price", snapshotWhere),
@@ -944,7 +990,9 @@ const getHolidayDates = (holidays, range) => {
 
   holidays.forEach((holiday) => {
     if (!isActiveStatus(holiday.status)) return;
-    const start = normalizeDateOnlyValue(holiday.startDate || holiday.holidayDate);
+    const start = normalizeDateOnlyValue(
+      holiday.startDate || holiday.holidayDate,
+    );
     const end = normalizeDateOnlyValue(holiday.endDate || start);
     getOverlapDates(start, end, range).forEach((date) => dates.add(date));
   });
@@ -971,7 +1019,12 @@ const getWeeklyOffDates = (shift, range) => {
   );
 };
 
-const countLeaveDates = ({ leaveRequests, employeeId, range, excludedDates }) => {
+const countLeaveDates = ({
+  leaveRequests,
+  employeeId,
+  range,
+  excludedDates,
+}) => {
   const dates = new Set();
 
   leaveRequests.forEach((leave) => {
@@ -1065,7 +1118,11 @@ const getEmployeeManagementSummary = async ({ from, to }) => {
   const selectedRange = { from, to };
   const monthRange = getAttendancePayrollMonthRange(to);
   const todayRange = { from: today, to: today };
-  const minFrom = [selectedRange.from, monthRange.from, todayRange.from].sort()[0];
+  const minFrom = [
+    selectedRange.from,
+    monthRange.from,
+    todayRange.from,
+  ].sort()[0];
   const maxTo = [selectedRange.to, monthRange.to, todayRange.to].sort().at(-1);
 
   const [employeesRows, logs, holidays, leaveRequests] = await Promise.all([
@@ -1137,8 +1194,12 @@ const getEmployeeManagementSummary = async ({ from, to }) => {
   const activeEmployees = monthlyRows.filter(
     (employee) => employee.presentPercent >= 80,
   ).length;
-  const presentToday = todayRows.filter((employee) => employee.present > 0).length;
-  const absentToday = todayRows.filter((employee) => employee.absent > 0).length;
+  const presentToday = todayRows.filter(
+    (employee) => employee.present > 0,
+  ).length;
+  const absentToday = todayRows.filter(
+    (employee) => employee.absent > 0,
+  ).length;
 
   return {
     totalEmployees,
@@ -1207,10 +1268,8 @@ const getPayrollManagementSummary = async () => {
 
   const totals = payrollRows.reduce(
     (acc, row) => {
-      const holidaySalary =
-        (n(row.basic_salary) / 30) * n(row.holiday_payment);
-      const gross =
-        n(row.total_salary) + holidaySalary + n(row.festival_bonus);
+      const holidaySalary = (n(row.basic_salary) / 30) * n(row.holiday_payment);
+      const gross = n(row.total_salary) + holidaySalary + n(row.festival_bonus);
       const net = n(row.net_salary);
 
       acc.grossAmount += gross;
