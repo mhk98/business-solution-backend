@@ -18,6 +18,7 @@ const {
   assertCatalogInventoryMovementVariants,
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const PurchaseReturnProduct = db.purchaseReturnProduct;
 const Notification = db.notification;
 const User = db.user;
@@ -118,7 +119,7 @@ const findInventoryByRequestReference = async (receivedId, transaction) => {
   return findInventoryByStoredReference(receivedId, transaction);
 };
 
-const normalizeReturnItem = async (item, transaction) => {
+const normalizeReturnItem = async (item, transaction, date = null) => {
   const returnQty = Number(item.quantity || 0);
   const receivedId = Number(item.receivedId || item.productId);
   const incomingVariants = parseVariants(item.variants);
@@ -169,6 +170,19 @@ const normalizeReturnItem = async (item, transaction) => {
     }),
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    sourceType: "PurchaseReturnProduct",
+    operation: "CREATE",
+    stockType: "ProductStock",
+    productId: inventory.productId,
+    name: inventory.name,
+    unit: "Pcs",
+    date,
+    quantityChange: -returnQty,
+    balanceBefore: oldQty,
+    balanceAfter: oldQty - returnQty,
+  });
 
   return {
     name: inventory.name,
@@ -201,13 +215,26 @@ const restoreReturnItemsToInventory = async (items = [], transaction) => {
       transaction,
     });
 
+    const restoreBalanceBefore = Number(inventory.quantity || 0);
     await inventory.update(
       buildSyncedInventoryStockPayload({
-        quantity: Number(inventory.quantity || 0) + qty,
+        quantity: restoreBalanceBefore + qty,
         variants: mergeVariants(inventory.variants, parseVariants(item.variants)),
       }),
       { transaction },
     );
+    await logStockMovement({
+      transaction,
+      sourceType: "PurchaseReturnProduct",
+      operation: "REVERSE",
+      stockType: "ProductStock",
+      productId: inventory.productId,
+      name: inventory.name,
+      unit: "Pcs",
+      quantityChange: qty,
+      balanceBefore: restoreBalanceBefore,
+      balanceAfter: restoreBalanceBefore + qty,
+    });
   }
 };
 
@@ -306,6 +333,20 @@ const insertIntoDB = async (data) => {
       }),
       { transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "PurchaseReturnProduct",
+      sourceId: result.Id,
+      operation: "CREATE",
+      stockType: "ProductStock",
+      productId: inventory.productId,
+      name: inventory.name,
+      unit: "Pcs",
+      date,
+      quantityChange: -returnQty,
+      balanceBefore: oldQty,
+      balanceAfter: finalQuantity,
+    });
 
     const users = await User.findAll({
       attributes: ["Id", "role"],
@@ -556,7 +597,8 @@ const deleteIdFromDB = async (id) => {
       transaction: t,
     });
 
-    const finalQuantity = Number(inventory.quantity || 0) + qty;
+    const deleteBalanceBefore = Number(inventory.quantity || 0);
+    const finalQuantity = deleteBalanceBefore + qty;
     const finalVariants = mergeVariants(inventory.variants, ret.variants);
 
     // 3) stock ফিরিয়ে দাও
@@ -567,6 +609,19 @@ const deleteIdFromDB = async (id) => {
       }),
       { where: { Id: inventory.Id }, transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "PurchaseReturnProduct",
+      sourceId: id,
+      operation: "DELETE",
+      stockType: "ProductStock",
+      productId: inventory.productId,
+      name: inventory.name,
+      unit: "Pcs",
+      quantityChange: qty,
+      balanceBefore: deleteBalanceBefore,
+      balanceAfter: finalQuantity,
+    });
 
     // 4) Return row delete
     await PurchaseReturnProduct.destroy({
@@ -1003,13 +1058,28 @@ const updateOneFromDB = async (id, payload) => {
       transaction: t,
     });
 
+    const oldInvBalanceBefore = Number(oldInv.quantity || 0);
     await oldInv.update(
       buildSyncedInventoryStockPayload({
-        quantity: Number(oldInv.quantity || 0) + qty,
+        quantity: oldInvBalanceBefore + qty,
         variants: mergeVariants(oldInv.variants, existingVariants),
       }),
       { transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "PurchaseReturnProduct",
+      sourceId: id,
+      operation: "UPDATE",
+      stockType: "ProductStock",
+      productId: oldInv.productId,
+      name: oldInv.name,
+      unit: "Pcs",
+      date: inputDateStr || null,
+      quantityChange: qty,
+      balanceBefore: oldInvBalanceBefore,
+      balanceAfter: oldInvBalanceBefore + qty,
+    });
 
     let targetInv = oldInv;
     if (Number(receivedId) !== oldProductId) {
@@ -1058,6 +1128,7 @@ const updateOneFromDB = async (id, payload) => {
       date: inputDateStr || undefined,
     };
 
+    const targetBalanceBefore = Number(targetInv.quantity || 0);
     await targetInv.update(
       buildSyncedInventoryStockPayload({
         quantity: reducedQty,
@@ -1065,6 +1136,20 @@ const updateOneFromDB = async (id, payload) => {
       }),
       { transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "PurchaseReturnProduct",
+      sourceId: id,
+      operation: "UPDATE",
+      stockType: "ProductStock",
+      productId: targetInv.productId,
+      name: targetInv.name,
+      unit: "Pcs",
+      date: inputDateStr || null,
+      quantityChange: -nextQty,
+      balanceBefore: targetBalanceBefore,
+      balanceAfter: reducedQty,
+    });
 
     const [updatedCount] = await PurchaseReturnProduct.update(data, {
       where: {

@@ -2,6 +2,9 @@ const { Op } = require("sequelize");
 const ApiError = require("../../../error/ApiError");
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
+const {
+  getInventoryStockReport,
+} = require("../inventoryOverview/inventoryOverview.service");
 
 const CashInOut = db.cashInOut;
 const Category = db.category;
@@ -121,15 +124,17 @@ const getMonthlySummary = async (filters, options) => {
   const conditions = buildBaseConditions(filters, { start, end });
   const where = { [Op.and]: conditions };
 
-  const [rawRows, { bookNameById, categoryNameById }] = await Promise.all([
-    CashInOut.findAll({
-      attributes: ["bookId", "categoryId", ...sumAttributes],
-      where,
-      group: ["bookId", "categoryId"],
-      raw: true,
-    }),
-    buildNameMaps(),
-  ]);
+  const [rawRows, { bookNameById, categoryNameById }, inventoryStockReport] =
+    await Promise.all([
+      CashInOut.findAll({
+        attributes: ["bookId", "categoryId", ...sumAttributes],
+        where,
+        group: ["bookId", "categoryId"],
+        raw: true,
+      }),
+      buildNameMaps(),
+      getInventoryStockReport({ from: start, to: end }),
+    ]);
 
   const rows = rawRows
     .map((row) => {
@@ -170,6 +175,7 @@ const getMonthlySummary = async (filters, options) => {
       totalDebit,
       netBalance: totalCredit - totalDebit,
     },
+    inventoryStockReport,
     data: rows.slice(skip, skip + limit),
   };
 };
@@ -248,24 +254,26 @@ const getBookStatement = async (filters) => {
   const conditions = buildBaseConditions(filters, { start, end });
   const where = { [Op.and]: conditions };
 
-  const [data, totalCreditRaw, totalDebitRaw, book] = await Promise.all([
-    CashInOut.findAll({
-      where,
-      include: [{ model: Category, as: "categoryInfo", required: false }],
-      paranoid: true,
-      order: [
-        ["date", "ASC"],
-        ["Id", "ASC"],
-      ],
-    }),
-    CashInOut.sum("amount", {
-      where: { [Op.and]: [...conditions, { paymentStatus: "CashIn" }] },
-    }),
-    CashInOut.sum("amount", {
-      where: { [Op.and]: [...conditions, { paymentStatus: "CashOut" }] },
-    }),
-    Book.findByPk(bookId, { paranoid: false }),
-  ]);
+  const [data, totalCreditRaw, totalDebitRaw, book, inventoryStockReport] =
+    await Promise.all([
+      CashInOut.findAll({
+        where,
+        include: [{ model: Category, as: "categoryInfo", required: false }],
+        paranoid: true,
+        order: [
+          ["date", "ASC"],
+          ["Id", "ASC"],
+        ],
+      }),
+      CashInOut.sum("amount", {
+        where: { [Op.and]: [...conditions, { paymentStatus: "CashIn" }] },
+      }),
+      CashInOut.sum("amount", {
+        where: { [Op.and]: [...conditions, { paymentStatus: "CashOut" }] },
+      }),
+      Book.findByPk(bookId, { paranoid: false }),
+      getInventoryStockReport({ from: start, to: end }),
+    ]);
 
   const totalCredit = Number(totalCreditRaw || 0);
   const totalDebit = Number(totalDebitRaw || 0);
@@ -281,6 +289,7 @@ const getBookStatement = async (filters) => {
       totalDebit,
       netBalance: totalCredit - totalDebit,
     },
+    inventoryStockReport,
     data,
   };
 };

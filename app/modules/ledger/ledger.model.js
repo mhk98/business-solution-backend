@@ -9,7 +9,7 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
       },
       role: {
-        type: DataTypes.ENUM("Customer", "Supplier", "Employee"),
+        type: DataTypes.ENUM("Customer", "Supplier", "Employee", "Manufacturer"),
         allowNull: false,
       },
       name: {
@@ -44,6 +44,10 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
       },
       bookId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
+      manufacturerId: {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },

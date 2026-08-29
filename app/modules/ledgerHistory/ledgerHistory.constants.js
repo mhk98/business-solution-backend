@@ -4,6 +4,7 @@ const LedgerHistoryFilterAbleFields = [
   "endDate",
   "employeeId",
   "supplierId",
+  "manufacturerId",
 ];
 
 const LedgerHistorySearchableFields = ["name", "phone"];

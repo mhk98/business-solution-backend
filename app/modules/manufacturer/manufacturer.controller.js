@@ -89,19 +89,6 @@ const getTransactionHistory = catchAsync(async (req, res) => {
   });
 });
 
-const payManufacturerAmount = catchAsync(async (req, res) => {
-  const result = await ManufacturerService.payManufacturerAmount(
-    req.params.id,
-    req.body,
-  );
-  sendResponse(res, {
-    statusCode: 200,
-    success: true,
-    message: "Manufacturer payment saved!!",
-    data: result,
-  });
-});
-
 const ManufacturerController = {
   getAllFromDB,
   insertIntoDB,
@@ -110,7 +97,6 @@ const ManufacturerController = {
   deleteIdFromDB,
   getAllFromDBWithoutQuery,
   getTransactionHistory,
-  payManufacturerAmount,
 };
 
 module.exports = ManufacturerController;

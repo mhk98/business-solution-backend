@@ -13,6 +13,7 @@ const subtractVariantsPreserveZero = require("../../../shared/subtractVariantsPr
 const {
   productHasConfiguredVariations,
 } = require("../../../shared/inventoryVariantGuard");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const DamageRepair = db.damageRepair;
 const Notification = db.notification;
 const User = db.user;
@@ -174,6 +175,19 @@ const syncDamageReparingStock = async (
       },
       { transaction },
     );
+    await logStockMovement({
+      transaction,
+      sourceType: "DamageRepair",
+      operation: "SYNC",
+      stockType: "RepairingStock",
+      productId,
+      name,
+      unit: "Pcs",
+      date,
+      quantityChange: quantityDelta,
+      balanceBefore: 0,
+      balanceAfter: quantityDelta,
+    });
 
     return;
   }
@@ -212,6 +226,19 @@ const syncDamageReparingStock = async (
     },
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    sourceType: "DamageRepair",
+    operation: "SYNC",
+    stockType: "RepairingStock",
+    productId,
+    name: name || repairingStock.name,
+    unit: "Pcs",
+    date,
+    quantityChange: syncedQty - currentQty,
+    balanceBefore: currentQty,
+    balanceAfter: syncedQty,
+  });
 };
 
 const moveDamageRepairItem = async (item, transaction) => {
@@ -281,6 +308,19 @@ const moveDamageRepairItem = async (item, transaction) => {
     },
     { where: { Id: received.Id }, transaction },
   );
+  await logStockMovement({
+    transaction,
+    sourceType: "DamageRepair",
+    operation: "CREATE",
+    stockType: "DamageStock",
+    productId: catalogProductId,
+    name: received.name,
+    unit: "Pcs",
+    date: item.date,
+    quantityChange: -(oldQty - finalQuantity),
+    balanceBefore: oldQty,
+    balanceAfter: finalQuantity,
+  });
 
   await syncDamageReparingStock(
     {
@@ -499,6 +539,20 @@ const insertIntoDB = async (data) => {
       },
       { where: { Id: received.Id }, transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "DamageRepair",
+      sourceId: result.Id,
+      operation: "CREATE",
+      stockType: "DamageStock",
+      productId: catalogProductId,
+      name: received.name,
+      unit: "Pcs",
+      date,
+      quantityChange: finalQuantity - oldQty,
+      balanceBefore: oldQty,
+      balanceAfter: finalQuantity,
+    });
 
     await syncDamageReparingStock(
       {
@@ -673,9 +727,10 @@ const deleteIdFromDB = async (id) => {
         if (!received) throw new ApiError(404, "Received product not found");
 
         const finalVariants = mergeVariants(received.variants, itemVariants);
+        const itemBalanceBefore = Number(received.quantity || 0);
         const finalQuantity = hasVariantRows(finalVariants)
           ? getVariantQuantityTotal(finalVariants)
-          : Number(received.quantity || 0) + qty;
+          : itemBalanceBefore + qty;
 
         await received.update(
           {
@@ -689,6 +744,19 @@ const deleteIdFromDB = async (id) => {
           },
           { transaction: t },
         );
+        await logStockMovement({
+          transaction: t,
+          sourceType: "DamageRepair",
+          sourceId: id,
+          operation: "DELETE",
+          stockType: "DamageStock",
+          productId: received.productId,
+          name: received.name,
+          unit: "Pcs",
+          quantityChange: finalQuantity - itemBalanceBefore,
+          balanceBefore: itemBalanceBefore,
+          balanceAfter: finalQuantity,
+        });
 
         await syncDamageReparingStock(
           {
@@ -721,9 +789,10 @@ const deleteIdFromDB = async (id) => {
     if (!received) throw new ApiError(404, "Received product not found");
 
     const finalVariants = mergeVariants(received.variants, ret.variants);
+    const deleteBalanceBefore = Number(received.quantity || 0);
     const finalQuantity = hasVariantRows(finalVariants)
       ? getVariantQuantityTotal(finalVariants)
-      : Number(received.quantity || 0) + qty;
+      : deleteBalanceBefore + qty;
     // 3) stock ফিরিয়ে দাও
     await DamageStock.update(
       {
@@ -737,6 +806,19 @@ const deleteIdFromDB = async (id) => {
       },
       { where: { Id: received.Id }, transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "DamageRepair",
+      sourceId: id,
+      operation: "DELETE",
+      stockType: "DamageStock",
+      productId: received.productId,
+      name: received.name,
+      unit: "Pcs",
+      quantityChange: finalQuantity - deleteBalanceBefore,
+      balanceBefore: deleteBalanceBefore,
+      balanceAfter: finalQuantity,
+    });
 
     await syncDamageReparingStock(
       {

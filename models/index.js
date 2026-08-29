@@ -2752,6 +2752,70 @@ const ensureMixerManufacturerColumns = async () => {
   }
 };
 
+const ensureLedgerHistoryManufacturerColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.ledgerHistory.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.manufacturerId) {
+    await queryInterface.addColumn(tableName, "manufacturerId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+
+  if (!tableDefinition.manufacturerTransactionId) {
+    await queryInterface.addColumn(tableName, "manufacturerTransactionId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+};
+
+const ensureStockMovementDateColumn = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.stockMovement.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.date) {
+    await queryInterface.addColumn(tableName, "date", {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+    });
+  }
+};
+
+const ensureLedgerManufacturerColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.ledger.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.manufacturerId) {
+    await queryInterface.addColumn(tableName, "manufacturerId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+
+  await queryInterface.changeColumn(tableName, "role", {
+    type: DataTypes.ENUM("Customer", "Supplier", "Employee", "Manufacturer"),
+    allowNull: false,
+  });
+};
+
+const ensureCashInOutManufacturerColumn = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.cashInOut.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.manufacturerId) {
+    await queryInterface.addColumn(tableName, "manufacturerId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+};
+
 const ensurePackagingMixerColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.packagingMixer.getTableName();
@@ -3434,6 +3498,10 @@ db.sequelize
     await ensurePurchaseReturnProductItemsColumn();
     await ensureManufactureVariantColumns();
     await ensureMixerManufacturerColumns();
+    await ensureLedgerHistoryManufacturerColumns();
+    await ensureCashInOutManufacturerColumn();
+    await ensureLedgerManufacturerColumns();
+    await ensureStockMovementDateColumn();
     await ensurePackagingMixerColumns();
     await Promise.all(
       ["pettyCash", "pettyCashRequisition"].map((modelKey) =>

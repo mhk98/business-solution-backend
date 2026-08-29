@@ -18,6 +18,7 @@ const {
   assertCatalogInventoryMovementVariants,
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 
 const ReceivedProduct = db.receivedProduct;
 const Product = db.product;
@@ -105,7 +106,12 @@ const syncProductStockId = async (productData, stockId, transaction) => {
   productData.stockId = stockId;
 };
 
-const applyReceivedItemToInventory = async (item, productData, transaction) => {
+const applyReceivedItemToInventory = async (
+  item,
+  productData,
+  transaction,
+  date = null,
+) => {
   const incomingVariants = parseVariants(item.variants);
   const quantity = toNumber(item.quantity);
   const productId = Number(item.productId);
@@ -137,9 +143,11 @@ const applyReceivedItemToInventory = async (item, productData, transaction) => {
       transaction,
     });
     const mergedVariants = mergeVariants(inv.variants, incomingVariants);
+    const balanceBefore = toNumber(inv.quantity);
+    const balanceAfter = balanceBefore + quantity;
     await inv.update(
       buildSyncedInventoryStockPayload({
-        quantity: toNumber(inv.quantity) + quantity,
+        quantity: balanceAfter,
         variants: mergedVariants,
         purchase_price: purchasePrice,
         sale_price: salePrice,
@@ -148,6 +156,19 @@ const applyReceivedItemToInventory = async (item, productData, transaction) => {
     );
 
     await syncProductStockId(productData, inv.Id, transaction);
+    await logStockMovement({
+      transaction,
+      sourceType: "ReceivedProduct",
+      operation: "CREATE",
+      stockType: "ProductStock",
+      productId,
+      name: productData.name,
+      unit: "Pcs",
+      date,
+      quantityChange: quantity,
+      balanceBefore,
+      balanceAfter,
+    });
 
     return;
   }
@@ -167,9 +188,26 @@ const applyReceivedItemToInventory = async (item, productData, transaction) => {
   );
 
   await syncProductStockId(productData, stock.Id, transaction);
+  await logStockMovement({
+    transaction,
+    sourceType: "ReceivedProduct",
+    operation: "CREATE",
+    stockType: "ProductStock",
+    productId,
+    name: productData.name,
+    unit: "Pcs",
+    date,
+    quantityChange: quantity,
+    balanceBefore: 0,
+    balanceAfter: quantity,
+  });
 };
 
-const removeReceivedItemFromInventory = async (item, transaction) => {
+const removeReceivedItemFromInventory = async (
+  item,
+  transaction,
+  date = null,
+) => {
   const productId = Number(item.productId);
   const quantity = toNumber(item.quantity);
   if (!productId || quantity <= 0) return;
@@ -195,7 +233,8 @@ const removeReceivedItemFromInventory = async (item, transaction) => {
     variants: item.variants,
   });
 
-  const nextQty = toNumber(inv.quantity) - quantity;
+  const balanceBefore = toNumber(inv.quantity);
+  const nextQty = balanceBefore - quantity;
   if (nextQty < 0) {
     throw new ApiError(
       400,
@@ -210,6 +249,20 @@ const removeReceivedItemFromInventory = async (item, transaction) => {
     }),
     { transaction },
   );
+
+  await logStockMovement({
+    transaction,
+    sourceType: "ReceivedProduct",
+    operation: "REVERSE",
+    stockType: "ProductStock",
+    productId,
+    name: inv.name,
+    unit: "Pcs",
+    date,
+    quantityChange: -quantity,
+    balanceBefore,
+    balanceAfter: nextQty,
+  });
 };
 
 const summarizeReceivedItems = (items = []) => {
@@ -341,7 +394,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
           ];
 
       for (const item of itemsToRemove) {
-        await removeReceivedItemFromInventory(item, t);
+        await removeReceivedItemFromInventory(item, t, inputDateStr || null);
       }
 
       const productIds = [
@@ -390,7 +443,12 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
         };
 
         normalizedItems.push(normalizedItem);
-        await applyReceivedItemToInventory(normalizedItem, productData, t);
+        await applyReceivedItemToInventory(
+          normalizedItem,
+          productData,
+          t,
+          inputDateStr || null,
+        );
       }
 
       // Delete the old single bulk row and create separate rows per item
@@ -555,60 +613,20 @@ const insertIntoDB = async (data, file) => {
     // =========================
     // InventoryMaster Update / Insert
     // =========================
-    const inv = await InventoryMaster.findOne({
-      where: { productId },
-      transaction: t,
-      lock: t.LOCK.UPDATE,
-    });
-
-    if (inv) {
-      await assertCatalogInventoryMovementVariants({
-        db,
-        inventory: inv,
+    await applyReceivedItemToInventory(
+      {
         productId,
+        quantity: Number(quantity || 0),
         variants: incomingVariants,
-        quantity,
-        transaction: t,
-      });
-      const mergedVariants = mergeVariants(inv.variants, incomingVariants);
-
-      await inv.update(
-        buildSyncedInventoryStockPayload({
-          quantity: Number(inv.quantity || 0) + Number(quantity || 0),
-          variants: mergedVariants,
-          purchase_price: Number(purchase_price),
-          sale_price: Number(sale_price),
-        }),
-        { transaction: t },
-      );
-
-      await syncProductStockId(productData, inv.Id, t);
-    } else {
-      await assertCatalogInventoryMovementVariants({
-        db,
-        inventory: { productId, variants: [] },
-        productId,
-        variants: incomingVariants,
-        quantity,
-        transaction: t,
-      });
-
-      const stock = await InventoryMaster.create(
-        buildSyncedInventoryStockPayload({
-          productId,
-          sku,
-          weight,
-          name: productData.name,
-          quantity: Number(quantity || 0),
-          variants: incomingVariants,
-          purchase_price: Number(purchase_price),
-          sale_price: Number(sale_price),
-        }),
-        { transaction: t },
-      );
-
-      await syncProductStockId(productData, stock.Id, t);
-    }
+        sku,
+        weight,
+        purchase_price: Number(purchase_price),
+        sale_price: Number(sale_price),
+      },
+      productData,
+      t,
+      date,
+    );
 
     // =========================
     // Warranty
@@ -739,7 +757,7 @@ const insertBulkIntoDB = async (data, file, preparedItems = null) => {
       };
 
       normalizedItems.push(normalizedItem);
-      await applyReceivedItemToInventory(normalizedItem, productData, t);
+      await applyReceivedItemToInventory(normalizedItem, productData, t, date);
 
       if (
         Number(normalizedItem.warrantyValue) > 0 &&
@@ -964,7 +982,8 @@ const deleteIdFromDB = async (id, options = {}) => {
 
           if (!inv) continue;
 
-          const nextQty = Number(inv.quantity || 0) - itemQty;
+          const itemBalanceBefore = Number(inv.quantity || 0);
+          const nextQty = itemBalanceBefore - itemQty;
           const nextVariants = subtractVariants(inv.variants, item.variants);
 
           if (nextQty < 0) {
@@ -981,6 +1000,19 @@ const deleteIdFromDB = async (id, options = {}) => {
             }),
             { transaction: t },
           );
+          await logStockMovement({
+            transaction: t,
+            sourceType: "ReceivedProduct",
+            sourceId: id,
+            operation: "DELETE",
+            stockType: "ProductStock",
+            productId: itemProductId,
+            name: inv.name,
+            unit: "Pcs",
+            quantityChange: -itemQty,
+            balanceBefore: itemBalanceBefore,
+            balanceAfter: nextQty,
+          });
         }
       } else {
         const inv = await InventoryMaster.findOne({
@@ -990,7 +1022,8 @@ const deleteIdFromDB = async (id, options = {}) => {
         });
 
         if (inv) {
-          const nextQty = Number(inv.quantity || 0) - qty;
+          const balanceBefore = Number(inv.quantity || 0);
+          const nextQty = balanceBefore - qty;
           const nextVariants = subtractVariants(
             inv.variants,
             existing.variants,
@@ -1010,6 +1043,19 @@ const deleteIdFromDB = async (id, options = {}) => {
             }),
             { transaction: t },
           );
+          await logStockMovement({
+            transaction: t,
+            sourceType: "ReceivedProduct",
+            sourceId: id,
+            operation: "DELETE",
+            stockType: "ProductStock",
+            productId,
+            name: inv.name,
+            unit: "Pcs",
+            quantityChange: -qty,
+            balanceBefore,
+            balanceAfter: nextQty,
+          });
         }
       }
     }
@@ -1174,7 +1220,8 @@ const updateOneFromDB = async (id, payload) => {
         transaction: t,
       });
       const quantityDiff = nextQty - qty;
-      const nextInventoryQty = toNumber(oldInv.quantity) + quantityDiff;
+      const balanceBefore = toNumber(oldInv.quantity);
+      const nextInventoryQty = balanceBefore + quantityDiff;
 
       if (nextInventoryQty < 0) {
         throw new ApiError(400, "Inventory cannot be negative");
@@ -1197,8 +1244,25 @@ const updateOneFromDB = async (id, payload) => {
         }),
         { transaction: t },
       );
+      if (quantityDiff) {
+        await logStockMovement({
+          transaction: t,
+          sourceType: "ReceivedProduct",
+          sourceId: id,
+          operation: "UPDATE",
+          stockType: "ProductStock",
+          productId: newProductId,
+          name: productData.name,
+          unit: "Pcs",
+          date: inputDateStr || null,
+          quantityChange: quantityDiff,
+          balanceBefore,
+          balanceAfter: nextInventoryQty,
+        });
+      }
     } else {
-      const reducedQty = toNumber(oldInv?.quantity) - qty;
+      const oldBalanceBefore = toNumber(oldInv?.quantity);
+      const reducedQty = oldBalanceBefore - qty;
       if (reducedQty < 0) {
         throw new ApiError(400, "Inventory cannot be negative");
       }
@@ -1223,6 +1287,20 @@ const updateOneFromDB = async (id, payload) => {
           }),
           { transaction: t },
         );
+        await logStockMovement({
+          transaction: t,
+          sourceType: "ReceivedProduct",
+          sourceId: id,
+          operation: "UPDATE",
+          stockType: "ProductStock",
+          productId: oldProductId,
+          name: oldInv.name,
+          unit: "Pcs",
+          date: inputDateStr || null,
+          quantityChange: -qty,
+          balanceBefore: oldBalanceBefore,
+          balanceAfter: reducedQty,
+        });
       }
 
       const targetInv = await InventoryMaster.findOne({
@@ -1253,6 +1331,20 @@ const updateOneFromDB = async (id, payload) => {
           }),
           { transaction: t },
         );
+        await logStockMovement({
+          transaction: t,
+          sourceType: "ReceivedProduct",
+          sourceId: id,
+          operation: "UPDATE",
+          stockType: "ProductStock",
+          productId: newProductId,
+          name: productData.name,
+          unit: "Pcs",
+          date: inputDateStr || null,
+          quantityChange: nextQty,
+          balanceBefore: 0,
+          balanceAfter: nextQty,
+        });
       } else {
         await assertCatalogInventoryMovementVariants({
           db,
@@ -1266,19 +1358,35 @@ const updateOneFromDB = async (id, payload) => {
           targetInv.variants,
           incomingVariants,
         );
+        const targetBalanceBefore = toNumber(targetInv.quantity);
+        const targetBalanceAfter = targetBalanceBefore + nextQty;
 
         await targetInv.update(
           buildSyncedInventoryStockPayload({
             name: productData.name,
             sku,
             weight,
-            quantity: toNumber(targetInv.quantity) + nextQty,
+            quantity: targetBalanceAfter,
             variants: updatedVariants,
             purchase_price: Number(purchase_price || 0),
             sale_price: Number(sale_price || 0),
           }),
           { transaction: t },
         );
+        await logStockMovement({
+          transaction: t,
+          sourceType: "ReceivedProduct",
+          sourceId: id,
+          operation: "UPDATE",
+          stockType: "ProductStock",
+          productId: newProductId,
+          name: productData.name,
+          unit: "Pcs",
+          date: inputDateStr || null,
+          quantityChange: nextQty,
+          balanceBefore: targetBalanceBefore,
+          balanceAfter: targetBalanceAfter,
+        });
       }
     }
 

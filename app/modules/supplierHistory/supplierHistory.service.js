@@ -10,84 +10,15 @@ const SupplierHistory = db.supplierHistory;
 const Supplier = db.supplier;
 const Warehouse = db.warehouse;
 const Book = db.book;
-const LedgerHistory = db.ledgerHistory;
-const PackagingItemPurchase = db.packagingItemPurchase;
 
 const toPlain = (row) => (row?.get ? row.get({ plain: true }) : row);
 
-const resolveSupplierHistoryStatus = ({ row, advanceIds, dueIds }) => {
-  const id = Number(row.Id || row.id);
-  const note = typeof row.note === "string" ? row.note.toLowerCase() : "";
-  const hasBookReference = !!row.bookId;
-
-  if (advanceIds.has(id)) return "Advance";
-  if (
-    dueIds.has(id) ||
-    note.includes("packaging item purchase") ||
-    note.includes("item purchase") ||
-    note.includes("purchase requisition") ||
-    row.status === "Unpaid"
-  ) {
-    return "Due";
-  }
-  if (hasBookReference) return "Paid";
-  if (row.status === "Paid") return "Advance";
-
-  return row.status || "Paid";
-};
-
-const getSupplierHistorySourceSets = async (supplierHistoryIds) => {
-  const ids = supplierHistoryIds.map(Number).filter(Boolean);
-
-  if (!ids.length) {
-    return { advanceIds: new Set(), dueIds: new Set() };
-  }
-
-  try {
-    const [ledgerRows, packagingRows] = await Promise.all([
-      LedgerHistory.findAll({
-        attributes: ["supplierHistoryId"],
-        where: { supplierHistoryId: { [Op.in]: ids } },
-        raw: true,
-      }),
-      PackagingItemPurchase.findAll({
-        attributes: ["supplierHistoryId"],
-        where: { supplierHistoryId: { [Op.in]: ids } },
-        raw: true,
-      }),
-    ]);
-
-    return {
-      advanceIds: new Set(
-        ledgerRows.map((row) => Number(row.supplierHistoryId)).filter(Boolean),
-      ),
-      dueIds: new Set(
-        packagingRows
-          .map((row) => Number(row.supplierHistoryId))
-          .filter(Boolean),
-      ),
-    };
-  } catch (error) {
-    console.warn(
-      "Supplier history source lookup failed; falling back to status/book calculation:",
-      error.message,
-    );
-    return { advanceIds: new Set(), dueIds: new Set() };
-  }
-};
-
-const addComputedStatus = async (rows) => {
-  const plainRows = rows.map(toPlain);
-  const { advanceIds, dueIds } = await getSupplierHistorySourceSets(
-    plainRows.map((row) => row.Id || row.id),
-  );
-
-  return plainRows.map((row) => {
-    const computedStatus = resolveSupplierHistoryStatus({
-      row,
-      advanceIds,
-      dueIds,
-    });
+// A SupplierHistory row's own status ("Paid"/"Unpaid") is authoritative —
+// it's a strict enum, never guessed from note text or which module wrote
+// it. "Due" is just the display label for "Unpaid".
+const addComputedStatus = (rows) =>
+  rows.map(toPlain).map((row) => {
+    const computedStatus = row.status === "Paid" ? "Paid" : "Due";
 
     return {
       ...row,
@@ -96,9 +27,11 @@ const addComputedStatus = async (rows) => {
       displayStatus: computedStatus,
     };
   });
-};
 
-const getFallbackSummary = async (where) => {
+// Advance/Due are a net balance across all history rows, not a per-row
+// property — see addComputedStatus above for why a single row is only ever
+// Paid or Due.
+const getComputedSummary = async (where) => {
   const [total, totalPaid, totalUnpaid] = await Promise.all([
     SupplierHistory.count({ where }),
     SupplierHistory.sum("amount", { where: { ...where, status: "Paid" } }),
@@ -107,54 +40,14 @@ const getFallbackSummary = async (where) => {
 
   const paid = Number(totalPaid || 0);
   const grossDue = Number(totalUnpaid || 0);
+  const netBalance = paid - grossDue;
 
   return {
     total,
     totalPaid: paid,
-    totalAdvance: Math.max(paid - grossDue, 0),
+    totalAdvance: Math.max(netBalance, 0),
     grossDue,
-    totalDue: Math.max(grossDue - paid, 0),
-  };
-};
-
-const getComputedSummary = async (where) => {
-  let annotatedRows = [];
-
-  try {
-    const rows = await SupplierHistory.findAll({
-      attributes: ["Id", "amount", "status"],
-      where,
-      paranoid: true,
-      raw: true,
-    });
-    annotatedRows = await addComputedStatus(rows);
-  } catch (error) {
-    console.warn(
-      "Supplier history detailed summary failed; falling back to status aggregate:",
-      error.message,
-    );
-    return getFallbackSummary(where);
-  }
-
-  const summary = annotatedRows.reduce(
-    (summary, row) => {
-      const amount = Number(row.amount || 0);
-      summary.total += 1;
-
-      if (row.displayStatus === "Advance") summary.totalAdvance += amount;
-      else if (row.displayStatus === "Due") summary.grossDue += amount;
-      else summary.totalPaid += amount;
-
-      return summary;
-    },
-    { total: 0, totalPaid: 0, totalAdvance: 0, grossDue: 0 },
-  );
-
-  return {
-    ...summary,
-    totalDue: Math.max(summary.grossDue - summary.totalPaid, 0),
-    totalAdvance:
-      summary.totalAdvance + Math.max(summary.totalPaid - summary.grossDue, 0),
+    totalDue: Math.max(-netBalance, 0),
   };
 };
 

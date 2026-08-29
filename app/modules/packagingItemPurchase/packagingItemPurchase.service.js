@@ -10,6 +10,7 @@ const ApiError = require("../../../error/ApiError");
 const {
   PackagingItemPurchaseSearchableFields,
 } = require("./packagingItemPurchase.constants");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 
 const PackagingItemPurchase = db.packagingItemPurchase;
 const PackagingItemStock = db.packagingItemStock;
@@ -155,6 +156,9 @@ const adjustStockBalance = async ({
   delta,
   transaction,
   createOnPositive = false,
+  date = null,
+  sourceType = "PackagingItemPurchase",
+  sourceId = null,
 }) => {
   if (!delta) return null;
 
@@ -167,7 +171,7 @@ const adjustStockBalance = async ({
 
   if (!stockRow) {
     if (createOnPositive && delta > 0) {
-      return PackagingItemStock.create(
+      const created = await PackagingItemStock.create(
         {
           packagingItemId,
           name,
@@ -177,13 +181,29 @@ const adjustStockBalance = async ({
         },
         { transaction },
       );
+      await logStockMovement({
+        transaction,
+        sourceType,
+        sourceId,
+        operation: "CREATE",
+        stockType: "PackagingItemStock",
+        itemId: packagingItemId,
+        name,
+        unit,
+        date,
+        quantityChange: delta,
+        balanceBefore: 0,
+        balanceAfter: delta,
+      });
+      return created;
     }
 
     throw new ApiError(404, "Packaging item stock not found");
   }
 
   const currentPayload = toBaseStockPayload(stockRow.unit, stockRow.unitValue);
-  const nextQuantity = currentPayload.unitValue + delta;
+  const balanceBefore = currentPayload.unitValue;
+  const nextQuantity = balanceBefore + delta;
 
   if (nextQuantity < 0) {
     throw new ApiError(400, "Packaging item stock cannot be negative");
@@ -197,7 +217,7 @@ const adjustStockBalance = async ({
       ? currentCost + toNumber(cost)
       : Math.max(0, currentCost + delta * currentUnitCost);
 
-  return stockRow.update(
+  const updated = await stockRow.update(
     {
       packagingItemId,
       name,
@@ -207,6 +227,21 @@ const adjustStockBalance = async ({
     },
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    sourceType,
+    sourceId,
+    operation: "UPDATE",
+    stockType: "PackagingItemStock",
+    itemId: packagingItemId,
+    name,
+    unit,
+    date,
+    quantityChange: delta,
+    balanceBefore,
+    balanceAfter: nextQuantity,
+  });
+  return updated;
 };
 
 const insertIntoDB = async (payload) => {
@@ -269,6 +304,8 @@ const insertIntoDB = async (payload) => {
         delta: item.unitValue,
         transaction: t,
         createOnPositive: true,
+        date,
+        sourceId: purchase.Id,
       });
 
       purchases.push(purchase);

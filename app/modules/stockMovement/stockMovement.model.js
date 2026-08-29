@@ -62,6 +62,10 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      date: {
+        type: DataTypes.DATEONLY,
+        allowNull: true,
+      },
       quantityChange: {
         type: DataTypes.DECIMAL(14, 2),
         allowNull: false,

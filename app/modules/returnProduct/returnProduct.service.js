@@ -16,6 +16,7 @@ const {
   assertCatalogInventoryMovementVariants,
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const ReturnProduct = db.returnProduct;
 const Notification = db.notification;
 const User = db.user;
@@ -113,7 +114,7 @@ const findInventoryByRequestReference = async (receivedId, transaction) => {
   return findInventoryByStoredReference(receivedId, transaction);
 };
 
-const moveItemFromInventory = async (item, transaction) => {
+const moveItemFromInventory = async (item, transaction, date = null) => {
   const returnQty = toNumber(item.quantity);
   const rid = Number(item.receivedId ?? item.productId);
   const incomingVariants = normalizeItemVariants(item);
@@ -159,6 +160,19 @@ const moveItemFromInventory = async (item, transaction) => {
     }),
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    sourceType: "ReturnProduct",
+    operation: "CREATE",
+    stockType: "ProductStock",
+    productId: inventory.productId,
+    name: inventory.name,
+    unit: "Pcs",
+    date,
+    quantityChange: returnQty,
+    balanceBefore: oldQty,
+    balanceAfter: oldQty + returnQty,
+  });
 
   return {
     receivedId: rid,
@@ -193,7 +207,9 @@ const restoreItemsToInventory = async (items = [], transaction) => {
       variants: item.variants,
     });
 
-    const nextQuantity = toNumber(inventory.quantity) - toNumber(item.quantity);
+    const restoreBalanceBefore = toNumber(inventory.quantity);
+    const restoreQty = toNumber(item.quantity);
+    const nextQuantity = restoreBalanceBefore - restoreQty;
     if (nextQuantity < 0) {
       throw new ApiError(400, "Inventory cannot be negative");
     }
@@ -208,6 +224,18 @@ const restoreItemsToInventory = async (items = [], transaction) => {
       }),
       { transaction },
     );
+    await logStockMovement({
+      transaction,
+      sourceType: "ReturnProduct",
+      operation: "REVERSE",
+      stockType: "ProductStock",
+      productId: inventory.productId,
+      name: inventory.name,
+      unit: "Pcs",
+      quantityChange: -restoreQty,
+      balanceBefore: restoreBalanceBefore,
+      balanceAfter: nextQuantity,
+    });
   }
 };
 
@@ -319,6 +347,20 @@ const insertIntoDB = async (data) => {
       }),
       { where: { Id: inventory.Id }, transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "ReturnProduct",
+      sourceId: result.Id,
+      operation: "CREATE",
+      stockType: "ProductStock",
+      productId: inventory.productId,
+      name: inventory.name,
+      unit: "Pcs",
+      date,
+      quantityChange: returnQty,
+      balanceBefore: oldQty,
+      balanceAfter: finalQuantity,
+    });
 
     const users = await User.findAll({
       attributes: ["Id", "role"],
@@ -573,7 +615,8 @@ const deleteIdFromDB = async (id) => {
       variants: ret.variants,
     });
 
-    const finalQuantity = Number(received.quantity || 0) - qty;
+    const deleteBalanceBefore = Number(received.quantity || 0);
+    const finalQuantity = deleteBalanceBefore - qty;
     if (finalQuantity < 0) {
       throw new ApiError(400, "Inventory cannot be negative");
     }
@@ -593,6 +636,19 @@ const deleteIdFromDB = async (id) => {
       }),
       { where: { Id: received.Id }, transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "ReturnProduct",
+      sourceId: id,
+      operation: "DELETE",
+      stockType: "ProductStock",
+      productId: received.productId,
+      name: received.name,
+      unit: "Pcs",
+      quantityChange: -qty,
+      balanceBefore: deleteBalanceBefore,
+      balanceAfter: finalQuantity,
+    });
 
     // 4) Return row delete
     await ReturnProduct.destroy({
@@ -1041,7 +1097,8 @@ const updateOneFromDB = async (id, payload) => {
         inventory: oldInv,
         variants: existingVariants,
       });
-      const oldInventoryQuantity = toNumber(oldInv.quantity) - oldQty;
+      const oldBalanceBefore = toNumber(oldInv.quantity);
+      const oldInventoryQuantity = oldBalanceBefore - oldQty;
       if (oldInventoryQuantity < 0) {
         throw new ApiError(400, "Inventory cannot be negative");
       }
@@ -1055,6 +1112,20 @@ const updateOneFromDB = async (id, payload) => {
         }),
         { transaction: t },
       );
+      await logStockMovement({
+        transaction: t,
+        sourceType: "ReturnProduct",
+        sourceId: id,
+        operation: "UPDATE",
+        stockType: "ProductStock",
+        productId: oldInv.productId,
+        name: oldInv.name,
+        unit: "Pcs",
+        date: inputDateStr || null,
+        quantityChange: -oldQty,
+        balanceBefore: oldBalanceBefore,
+        balanceAfter: oldInventoryQuantity,
+      });
 
       targetInv = await findInventoryByRequestReference(newProductId, t);
       if (!targetInv) throw new ApiError(404, "Product not found in inventory");
@@ -1068,15 +1139,30 @@ const updateOneFromDB = async (id, payload) => {
       });
 
       // apply new return to new product
+      const targetBalanceBefore = toNumber(targetInv.quantity);
       await targetInv.update(
         buildSyncedInventoryStockPayload({
-          quantity: toNumber(targetInv.quantity) + nextQty,
+          quantity: targetBalanceBefore + nextQty,
           variants: incomingVariants.length
             ? mergeVariants(targetInv.variants, incomingVariants)
             : targetInv.variants,
         }),
         { transaction: t },
       );
+      await logStockMovement({
+        transaction: t,
+        sourceType: "ReturnProduct",
+        sourceId: id,
+        operation: "UPDATE",
+        stockType: "ProductStock",
+        productId: targetInv.productId,
+        name: targetInv.name,
+        unit: "Pcs",
+        date: inputDateStr || null,
+        quantityChange: nextQty,
+        balanceBefore: targetBalanceBefore,
+        balanceAfter: targetBalanceBefore + nextQty,
+      });
     } else {
       const diff = nextQty - oldQty;
       await assertCatalogInventoryMovementVariants({
@@ -1107,7 +1193,8 @@ const updateOneFromDB = async (id, payload) => {
           : withOldRemoved;
       }
 
-      const nextInventoryQuantity = toNumber(oldInv.quantity) + diff;
+      const sameProductBalanceBefore = toNumber(oldInv.quantity);
+      const nextInventoryQuantity = sameProductBalanceBefore + diff;
       if (nextInventoryQuantity < 0) {
         throw new ApiError(400, "Inventory cannot be negative");
       }
@@ -1119,6 +1206,22 @@ const updateOneFromDB = async (id, payload) => {
         }),
         { transaction: t },
       );
+      if (diff) {
+        await logStockMovement({
+          transaction: t,
+          sourceType: "ReturnProduct",
+          sourceId: id,
+          operation: "UPDATE",
+          stockType: "ProductStock",
+          productId: oldInv.productId,
+          name: oldInv.name,
+          unit: "Pcs",
+          date: inputDateStr || null,
+          quantityChange: diff,
+          balanceBefore: sameProductBalanceBefore,
+          balanceAfter: nextInventoryQuantity,
+        });
+      }
     }
 
     const data = {

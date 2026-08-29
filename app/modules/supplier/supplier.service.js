@@ -5,69 +5,12 @@ const ApiError = require("../../../error/ApiError");
 const { SupplierSearchableFields } = require("./supplier.constants");
 const Supplier = db.supplier;
 const SupplierHistory = db.supplierHistory;
-const LedgerHistory = db.ledgerHistory;
-const PackagingItemPurchase = db.packagingItemPurchase;
 
-const resolveSupplierHistoryStatus = ({ row, advanceIds, dueIds }) => {
-  const id = Number(row.Id || row.id);
-  const note = typeof row.note === "string" ? row.note.toLowerCase() : "";
-  const hasBookReference = !!row.bookId;
-
-  if (advanceIds.has(id)) return "Advance";
-  if (
-    dueIds.has(id) ||
-    note.includes("packaging item purchase") ||
-    note.includes("item purchase") ||
-    note.includes("purchase requisition") ||
-    row.status === "Unpaid"
-  ) {
-    return "Due";
-  }
-  if (hasBookReference) return "Paid";
-  if (row.status === "Paid") return "Advance";
-
-  return row.status || "Paid";
-};
-
-const getSupplierHistorySourceSets = async (historyIds) => {
-  if (!historyIds.length) {
-    return { advanceIds: new Set(), dueIds: new Set() };
-  }
-
-  try {
-    const [ledgerRows, packagingRows] = await Promise.all([
-      LedgerHistory.findAll({
-        attributes: ["supplierHistoryId"],
-        where: { supplierHistoryId: { [Op.in]: historyIds } },
-        raw: true,
-      }),
-      PackagingItemPurchase.findAll({
-        attributes: ["supplierHistoryId"],
-        where: { supplierHistoryId: { [Op.in]: historyIds } },
-        raw: true,
-      }),
-    ]);
-
-    return {
-      advanceIds: new Set(
-        ledgerRows.map((row) => Number(row.supplierHistoryId)).filter(Boolean),
-      ),
-      dueIds: new Set(
-        packagingRows
-          .map((row) => Number(row.supplierHistoryId))
-          .filter(Boolean),
-      ),
-    };
-  } catch (error) {
-    console.warn(
-      "Supplier source lookup failed; falling back to status/book calculation:",
-      error.message,
-    );
-    return { advanceIds: new Set(), dueIds: new Set() };
-  }
-};
-
-const getFallbackBalanceMap = async (supplierIds) => {
+// A supplier's balance is one running number: total paid minus total owed
+// (gross due). Every SupplierHistory row is either "Paid" or "Unpaid" — never
+// both — so this is a plain aggregate, not a per-row guess. A positive net
+// balance is an advance (they've been overpaid); a negative one is due.
+const getBalanceMap = async (supplierIds) => {
   const balanceRows = await SupplierHistory.findAll({
     attributes: [
       "supplierId",
@@ -87,7 +30,7 @@ const getFallbackBalanceMap = async (supplierIds) => {
             "CASE WHEN status = 'Unpaid' THEN amount ELSE 0 END",
           ),
         ),
-        "totalUnpaid",
+        "grossDue",
       ],
     ],
     where: {
@@ -98,19 +41,10 @@ const getFallbackBalanceMap = async (supplierIds) => {
   });
 
   return balanceRows.reduce((acc, row) => {
-    const totalPaid = Number(row.totalPaid || 0);
-    const grossDue = Number(row.totalUnpaid || 0);
-    const totalUnpaid = Math.max(grossDue - totalPaid, 0);
-
     acc[row.supplierId] = {
-      totalPaid,
-      totalAdvance: Math.max(totalPaid - grossDue, 0),
-      totalUnpaid,
-      totalDue: totalUnpaid,
-      grossDue,
-      netBalance: Math.max(totalPaid - grossDue, 0),
+      totalPaid: Number(row.totalPaid || 0),
+      grossDue: Number(row.grossDue || 0),
     };
-
     return acc;
   }, {});
 };
@@ -125,54 +59,15 @@ const addBalancesToSuppliers = async (suppliers) => {
     return plainSuppliers;
   }
 
-  let balanceMap = {};
-
-  try {
-    const historyRows = await SupplierHistory.findAll({
-      attributes: ["Id", "supplierId", "amount", "status"],
-      where: {
-        supplierId: { [Op.in]: supplierIds },
-      },
-      raw: true,
-    });
-
-    const historyIds = historyRows.map((row) => Number(row.Id)).filter(Boolean);
-    const { advanceIds, dueIds } =
-      await getSupplierHistorySourceSets(historyIds);
-
-    balanceMap = historyRows.reduce((acc, row) => {
-      const supplierId = row.supplierId;
-      const amount = Number(row.amount || 0);
-      const status = resolveSupplierHistoryStatus({ row, advanceIds, dueIds });
-
-      if (!acc[supplierId]) {
-        acc[supplierId] = {
-          totalPaid: 0,
-          totalAdvance: 0,
-          grossDue: 0,
-        };
-      }
-
-      if (status === "Advance") acc[supplierId].totalAdvance += amount;
-      else if (status === "Due") acc[supplierId].grossDue += amount;
-      else acc[supplierId].totalPaid += amount;
-
-      return acc;
-    }, {});
-  } catch (error) {
-    console.warn(
-      "Supplier detailed balance failed; falling back to status aggregate:",
-      error.message,
-    );
-    balanceMap = await getFallbackBalanceMap(supplierIds);
-  }
+  const balanceMap = await getBalanceMap(supplierIds);
 
   return plainSuppliers.map((supplier) => {
     const balance = balanceMap[supplier.Id] || {};
     const totalPaid = Number(balance.totalPaid || 0);
-    const totalAdvance = Number(balance.totalAdvance || 0);
     const grossDue = Number(balance.grossDue || 0);
-    const totalUnpaid = Math.max(grossDue - totalPaid, 0);
+    const netBalance = totalPaid - grossDue;
+    const totalAdvance = Math.max(netBalance, 0);
+    const totalUnpaid = Math.max(-netBalance, 0);
 
     return {
       ...supplier,
@@ -181,7 +76,7 @@ const addBalancesToSuppliers = async (suppliers) => {
       totalUnpaid,
       totalDue: totalUnpaid,
       grossDue,
-      netBalance: totalAdvance + Math.max(totalPaid - grossDue, 0),
+      netBalance: totalAdvance,
     };
   });
 };

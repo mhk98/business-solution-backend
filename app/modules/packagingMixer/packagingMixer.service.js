@@ -8,6 +8,7 @@ const {
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const { PackagingMixerSearchableFields } = require("./packagingMixer.constants");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 
 const PackagingMixer = db.packagingMixer;
 const Item = db.item;
@@ -64,7 +65,17 @@ const validatePackagingItemsForManufacturer = async (
   }
 };
 
-const adjustItemStock = async ({ itemId, name, unit, unitValue, cost, delta, transaction }) => {
+const adjustItemStock = async ({
+  itemId,
+  name,
+  unit,
+  unitValue,
+  cost,
+  delta,
+  transaction,
+  date = null,
+  sourceId = null,
+}) => {
   const stockRow = await ItemMaster.findOne({
     where: {
       itemId,
@@ -76,7 +87,7 @@ const adjustItemStock = async ({ itemId, name, unit, unitValue, cost, delta, tra
   });
 
   if (!stockRow && delta > 0) {
-    return ItemMaster.create(
+    const created = await ItemMaster.create(
       {
         itemId,
         productId: null,
@@ -87,11 +98,27 @@ const adjustItemStock = async ({ itemId, name, unit, unitValue, cost, delta, tra
       },
       { transaction },
     );
+    await logStockMovement({
+      transaction,
+      sourceType: "PackagingMixer",
+      sourceId,
+      operation: "CREATE",
+      stockType: "ItemStock",
+      itemId,
+      name,
+      unit,
+      date,
+      quantityChange: delta,
+      balanceBefore: 0,
+      balanceAfter: delta,
+    });
+    return created;
   }
 
   if (!stockRow) throw new ApiError(404, "Item stock not found");
   const current = toBaseStockPayload(stockRow.unit, stockRow.unitValue);
-  const nextQuantity = current.unitValue + delta;
+  const balanceBefore = current.unitValue;
+  const nextQuantity = balanceBefore + delta;
   if (nextQuantity < 0) throw new ApiError(400, "Item stock cannot be negative");
 
   const currentCost = toNumber(stockRow.cost);
@@ -101,7 +128,7 @@ const adjustItemStock = async ({ itemId, name, unit, unitValue, cost, delta, tra
       ? currentCost + toNumber(cost)
       : Math.max(0, currentCost + delta * currentUnitCost);
 
-  return stockRow.update(
+  const updated = await stockRow.update(
     {
       itemId,
       name,
@@ -111,9 +138,30 @@ const adjustItemStock = async ({ itemId, name, unit, unitValue, cost, delta, tra
     },
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    sourceType: "PackagingMixer",
+    sourceId,
+    operation: "UPDATE",
+    stockType: "ItemStock",
+    itemId,
+    name,
+    unit,
+    date,
+    quantityChange: delta,
+    balanceBefore,
+    balanceAfter: nextQuantity,
+  });
+  return updated;
 };
 
-const adjustFactoryStock = async ({ stockId, delta, transaction }) => {
+const adjustFactoryStock = async ({
+  stockId,
+  delta,
+  transaction,
+  date = null,
+  sourceId = null,
+}) => {
   const stockRow = await PackagingFactoryStock.findOne({
     where: { Id: stockId },
     transaction,
@@ -122,20 +170,37 @@ const adjustFactoryStock = async ({ stockId, delta, transaction }) => {
   if (!stockRow) throw new ApiError(404, "Packaging factory stock not found");
 
   const current = toBaseStockPayload(stockRow.unit, stockRow.unitValue);
-  const nextQuantity = current.unitValue + delta;
+  const balanceBefore = current.unitValue;
+  const nextQuantity = balanceBefore + delta;
   if (nextQuantity < 0) {
     throw new ApiError(400, `${stockRow.name} packaging factory stock not enough`);
   }
 
   const currentCost = toNumber(stockRow.cost);
   const currentUnitCost = current.unitValue > 0 ? currentCost / current.unitValue : 0;
-  return stockRow.update(
+  const updated = await stockRow.update(
     {
       unitValue: nextQuantity,
       cost: Math.max(0, currentCost + delta * currentUnitCost),
     },
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    sourceType: "PackagingMixer",
+    sourceId,
+    operation: "UPDATE",
+    stockType: "PackagingFactoryStock",
+    itemId: stockRow.packagingItemId,
+    manufacturerId: stockRow.manufacturerId,
+    name: stockRow.name,
+    unit: stockRow.unit,
+    date,
+    quantityChange: delta,
+    balanceBefore,
+    balanceAfter: nextQuantity,
+  });
+  return updated;
 };
 
 const createWageTransaction = async (data, transaction) => {

@@ -15,6 +15,7 @@ const {
 const {
   assertInventoryMovementVariants,
 } = require("../../../shared/inventoryVariantGuard");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const PosReport = db.posReport;
 const Notification = db.notification;
 const User = db.user;
@@ -57,7 +58,12 @@ const getItemQuantity = (item = {}) => Number(item?.qty ?? item?.quantity ?? 0) 
 const getItemProductId = (item = {}, inventory = null) =>
   Number(item?.productId || inventory?.productId || 0);
 
-const applyPosItemMovement = async (items, transaction, direction = "sale") => {
+const applyPosItemMovement = async (
+  items,
+  transaction,
+  direction = "sale",
+  date = null,
+) => {
   for (const item of normalizeItems(items)) {
     const referenceId = getItemReferenceId(item);
     const quantity = getItemQuantity(item);
@@ -101,6 +107,19 @@ const applyPosItemMovement = async (items, transaction, direction = "sale") => {
       }),
       { transaction },
     );
+    await logStockMovement({
+      transaction,
+      sourceType: "PosReport",
+      operation: isSale ? "SALE" : "RESTORE",
+      stockType: "ProductStock",
+      productId: inventory.productId,
+      name: inventory.name,
+      unit: "Pcs",
+      date,
+      quantityChange: nextQuantity - currentQuantity,
+      balanceBefore: currentQuantity,
+      balanceAfter: nextQuantity,
+    });
   }
 };
 
@@ -218,7 +237,7 @@ const insertIntoDB = async (payload) => {
   const finalStatus = String(status || "").trim() || "Active";
 
   return await db.sequelize.transaction(async (t) => {
-    await applyPosItemMovement(items, t, "sale");
+    await applyPosItemMovement(items, t, "sale", date);
 
     // ✅ 2) PosReport create
     const result = await PosReport.create(
@@ -399,7 +418,7 @@ const deleteIdFromDB = async (id) => {
 
     const existingItems = normalizeItems(ret.items);
 
-    await applyPosItemMovement(existingItems, t, "restore");
+    await applyPosItemMovement(existingItems, t, "restore", ret.date);
     await removeConfirmOrdersForPosReportItems(
       existingItems,
       ret.date,
@@ -576,8 +595,8 @@ const updateOneFromDB = async (id, data) => {
 
     finalStatusForNotification = finalStatus;
 
-    await applyPosItemMovement(existing.items, t, "restore");
-    await applyPosItemMovement(items, t, "sale");
+    await applyPosItemMovement(existing.items, t, "restore", existing.date);
+    await applyPosItemMovement(items, t, "sale", date || existing.date);
 
     return PosReport.update(
       {

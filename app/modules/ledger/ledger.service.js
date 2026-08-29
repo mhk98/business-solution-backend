@@ -7,6 +7,8 @@ const Ledger = db.ledger;
 const LedgerHistory = db.ledgerHistory;
 const EmployeeList = db.employeeList;
 const SupplierHistory = db.supplierHistory;
+const Manufacturer = db.manufacturer;
+const ManufacturerTransaction = db.manufacturerTransaction;
 const CashInOut = db.cashInOut;
 
 const normalizeOptionalForeignKey = (value) => {
@@ -49,14 +51,22 @@ const normalizeLedgerPayload = (payload) => {
     bankAccount: paymentMode === "Bank" ? payload?.bankAccount || null : null,
     supplierId: normalizeOptionalForeignKey(payload?.supplierId),
     employeeId: normalizeOptionalForeignKey(payload?.employeeId),
+    manufacturerId: normalizeOptionalForeignKey(payload?.manufacturerId),
   };
 
   if (normalizedPayload.role === "Supplier") {
     normalizedPayload.employeeId = null;
+    normalizedPayload.manufacturerId = null;
   }
 
   if (normalizedPayload.role === "Employee") {
     normalizedPayload.supplierId = null;
+    normalizedPayload.manufacturerId = null;
+  }
+
+  if (normalizedPayload.role === "Manufacturer") {
+    normalizedPayload.supplierId = null;
+    normalizedPayload.employeeId = null;
   }
 
   return normalizedPayload;
@@ -109,6 +119,7 @@ const insertIntoDB = async (data) => {
       date,
       supplierId,
       employeeId,
+      manufacturerId,
       bookId,
       file,
       paymentMode,
@@ -119,6 +130,7 @@ const insertIntoDB = async (data) => {
     const result = await Ledger.create(normalizedData, { transaction: t });
 
     let supplierHistoryId = null;
+    let manufacturerTransactionId = null;
     let cashInOutId = null;
 
     if (supplierId) {
@@ -177,11 +189,62 @@ const insertIntoDB = async (data) => {
       cashInOutId = cashInOut.Id;
     }
 
+    if (manufacturerId) {
+      const manufacturer = await Manufacturer.findOne({
+        where: { Id: manufacturerId },
+        transaction: t,
+      });
+      if (!manufacturer) throw new ApiError(404, "Manufacturer not found");
+
+      // ManufacturerTransaction — বাকি যোগ = LEDGER_DUE (debit), পরিশোধ = PAYMENT (credit)
+      const manufacturerTransaction = await ManufacturerTransaction.create(
+        {
+          manufacturerId,
+          manufacturerName: manufacturer.name,
+          mixerId: null,
+          type: cashType === "Paid" ? "PAYMENT" : "LEDGER_DUE",
+          description:
+            cashType === "Paid"
+              ? "Manufacturer payment (Book)"
+              : "Manufacturer due (Book)",
+          debit: cashType === "Paid" ? 0 : amount,
+          credit: cashType === "Paid" ? amount : 0,
+          date: date || new Date(),
+          note: note || "",
+        },
+        { transaction: t },
+      );
+      manufacturerTransactionId = manufacturerTransaction.Id;
+
+      // CashInOut — শুধু পরিশোধ (Paid) হলে CashOut। বাকি যোগ (Unpaid) হলে cash movement নেই।
+      if (cashType === "Paid") {
+        const cashInOut = await CashInOut.create(
+          {
+            manufacturerId,
+            bookId,
+            paymentMode,
+            bankName,
+            bankAccount,
+            paymentStatus: "CashOut",
+            amount,
+            status: "Active",
+            date,
+            file,
+            note: note || "",
+          },
+          { transaction: t },
+        );
+        cashInOutId = cashInOut.Id;
+      }
+    }
+
     await LedgerHistory.create(
       {
         ledgerId: result.Id,
         supplierId,
         employeeId,
+        manufacturerId,
+        manufacturerTransactionId,
         bookId,
         supplierHistoryId,
         cashInOutId,

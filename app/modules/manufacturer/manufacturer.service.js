@@ -12,6 +12,10 @@ const toNumber = (value) => {
   return Number.isFinite(num) ? num : 0;
 };
 
+// A manufacturer's balance is one running number: total paid (credit) minus
+// total wage owed (debit). A positive net balance is an advance (they've been
+// overpaid); a negative one is due. Paid stays a separate lifetime total for
+// display — it doesn't take part in the netting.
 const getManufacturerAmountMap = async (manufacturerIds = []) => {
   const ids = manufacturerIds.map(Number).filter(Boolean);
   if (!ids.length) return new Map();
@@ -31,13 +35,17 @@ const getManufacturerAmountMap = async (manufacturerIds = []) => {
     transactionRows.map((row) => {
       const totalDebit = toNumber(row.totalDebit);
       const totalCredit = toNumber(row.totalCredit);
+      const netBalance = totalCredit - totalDebit;
 
       return [
         Number(row.manufacturerId),
         {
           totalDebit,
+          totalCredit,
           paidAmount: totalCredit,
-          unpaidAmount: totalDebit - totalCredit,
+          totalAdvance: Math.max(netBalance, 0),
+          totalDue: Math.max(-netBalance, 0),
+          unpaidAmount: Math.max(-netBalance, 0),
         },
       ];
     }),
@@ -50,13 +58,17 @@ const attachUnpaidAmounts = async (rows = []) => {
   return rows.map((row) => {
     const summary = amountMap.get(Number(row.Id)) || {};
     const paidAmount = summary.paidAmount || 0;
-    const unpaidAmount = summary.unpaidAmount || 0;
+    const totalAdvance = summary.totalAdvance || 0;
+    const totalDue = summary.totalDue || 0;
+    const unpaidAmount = totalDue;
     if (typeof row.setDataValue === "function") {
       row.setDataValue("paidAmount", paidAmount);
+      row.setDataValue("totalAdvance", totalAdvance);
+      row.setDataValue("totalDue", totalDue);
       row.setDataValue("unpaidAmount", unpaidAmount);
       return row;
     }
-    return { ...row, paidAmount, unpaidAmount };
+    return { ...row, paidAmount, totalAdvance, totalDue, unpaidAmount };
   });
 };
 
@@ -177,6 +189,7 @@ const getTransactionHistory = async (id, options = {}) => {
   const summary = summaryRows?.[0] || {};
   const totalDebit = toNumber(summary.totalDebit);
   const totalCredit = toNumber(summary.totalCredit);
+  const netBalance = totalCredit - totalDebit;
 
   return {
     meta: { count, page, limit },
@@ -185,43 +198,12 @@ const getTransactionHistory = async (id, options = {}) => {
       totalDebit,
       totalCredit,
       paidAmount: totalCredit,
-      unpaidAmount: totalDebit - totalCredit,
+      totalAdvance: Math.max(netBalance, 0),
+      totalDue: Math.max(-netBalance, 0),
+      unpaidAmount: Math.max(-netBalance, 0),
     },
     data,
   };
-};
-
-const payManufacturerAmount = async (id, payload = {}) => {
-  const manufacturer = await Manufacturer.findOne({ where: { Id: id } });
-  if (!manufacturer) throw new ApiError(404, "Manufacturer not found");
-
-  const amount = toNumber(payload.amount);
-  if (amount <= 0) throw new ApiError(400, "Please enter valid paid amount");
-
-  const contactUpdates = {};
-  if (Object.prototype.hasOwnProperty.call(payload, "phone")) {
-    contactUpdates.phone = payload.phone || null;
-  }
-  if (Object.prototype.hasOwnProperty.call(payload, "address")) {
-    contactUpdates.address = payload.address || null;
-  }
-  if (Object.keys(contactUpdates).length > 0) {
-    await manufacturer.update(contactUpdates);
-  }
-
-  const transaction = await ManufacturerTransaction.create({
-    manufacturerId: manufacturer.Id,
-    manufacturerName: manufacturer.name,
-    mixerId: null,
-    type: "PAYMENT",
-    description: payload.description || "Manufacturer wage payment",
-    debit: 0,
-    credit: amount,
-    date: payload.date || new Date().toISOString().slice(0, 10),
-    note: payload.note || null,
-  });
-
-  return transaction;
 };
 
 const ManufacturerService = {
@@ -232,7 +214,6 @@ const ManufacturerService = {
   getDataById,
   getAllFromDBWithoutQuery,
   getTransactionHistory,
-  payManufacturerAmount,
 };
 
 module.exports = ManufacturerService;

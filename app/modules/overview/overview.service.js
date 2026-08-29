@@ -7,6 +7,9 @@ const {
   getInventoryDisplayQuantity,
   getInventoryStockBalance,
 } = require("../../../shared/variantQuantity");
+const {
+  getInventoryStockReport,
+} = require("../inventoryOverview/inventoryOverview.service");
 
 const Receiveable = db.receiveable;
 const Payable = db.payable;
@@ -1319,6 +1322,7 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
     currentProductCreatedCount,
     previousProductCreatedCount,
     inventorySnapshot,
+    inventoryStockReport,
     salesOverview,
     topSellingProducts,
     recentSales,
@@ -1341,6 +1345,7 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
     countWhere(Product, productCreatedAtWhere),
     countWhere(Product, previousProductCreatedAtWhere),
     getInventorySnapshot(),
+    getInventoryStockReport({ from, to }),
     getSalesOverviewChart(from, to),
     getTopSellingProducts(currentDateWhere, 5),
     getRecentSales(currentDateWhere, 5),
@@ -1387,6 +1392,7 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
       damaged: inventorySnapshot.damaged,
       repairing: inventorySnapshot.repairing,
     },
+    inventoryStockReport,
     lowStockProducts: inventorySnapshot.lowStockProducts,
     topSellingProducts,
     recentSales,

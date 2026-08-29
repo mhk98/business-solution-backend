@@ -20,7 +20,7 @@ const getMonthlySummary = catchAsync(async (req, res) => {
     statusCode: 200,
     success: true,
     message: "Monthly Reporting Book summary fetched!!",
-    meta: result.meta,
+    meta: { ...result.meta, inventoryStockReport: result.inventoryStockReport },
     data: result.data,
   });
 });
@@ -53,7 +53,9 @@ const getBookStatement = catchAsync(async (req, res) => {
     statusCode: 200,
     success: true,
     message: "Book statement fetched!!",
-    meta: result.meta,
+    // sendResponse only forwards meta/data, so the inventory ledger rides
+    // inside meta rather than being dropped as an extra top-level field.
+    meta: { ...result.meta, inventoryStockReport: result.inventoryStockReport },
     data: result.data,
   });
 });

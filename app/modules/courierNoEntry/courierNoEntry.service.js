@@ -9,6 +9,7 @@ const mergeVariants = require("../../../shared/mergeVariants");
 const {
   buildSyncedInventoryStockPayload,
 } = require("../../../shared/variantQuantity");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 
 const CourierNoEntry = db.courierNoEntry;
 const InventoryMaster = db.inventoryMaster;
@@ -108,16 +109,31 @@ const addCourierEntryToInventoryStock = async (row, transaction) => {
 
   const variants = parseJsonArray(row.variants);
   const quantity = toNumber(row.quantity);
+  const balanceBefore = toNumber(inventory.quantity);
 
   await inventory.update(
     buildSyncedInventoryStockPayload({
-      quantity: toNumber(inventory.quantity) + quantity,
+      quantity: balanceBefore + quantity,
       variants: variants.length
         ? mergeVariants(inventory.variants, variants)
         : inventory.variants,
     }),
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    sourceType: "CourierNoEntry",
+    sourceId: row.Id || null,
+    operation: "CREATE",
+    stockType: "ProductStock",
+    productId: inventory.productId,
+    name: inventory.name,
+    unit: "Pcs",
+    date: row.date,
+    quantityChange: quantity,
+    balanceBefore,
+    balanceAfter: balanceBefore + quantity,
+  });
 };
 
 const insertIntoDB = async (payload = {}) => {

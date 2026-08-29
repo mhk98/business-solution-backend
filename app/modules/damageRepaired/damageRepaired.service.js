@@ -12,6 +12,7 @@ const mergeVariants = require("../../../shared/mergeVariants");
 const parseVariants = require("../../../shared/parseVariants");
 const subtractVariants = require("../../../shared/subtractVariants");
 const subtractVariantsPreserveZero = require("../../../shared/subtractVariantsPreserveZero");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const DamageRepaired = db.damageRepaired;
 const Notification = db.notification;
 const User = db.user;
@@ -139,7 +140,7 @@ const assertValidVariantSelection = ({
   });
 };
 
-const moveDamageRepairedItem = async (item, transaction) => {
+const moveDamageRepairedItem = async (item, transaction, date = null) => {
   const returnQty = Number(item.quantity);
   const rid = Number(item.receivedId || item.productId);
   const incomingVariants = parseVariants(item.variants);
@@ -210,6 +211,19 @@ const moveDamageRepairedItem = async (item, transaction) => {
     },
     { where: { Id: damageRepairingStock.Id }, transaction },
   );
+  await logStockMovement({
+    transaction,
+    sourceType: "DamageRepaired",
+    operation: "CREATE",
+    stockType: "RepairingStock",
+    productId: catalogProductId,
+    name: damageRepairingStock.name,
+    unit: "Pcs",
+    date,
+    quantityChange: updatedRepairingQty - oldQty,
+    balanceBefore: oldQty,
+    balanceAfter: updatedRepairingQty,
+  });
 
   const inventory = await InventoryMaster.findOne({
     where: { productId: catalogProductId },
@@ -218,10 +232,11 @@ const moveDamageRepairedItem = async (item, transaction) => {
   });
   if (!inventory) throw new ApiError(404, "Inventory product not found");
 
+  const inventoryBalanceBefore = getStockQuantity(inventory);
   const nextInventoryVariants = mergeVariants(inventory.variants, incomingVariants);
   const nextInventoryQty = hasVariantRows(nextInventoryVariants)
     ? getVariantQuantityTotal(nextInventoryVariants)
-    : getStockQuantity(inventory) + returnQty;
+    : inventoryBalanceBefore + returnQty;
 
   await InventoryMaster.update(
     {
@@ -230,6 +245,19 @@ const moveDamageRepairedItem = async (item, transaction) => {
     },
     { where: { Id: inventory.Id }, transaction },
   );
+  await logStockMovement({
+    transaction,
+    sourceType: "DamageRepaired",
+    operation: "CREATE",
+    stockType: "ProductStock",
+    productId: catalogProductId,
+    name: inventory.name,
+    unit: "Pcs",
+    date,
+    quantityChange: nextInventoryQty - inventoryBalanceBefore,
+    balanceBefore: inventoryBalanceBefore,
+    balanceAfter: nextInventoryQty,
+  });
 
   return {
     name: damageRepairingStock.name,
@@ -459,6 +487,20 @@ const insertIntoDB = async (data) => {
       },
       { where: { Id: damageRepairingStock.Id }, transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "DamageRepaired",
+      sourceId: result.Id,
+      operation: "CREATE",
+      stockType: "RepairingStock",
+      productId: damageStockRepairingProductId,
+      name: damageRepairingStock.name,
+      unit: "Pcs",
+      date,
+      quantityChange: updatedRepairingQty - repairingQty,
+      balanceBefore: repairingQty,
+      balanceAfter: updatedRepairingQty,
+    });
 
     const inventory = await InventoryMaster.findOne({
       where: { productId: damageStockRepairingProductId },
@@ -482,6 +524,20 @@ const insertIntoDB = async (data) => {
       },
       { where: { Id: inventory.Id }, transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "DamageRepaired",
+      sourceId: result.Id,
+      operation: "CREATE",
+      stockType: "ProductStock",
+      productId: damageStockRepairingProductId,
+      name: inventory.name,
+      unit: "Pcs",
+      date,
+      quantityChange: nextInventoryQty - receivedOldQty,
+      balanceBefore: receivedOldQty,
+      balanceAfter: nextInventoryQty,
+    });
 
     const users = await User.findAll({
       attributes: ["Id", "role"],
@@ -645,9 +701,10 @@ const deleteIdFromDB = async (id) => {
           received.variants,
           itemVariants,
         );
+        const repairedStockBalanceBefore = Number(received.quantity || 0);
         const repairedStockQuantity = hasVariantRows(repairedStockVariants)
           ? getVariantQuantityTotal(repairedStockVariants)
-          : Number(received.quantity || 0) + qty;
+          : repairedStockBalanceBefore + qty;
 
         await received.update(
           {
@@ -661,6 +718,19 @@ const deleteIdFromDB = async (id) => {
           },
           { transaction: t },
         );
+        await logStockMovement({
+          transaction: t,
+          sourceType: "DamageRepaired",
+          sourceId: id,
+          operation: "DELETE",
+          stockType: "RepairingStock",
+          productId: received.productId,
+          name: received.name,
+          unit: "Pcs",
+          quantityChange: repairedStockQuantity - repairedStockBalanceBefore,
+          balanceBefore: repairedStockBalanceBefore,
+          balanceAfter: repairedStockQuantity,
+        });
 
         const inventory = await InventoryMaster.findOne({
           where: { productId: received.productId },
@@ -670,9 +740,10 @@ const deleteIdFromDB = async (id) => {
         if (!inventory) throw new ApiError(404, "Inventory product not found");
 
         const finalVariants = subtractVariants(inventory.variants, itemVariants);
+        const inventoryBalanceBefore = Number(inventory.quantity || 0);
         const finalQuantity = hasVariantRows(finalVariants)
           ? getVariantQuantityTotal(finalVariants)
-          : Number(inventory.quantity || 0) - qty;
+          : inventoryBalanceBefore - qty;
         if (finalQuantity < 0) {
           throw new ApiError(400, "Inventory cannot be negative");
         }
@@ -684,6 +755,19 @@ const deleteIdFromDB = async (id) => {
           },
           { transaction: t },
         );
+        await logStockMovement({
+          transaction: t,
+          sourceType: "DamageRepaired",
+          sourceId: id,
+          operation: "DELETE",
+          stockType: "ProductStock",
+          productId: inventory.productId,
+          name: inventory.name,
+          unit: "Pcs",
+          quantityChange: finalQuantity - inventoryBalanceBefore,
+          balanceBefore: inventoryBalanceBefore,
+          balanceAfter: finalQuantity,
+        });
       }
 
       await DamageRepaired.destroy({ where: { Id: id }, transaction: t });
@@ -712,9 +796,10 @@ const deleteIdFromDB = async (id) => {
     }
 
     const repairedStockVariants = mergeVariants(received.variants, ret.variants);
+    const repairedStockBalanceBefore = Number(received.quantity || 0);
     const repairedStockQuantity = hasVariantRows(repairedStockVariants)
       ? getVariantQuantityTotal(repairedStockVariants)
-      : Number(received.quantity || 0) + qty;
+      : repairedStockBalanceBefore + qty;
 
     await DamageReparingStock.update(
       {
@@ -728,6 +813,19 @@ const deleteIdFromDB = async (id) => {
       },
       { where: { Id: received.Id }, transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "DamageRepaired",
+      sourceId: id,
+      operation: "DELETE",
+      stockType: "RepairingStock",
+      productId: received.productId,
+      name: received.name,
+      unit: "Pcs",
+      quantityChange: repairedStockQuantity - repairedStockBalanceBefore,
+      balanceBefore: repairedStockBalanceBefore,
+      balanceAfter: repairedStockQuantity,
+    });
 
     const inventory = await InventoryMaster.findOne({
       where: { productId: received.productId },
@@ -738,9 +836,10 @@ const deleteIdFromDB = async (id) => {
     if (!inventory) throw new ApiError(404, "Inventory product not found");
 
     const finalVariants = subtractVariants(inventory.variants, ret.variants);
+    const deleteInventoryBalanceBefore = Number(inventory.quantity || 0);
     const finalQuantity = hasVariantRows(finalVariants)
       ? getVariantQuantityTotal(finalVariants)
-      : Number(inventory.quantity || 0) - qty;
+      : deleteInventoryBalanceBefore - qty;
     if (finalQuantity < 0) {
       throw new ApiError(400, "Inventory cannot be negative");
     }
@@ -751,6 +850,19 @@ const deleteIdFromDB = async (id) => {
       },
       { where: { Id: inventory.Id }, transaction: t },
     );
+    await logStockMovement({
+      transaction: t,
+      sourceType: "DamageRepaired",
+      sourceId: id,
+      operation: "DELETE",
+      stockType: "ProductStock",
+      productId: inventory.productId,
+      name: inventory.name,
+      unit: "Pcs",
+      quantityChange: finalQuantity - deleteInventoryBalanceBefore,
+      balanceBefore: deleteInventoryBalanceBefore,
+      balanceAfter: finalQuantity,
+    });
 
     // 4) Return row delete
     await DamageRepaired.destroy({

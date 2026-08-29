@@ -10,6 +10,7 @@ const ApiError = require("../../../error/ApiError");
 const {
   PackagingFactorySearchableFields,
 } = require("./packagingFactory.constants");
+const { logStockMovement } = require("../../../shared/stockMovementLogger");
 
 const PackagingFactory = db.packagingFactory;
 const PackagingItem = db.packagingItem;
@@ -30,7 +31,13 @@ const adjustStockBalance = async ({
   delta,
   transaction,
   createOnPositive = false,
+  date = null,
+  sourceType = "PackagingFactory",
+  sourceId = null,
 }) => {
+  const stockType =
+    Model === PackagingFactoryStock ? "PackagingFactoryStock" : "PackagingItemStock";
+
   const stockRow = await Model.findOne({
     where,
     transaction,
@@ -40,7 +47,7 @@ const adjustStockBalance = async ({
 
   if (!stockRow) {
     if (createOnPositive && delta > 0) {
-      return Model.create(
+      const created = await Model.create(
         {
           packagingItemId,
           manufacturerId,
@@ -52,12 +59,29 @@ const adjustStockBalance = async ({
         },
         { transaction },
       );
+      await logStockMovement({
+        transaction,
+        sourceType,
+        sourceId,
+        operation: "CREATE",
+        stockType,
+        itemId: packagingItemId,
+        manufacturerId,
+        name,
+        unit,
+        date,
+        quantityChange: delta,
+        balanceBefore: 0,
+        balanceAfter: delta,
+      });
+      return created;
     }
     throw new ApiError(404, `${stockLabel} not found for selected item`);
   }
 
   const currentPayload = toBaseStockPayload(stockRow.unit, stockRow.unitValue);
-  const nextQuantity = currentPayload.unitValue + delta;
+  const balanceBefore = currentPayload.unitValue;
+  const nextQuantity = balanceBefore + delta;
   if (nextQuantity < 0) throw new ApiError(400, `${stockLabel} cannot be negative`);
 
   const currentCost = toNumber(stockRow.cost);
@@ -68,7 +92,7 @@ const adjustStockBalance = async ({
       ? currentCost + toNumber(cost)
       : Math.max(0, currentCost + delta * currentUnitCost);
 
-  return stockRow.update(
+  const updated = await stockRow.update(
     {
       packagingItemId,
       manufacturerId: manufacturerId || stockRow.manufacturerId || null,
@@ -80,6 +104,22 @@ const adjustStockBalance = async ({
     },
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    sourceType,
+    sourceId,
+    operation: "UPDATE",
+    stockType,
+    itemId: packagingItemId,
+    manufacturerId: manufacturerId || stockRow.manufacturerId || null,
+    name,
+    unit,
+    date,
+    quantityChange: delta,
+    balanceBefore,
+    balanceAfter: nextQuantity,
+  });
+  return updated;
 };
 
 const buildPayload = async (payload, existing = null, options = {}) => {

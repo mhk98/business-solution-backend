@@ -8,6 +8,8 @@ const Ledger = db.ledger;
 const CashInOut = db.cashInOut;
 const SupplierHistory = db.supplierHistory;
 const EmployeeList = db.employeeList;
+const Manufacturer = db.manufacturer;
+const ManufacturerTransaction = db.manufacturerTransaction;
 
 const normalizeOptionalForeignKey = (value) => {
   if (value === undefined || value === null) {
@@ -103,9 +105,35 @@ const buildSupplierHistoryPayload = ({ entryType, amount, payload, existing }) =
   note: payload?.note ?? existing?.note ?? "",
 });
 
+const buildManufacturerTransactionPayload = ({
+  entryType,
+  amount,
+  manufacturerName,
+  payload,
+  existing,
+}) => ({
+  manufacturerId: normalizeOptionalForeignKey(
+    payload?.manufacturerId ?? existing?.manufacturerId,
+  ),
+  manufacturerName: manufacturerName ?? existing?.manufacturerName ?? null,
+  mixerId: null,
+  type: entryType === "Paid" ? "PAYMENT" : "LEDGER_DUE",
+  description:
+    entryType === "Paid"
+      ? "Manufacturer payment (Book)"
+      : "Manufacturer due (Book)",
+  debit: entryType === "Paid" ? 0 : amount,
+  credit: entryType === "Paid" ? amount : 0,
+  date: payload?.date ?? existing?.date ?? new Date(),
+  note: payload?.note ?? existing?.note ?? "",
+});
+
 const buildCashInOutPayload = ({ amount, payload, existing }) => ({
   supplierId: normalizeOptionalForeignKey(
     payload?.supplierId ?? existing?.supplierId,
+  ),
+  manufacturerId: normalizeOptionalForeignKey(
+    payload?.manufacturerId ?? existing?.manufacturerId,
   ),
   employeeId: normalizeOptionalForeignKey(
     payload?.employeeId ?? existing?.employeeId,
@@ -152,11 +180,37 @@ const findMatchingSupplierHistory = async (entry, transaction) => {
   });
 };
 
+const findMatchingManufacturerTransaction = async (entry, transaction) => {
+  if (!entry?.manufacturerId) return null;
+
+  const entryType = getLedgerHistoryEntryType(entry);
+  const amount = getLedgerHistoryAmount(entry);
+  const where = {
+    manufacturerId: entry.manufacturerId,
+    type: entryType === "Paid" ? "PAYMENT" : "LEDGER_DUE",
+    [entryType === "Paid" ? "credit" : "debit"]: amount,
+  };
+
+  if (entry.date) where.date = entry.date;
+
+  return ManufacturerTransaction.findOne({
+    where,
+    paranoid: true,
+    order: [["createdAt", "DESC"]],
+    transaction,
+  });
+};
+
 const findMatchingCashInOut = async (entry, transaction) => {
-  if (getLedgerHistoryEntryType(entry) !== "Paid" && !entry?.employeeId) {
+  if (
+    getLedgerHistoryEntryType(entry) !== "Paid" &&
+    !entry?.employeeId
+  ) {
     return null;
   }
-  if (!entry?.supplierId && !entry?.employeeId) return null;
+  if (!entry?.supplierId && !entry?.employeeId && !entry?.manufacturerId) {
+    return null;
+  }
 
   const where = {
     paymentStatus: { [Op.in]: ["CashOut", "Paid"] },
@@ -164,6 +218,7 @@ const findMatchingCashInOut = async (entry, transaction) => {
   };
 
   if (entry.supplierId) where.supplierId = entry.supplierId;
+  if (entry.manufacturerId) where.manufacturerId = entry.manufacturerId;
   if (entry.employeeId) where.employeeId = entry.employeeId;
   if (entry.bookId) where.bookId = entry.bookId;
   if (entry.date) where.date = entry.date;
@@ -186,6 +241,7 @@ const insertIntoDB = async (payload) => {
     date,
     bookId,
     supplierId,
+    manufacturerId,
     employeeId,
     paymentMode,
     bankName,
@@ -206,6 +262,7 @@ const insertIntoDB = async (payload) => {
     ledgerId,
     bookId: normalizeOptionalForeignKey(bookId),
     supplierId: normalizeOptionalForeignKey(supplierId),
+    manufacturerId: normalizeOptionalForeignKey(manufacturerId),
     employeeId: normalizeOptionalForeignKey(employeeId),
     paymentMode,
     bankName,
@@ -222,6 +279,7 @@ const insertIntoDB = async (payload) => {
     }
 
       let supplierHistoryId = null;
+      let manufacturerTransactionId = null;
       let cashInOutId = null;
 
       if (supplierId) {
@@ -260,6 +318,54 @@ const insertIntoDB = async (payload) => {
         }
       }
 
+      if (manufacturerId) {
+        const manufacturer = await Manufacturer.findOne({
+          where: { Id: manufacturerId },
+          transaction: t,
+        });
+        if (!manufacturer) throw new ApiError(404, "Manufacturer not found");
+
+        // ManufacturerTransaction — বাকি যোগ = LEDGER_DUE (debit), পরিশোধ = PAYMENT (credit)
+        const manufacturerTransaction = await ManufacturerTransaction.create(
+          {
+            manufacturerId,
+            manufacturerName: manufacturer.name,
+            mixerId: null,
+            type: cashType === "Paid" ? "PAYMENT" : "LEDGER_DUE",
+            description:
+              cashType === "Paid"
+                ? "Manufacturer payment (Book)"
+                : "Manufacturer due (Book)",
+            debit: cashType === "Paid" ? 0 : unpaidAmount,
+            credit: cashType === "Paid" ? paidAmount : 0,
+            date: date || new Date(),
+            note: note || "",
+          },
+          { transaction: t },
+        );
+        manufacturerTransactionId = manufacturerTransaction.Id;
+
+        // CashInOut — শুধু পরিশোধ (Paid) হলে CashOut। বাকি যোগ (Unpaid) হলে কোনো cash movement নেই।
+        if (cashType === "Paid") {
+          const cashInOut = await CashInOut.create(
+            {
+              manufacturerId,
+              bookId,
+              paymentMode,
+              bankName: paymentMode === "Bank" ? bankName || "" : "",
+              bankAccount: paymentMode === "Bank" ? bankAccount || null : null,
+              paymentStatus: "CashOut",
+              amount: paidAmount,
+              status: "Active",
+              date,
+              note: note || "",
+            },
+            { transaction: t },
+          );
+          cashInOutId = cashInOut.Id;
+        }
+      }
+
       if (employeeId) {
         const cashInOut = await CashInOut.create(
           {
@@ -281,6 +387,7 @@ const insertIntoDB = async (payload) => {
       }
 
     data.supplierHistoryId = supplierHistoryId;
+    data.manufacturerTransactionId = manufacturerTransactionId;
     data.cashInOutId = cashInOutId;
 
     const result = await LedgerHistory.create(data, { transaction: t });
@@ -458,6 +565,9 @@ const updateOneFromDB = async (id, payload) => {
       supplierId: normalizeOptionalForeignKey(
         payload?.supplierId ?? existing.supplierId,
       ),
+      manufacturerId: normalizeOptionalForeignKey(
+        payload?.manufacturerId ?? existing.manufacturerId,
+      ),
       employeeId: normalizeOptionalForeignKey(
         payload?.employeeId ?? existing.employeeId,
       ),
@@ -511,6 +621,50 @@ const updateOneFromDB = async (id, payload) => {
       nextSupplierHistoryId = null;
     }
 
+    const previousManufacturerTransaction =
+      existing.manufacturerTransactionId &&
+      (await ManufacturerTransaction.findByPk(
+        existing.manufacturerTransactionId,
+        { transaction: t },
+      ));
+    const fallbackManufacturerTransaction =
+      previousManufacturerTransaction ||
+      (await findMatchingManufacturerTransaction(existing, t));
+
+    let nextManufacturerTransactionId =
+      existing.manufacturerTransactionId || null;
+    if (normalizedPayload.manufacturerId) {
+      const manufacturer = await Manufacturer.findOne({
+        where: { Id: normalizedPayload.manufacturerId },
+        transaction: t,
+      });
+      if (!manufacturer) throw new ApiError(404, "Manufacturer not found");
+
+      const manufacturerPayload = buildManufacturerTransactionPayload({
+        entryType: nextEntryType,
+        amount: nextAmount,
+        manufacturerName: manufacturer.name,
+        payload: normalizedPayload,
+        existing,
+      });
+
+      if (fallbackManufacturerTransaction) {
+        await fallbackManufacturerTransaction.update(manufacturerPayload, {
+          transaction: t,
+        });
+        nextManufacturerTransactionId = fallbackManufacturerTransaction.Id;
+      } else {
+        const manufacturerTransaction = await ManufacturerTransaction.create(
+          manufacturerPayload,
+          { transaction: t },
+        );
+        nextManufacturerTransactionId = manufacturerTransaction.Id;
+      }
+    } else if (fallbackManufacturerTransaction) {
+      await fallbackManufacturerTransaction.destroy({ transaction: t });
+      nextManufacturerTransactionId = null;
+    }
+
     const previousCashInOut =
       existing.cashInOutId &&
       (await CashInOut.findByPk(existing.cashInOutId, { transaction: t }));
@@ -540,6 +694,7 @@ const updateOneFromDB = async (id, payload) => {
     }
 
     normalizedPayload.supplierHistoryId = nextSupplierHistoryId;
+    normalizedPayload.manufacturerTransactionId = nextManufacturerTransactionId;
     normalizedPayload.cashInOutId = nextCashInOutId;
 
     const [updatedCount] = await LedgerHistory.update(normalizedPayload, {
@@ -571,6 +726,20 @@ const deleteIdFromDB = async (id) => {
 
     if (fallbackSupplierHistory) {
       await fallbackSupplierHistory.destroy({ transaction: t });
+    }
+
+    const linkedManufacturerTransaction =
+      existing.manufacturerTransactionId &&
+      (await ManufacturerTransaction.findByPk(
+        existing.manufacturerTransactionId,
+        { transaction: t },
+      ));
+    const fallbackManufacturerTransaction =
+      linkedManufacturerTransaction ||
+      (await findMatchingManufacturerTransaction(existing, t));
+
+    if (fallbackManufacturerTransaction) {
+      await fallbackManufacturerTransaction.destroy({ transaction: t });
     }
 
     const linkedCashInOut =
