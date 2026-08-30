@@ -4,6 +4,34 @@ const ApiError = require("../../../error/ApiError");
 const {
   getInventoryDisplayQuantity,
 } = require("../../../shared/variantQuantity");
+const {
+  getCourierProductStockReport,
+} = require("../courierProductStock/courierProductStock.service");
+const {
+  getSupplierReceivableReport,
+  getSupplierDueReport,
+} = require("../supplier/supplier.service");
+const {
+  getManufacturerReceivableReport,
+  getManufacturerDueReport,
+} = require("../manufacturer/manufacturer.service");
+const {
+  getPackagingManufacturerReceivableReport,
+} = require("../packagingManufacturer/packagingManufacturer.service");
+const {
+  getLenderReceivableReport,
+  getLenderPayableReport,
+} = require("../loan/loan.service");
+const { getSalesDueReport } = require("../salesDue/salesDue.service");
+const {
+  getSalaryAdvanceReport,
+} = require("../salaryAdvance/salaryAdvance.service");
+const {
+  getPendingPayrollSalaryReport,
+} = require("../payrollRun/payrollRun.service");
+const {
+  getDirectorInvestmentReport,
+} = require("../director/director.service");
 
 const ReceivedProduct = db.receivedProduct;
 const PurchaseReturnProduct = db.purchaseReturnProduct;
@@ -1226,10 +1254,38 @@ const computePackagingStockReport = async ({ to, name } = {}) => {
 // PDF — one place for both, replacing the two near-identical copies that
 // used to live in overview.service.js and monthlyReportingBook.service.js.
 const getInventoryStockReport = async ({ from, to } = {}) => {
-  const [report, itemFactoryStock, packagingStock] = await Promise.all([
+  const [
+    report,
+    itemFactoryStock,
+    packagingStock,
+    courierProductStock,
+    supplierReceivable,
+    manufacturerReceivable,
+    packagingManufacturerReceivable,
+    lenderReceivable,
+    salesDue,
+    salaryAdvance,
+    pendingPayrollSalary,
+    supplierDue,
+    manufacturerDue,
+    lenderPayable,
+    directorInvestment,
+  ] = await Promise.all([
     computeStockMovementLedgerReport({ from, to }),
     computeItemFactoryStockReport({ to }),
     computePackagingStockReport({ to }),
+    getCourierProductStockReport({ from, to }),
+    getSupplierReceivableReport({ to }),
+    getManufacturerReceivableReport({ to }),
+    getPackagingManufacturerReceivableReport({ to }),
+    getLenderReceivableReport({ to }),
+    getSalesDueReport(),
+    getSalaryAdvanceReport(),
+    getPendingPayrollSalaryReport({ from, to }),
+    getSupplierDueReport(),
+    getManufacturerDueReport(),
+    getLenderPayableReport(),
+    getDirectorInvestmentReport(),
   ]);
   const rows = report.data || [];
 
@@ -1256,6 +1312,18 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     data: rows,
     itemFactoryStock,
     packagingStock,
+    courierProductStock,
+    supplierReceivable,
+    manufacturerReceivable,
+    packagingManufacturerReceivable,
+    lenderReceivable,
+    salesDue,
+    salaryAdvance,
+    pendingPayrollSalary,
+    supplierDue,
+    manufacturerDue,
+    lenderPayable,
+    directorInvestment,
   };
 };
 

@@ -81,6 +81,139 @@ const addBalancesToSuppliers = async (suppliers) => {
   });
 };
 
+// Suppliers the company has overpaid as of `to` — i.e. suppliers who still
+// owe the company goods/refund (mirrors addBalancesToSuppliers' netBalance
+// logic, but as a point-in-time snapshot filtered to SupplierHistory rows on
+// or before `to`, for the shared "All Books" / dashboard statement report).
+const getSupplierReceivableReport = async ({ to } = {}) => {
+  const dateWhere = to ? { date: { [Op.lte]: to } } : {};
+
+  const balanceRows = await SupplierHistory.findAll({
+    attributes: [
+      "supplierId",
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.literal(
+            "CASE WHEN status = 'Paid' THEN amount ELSE 0 END",
+          ),
+        ),
+        "totalPaid",
+      ],
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.literal(
+            "CASE WHEN status = 'Unpaid' THEN amount ELSE 0 END",
+          ),
+        ),
+        "grossDue",
+      ],
+    ],
+    where: dateWhere,
+    group: ["supplierId"],
+    raw: true,
+  });
+
+  const supplierIds = balanceRows
+    .map((row) => row.supplierId)
+    .filter(Boolean);
+  const suppliers = supplierIds.length
+    ? await Supplier.findAll({
+        where: { Id: { [Op.in]: supplierIds } },
+        attributes: ["Id", "name"],
+        paranoid: false,
+        raw: true,
+      })
+    : [];
+  const nameById = new Map(suppliers.map((s) => [s.Id, s.name]));
+
+  const data = balanceRows
+    .map((row) => {
+      const totalPaid = Number(row.totalPaid || 0);
+      const grossDue = Number(row.grossDue || 0);
+      const advance = Math.max(totalPaid - grossDue, 0);
+
+      return {
+        supplierId: row.supplierId,
+        name: nameById.get(row.supplierId) || "Unknown Supplier",
+        advance,
+      };
+    })
+    .filter((row) => row.advance > 0)
+    .sort((a, b) => b.advance - a.advance);
+
+  const totalAdvance = data.reduce((sum, row) => sum + row.advance, 0);
+
+  return {
+    meta: { to: to || null, count: data.length, totalAdvance },
+    data,
+  };
+};
+
+const getSupplierDueReport = async () => {
+  const balanceRows = await SupplierHistory.findAll({
+    attributes: [
+      "supplierId",
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.literal(
+            "CASE WHEN status = 'Paid' THEN amount ELSE 0 END",
+          ),
+        ),
+        "totalPaid",
+      ],
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.literal(
+            "CASE WHEN status = 'Unpaid' THEN amount ELSE 0 END",
+          ),
+        ),
+        "grossDue",
+      ],
+    ],
+    group: ["supplierId"],
+    raw: true,
+  });
+
+  const supplierIds = balanceRows
+    .map((row) => row.supplierId)
+    .filter(Boolean);
+  const suppliers = supplierIds.length
+    ? await Supplier.findAll({
+        where: { Id: { [Op.in]: supplierIds } },
+        attributes: ["Id", "name"],
+        paranoid: false,
+        raw: true,
+      })
+    : [];
+  const nameById = new Map(suppliers.map((s) => [s.Id, s.name]));
+
+  const data = balanceRows
+    .map((row) => {
+      const totalPaid = Number(row.totalPaid || 0);
+      const grossDue = Number(row.grossDue || 0);
+      const due = Math.max(grossDue - totalPaid, 0);
+
+      return {
+        supplierId: row.supplierId,
+        name: nameById.get(row.supplierId) || "Unknown Supplier",
+        due,
+      };
+    })
+    .filter((row) => row.due > 0)
+    .sort((a, b) => b.due - a.due);
+
+  const totalDue = data.reduce((sum, row) => sum + row.due, 0);
+
+  return {
+    meta: { count: data.length, totalDue },
+    data,
+  };
+};
+
 const insertIntoDB = async (data) => {
   const result = await Supplier.create(data);
   return result;
@@ -202,6 +335,8 @@ const SupplierService = {
   updateOneFromDB,
   getDataById,
   getAllFromDBWithoutQuery,
+  getSupplierReceivableReport,
+  getSupplierDueReport,
 };
 
 module.exports = SupplierService;

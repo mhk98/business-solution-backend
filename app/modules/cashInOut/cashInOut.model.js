@@ -51,6 +51,10 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      packagingManufacturerId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       ownerId: {
         type: DataTypes.INTEGER(10),
         allowNull: true,

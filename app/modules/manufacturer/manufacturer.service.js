@@ -206,6 +206,108 @@ const getTransactionHistory = async (id, options = {}) => {
   };
 };
 
+// Manufacturers the company has overpaid as of `to` — i.e. manufacturers who
+// still owe the company wage work/refund. Point-in-time snapshot filtered to
+// ManufacturerTransaction rows on or before `to`, for the shared "All Books"
+// / dashboard statement report. Mirrors supplier.service.js's
+// getSupplierReceivableReport.
+const getManufacturerReceivableReport = async ({ to } = {}) => {
+  const dateWhere = to ? { date: { [Op.lte]: to } } : {};
+
+  const balanceRows = await ManufacturerTransaction.findAll({
+    attributes: [
+      "manufacturerId",
+      [db.sequelize.fn("SUM", db.sequelize.col("debit")), "totalDebit"],
+      [db.sequelize.fn("SUM", db.sequelize.col("credit")), "totalCredit"],
+    ],
+    where: dateWhere,
+    group: ["manufacturerId"],
+    raw: true,
+  });
+
+  const manufacturerIds = balanceRows
+    .map((row) => row.manufacturerId)
+    .filter(Boolean);
+  const manufacturers = manufacturerIds.length
+    ? await Manufacturer.findAll({
+        where: { Id: { [Op.in]: manufacturerIds } },
+        attributes: ["Id", "name"],
+        paranoid: false,
+        raw: true,
+      })
+    : [];
+  const nameById = new Map(manufacturers.map((m) => [m.Id, m.name]));
+
+  const data = balanceRows
+    .map((row) => {
+      const totalDebit = toNumber(row.totalDebit);
+      const totalCredit = toNumber(row.totalCredit);
+      const advance = Math.max(totalCredit - totalDebit, 0);
+
+      return {
+        manufacturerId: row.manufacturerId,
+        name: nameById.get(row.manufacturerId) || "Unknown Manufacturer",
+        advance,
+      };
+    })
+    .filter((row) => row.advance > 0)
+    .sort((a, b) => b.advance - a.advance);
+
+  const totalAdvance = data.reduce((sum, row) => sum + row.advance, 0);
+
+  return {
+    meta: { to: to || null, count: data.length, totalAdvance },
+    data,
+  };
+};
+
+const getManufacturerDueReport = async () => {
+  const balanceRows = await ManufacturerTransaction.findAll({
+    attributes: [
+      "manufacturerId",
+      [db.sequelize.fn("SUM", db.sequelize.col("debit")), "totalDebit"],
+      [db.sequelize.fn("SUM", db.sequelize.col("credit")), "totalCredit"],
+    ],
+    group: ["manufacturerId"],
+    raw: true,
+  });
+
+  const manufacturerIds = balanceRows
+    .map((row) => row.manufacturerId)
+    .filter(Boolean);
+  const manufacturers = manufacturerIds.length
+    ? await Manufacturer.findAll({
+        where: { Id: { [Op.in]: manufacturerIds } },
+        attributes: ["Id", "name"],
+        paranoid: false,
+        raw: true,
+      })
+    : [];
+  const nameById = new Map(manufacturers.map((m) => [m.Id, m.name]));
+
+  const data = balanceRows
+    .map((row) => {
+      const totalDebit = toNumber(row.totalDebit);
+      const totalCredit = toNumber(row.totalCredit);
+      const due = Math.max(totalDebit - totalCredit, 0);
+
+      return {
+        manufacturerId: row.manufacturerId,
+        name: nameById.get(row.manufacturerId) || "Unknown Manufacturer",
+        due,
+      };
+    })
+    .filter((row) => row.due > 0)
+    .sort((a, b) => b.due - a.due);
+
+  const totalDue = data.reduce((sum, row) => sum + row.due, 0);
+
+  return {
+    meta: { count: data.length, totalDue },
+    data,
+  };
+};
+
 const ManufacturerService = {
   getAllFromDB,
   insertIntoDB,
@@ -214,6 +316,8 @@ const ManufacturerService = {
   getDataById,
   getAllFromDBWithoutQuery,
   getTransactionHistory,
+  getManufacturerReceivableReport,
+  getManufacturerDueReport,
 };
 
 module.exports = ManufacturerService;

@@ -5,6 +5,7 @@ const ApiError = require("../../../error/ApiError");
 
 const PayrollRun = db.payrollRun;
 const PayrollItem = db.payrollItem;
+const Employee = db.employee;
 const EmployeeList = db.employeeList;
 const AttendanceSummary = db.attendanceSummary;
 const LeaveRequest = db.leaveRequest;
@@ -13,6 +14,8 @@ const LeaveType = db.leaveType;
 const payrollRunIncludes = [];
 
 const round2 = (value) => Number(Number(value || 0).toFixed(2));
+const pad2 = (value) => String(value).padStart(2, "0");
+
 const monthRange = (month) => {
   const [year, monthNum] = String(month).split("-").map(Number);
   if (!year || !monthNum) throw new ApiError(400, "month must be in YYYY-MM format");
@@ -22,6 +25,12 @@ const monthRange = (month) => {
     start: start.toISOString().slice(0, 10),
     end: end.toISOString().slice(0, 10),
   };
+};
+
+const toMonthKey = (value) => {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return null;
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`;
 };
 
 const listRuns = async (filters, options) => {
@@ -198,9 +207,105 @@ const updateRun = async (id, payload) => {
   return getRunById(id);
 };
 
+const getPendingPayrollSalaryReport = async ({ from, to } = {}) => {
+  const where = {
+    status: { [Op.in]: ["Pending", "pending"] },
+  };
+
+  if (from && to) {
+    where.date = { [Op.between]: [from, to] };
+  } else if (from) {
+    where.date = { [Op.gte]: from };
+  } else if (to) {
+    where.date = { [Op.lte]: to };
+  }
+
+  const rows = Employee
+    ? await Employee.findAll({
+        attributes: ["Id", "name", "date", "net_salary", "status"],
+        where,
+        paranoid: true,
+        order: [
+          ["date", "ASC"],
+          ["name", "ASC"],
+          ["Id", "ASC"],
+        ],
+      })
+    : [];
+
+  const data = rows
+    .map((row) => ({
+      Id: row.Id,
+      date: row.date,
+      name: row.name || "-",
+      salary: Number(row.net_salary || 0),
+    }))
+    .filter((row) => row.salary > 0);
+  const totalSalary = data.reduce((sum, row) => sum + row.salary, 0);
+
+  return {
+    meta: { count: data.length, from, to, totalSalary },
+    data,
+  };
+};
+
+const getPendingPayrollRunSalaryReport = async ({ from, to } = {}) => {
+  const fromMonth = toMonthKey(from);
+  const toMonth = toMonthKey(to);
+  const runWhere = { status: { [Op.in]: ["Pending", "pending"] } };
+
+  if (fromMonth && toMonth) runWhere.month = { [Op.between]: [fromMonth, toMonth] };
+  else if (fromMonth) runWhere.month = { [Op.gte]: fromMonth };
+  else if (toMonth) runWhere.month = { [Op.lte]: toMonth };
+
+  const rows = await PayrollItem.findAll({
+    attributes: ["Id", "payrollRunId", "employeeId", "netAmount"],
+    include: [
+      {
+        model: PayrollRun,
+        as: "payrollRun",
+        attributes: ["Id", "month", "title", "status"],
+        where: runWhere,
+        required: true,
+      },
+      {
+        model: EmployeeList,
+        as: "employee",
+        attributes: ["Id", "name", "employee_id", "employeeCode"],
+        required: false,
+      },
+    ],
+    paranoid: true,
+    order: [
+      [{ model: PayrollRun, as: "payrollRun" }, "month", "ASC"],
+      [{ model: EmployeeList, as: "employee" }, "name", "ASC"],
+      ["Id", "ASC"],
+    ],
+  });
+
+  const data = rows
+    .map((row) => ({
+      Id: row.Id,
+      payrollRunId: row.payrollRunId,
+      employeeId: row.employeeId,
+      month: row.payrollRun?.month || null,
+      name: row.employee?.name || "-",
+      salary: Number(row.netAmount || 0),
+    }))
+    .filter((row) => row.salary > 0);
+  const totalSalary = data.reduce((sum, row) => sum + row.salary, 0);
+
+  return {
+    meta: { count: data.length, from, to, totalSalary },
+    data,
+  };
+};
+
 module.exports = {
   listRuns,
   getRunById,
   generatePayrollRun,
   updateRun,
+  getPendingPayrollSalaryReport,
+  getPendingPayrollRunSalaryReport,
 };

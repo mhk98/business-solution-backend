@@ -8,6 +8,9 @@ const ReceivedProductRoutes = require("../modules/receivedProduct/receivedProduc
 const ReturnProductRoutes = require("../modules/returnProduct/returnProduct.routes");
 const InTransitProductRoutes = require("../modules/inTransitProduct/inTransitProduct.routes");
 const CourierNoEntryRoutes = require("../modules/courierNoEntry/courierNoEntry.routes");
+const CourierProductStockRoutes = require("../modules/courierProductStock/courierProductStock.routes");
+const SalesDueRoutes = require("../modules/salesDue/salesDue.routes");
+const SalaryAdvanceRoutes = require("../modules/salaryAdvance/salaryAdvance.routes");
 const MetaRoutes = require("../modules/meta/meta.routes");
 const AssetsSaleRoutes = require("../modules/assetsSale/assetsSale.routes");
 const ConfirmOrderRoutes = require("../modules/confirmOrder/confirmOrder.routes");
@@ -262,6 +265,18 @@ const moduleRoutes = [
   {
     path: "/courier-no-entry",
     route: CourierNoEntryRoutes,
+  },
+  {
+    path: "/courier-product-stock",
+    route: CourierProductStockRoutes,
+  },
+  {
+    path: "/sales-due",
+    route: SalesDueRoutes,
+  },
+  {
+    path: "/salary-advance",
+    route: SalaryAdvanceRoutes,
   },
   {
     path: "/damage-product",

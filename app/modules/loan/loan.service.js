@@ -171,6 +171,139 @@ const getAllFromDBWithoutQuery = async () => {
   return addBalancesToLoans(rows);
 };
 
+// Lenders the company has overpaid as of `to` — i.e. lenders who still owe
+// the company money back (repaid more than was borrowed). Point-in-time
+// snapshot filtered to CashInOut rows on or before `to`, for the shared
+// "All Books" / dashboard statement report.
+const getLenderReceivableReport = async ({ to } = {}) => {
+  const dateWhere = to ? { date: { [Op.lte]: to } } : {};
+
+  const balanceRows = await CashInOut.findAll({
+    attributes: [
+      "loanId",
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.literal(
+            "CASE WHEN paymentStatus = 'CashIn' THEN amount ELSE 0 END",
+          ),
+        ),
+        "totalLoanTaken",
+      ],
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.literal(
+            "CASE WHEN paymentStatus = 'CashOut' THEN amount ELSE 0 END",
+          ),
+        ),
+        "totalLoanPaid",
+      ],
+    ],
+    where: { ...dateWhere, loanId: { [Op.ne]: null } },
+    group: ["loanId"],
+    raw: true,
+  });
+
+  const loanIds = balanceRows.map((row) => row.loanId).filter(Boolean);
+  const loans = loanIds.length
+    ? await Loan.findAll({
+        where: { Id: { [Op.in]: loanIds } },
+        attributes: ["Id", "name"],
+        paranoid: false,
+        raw: true,
+      })
+    : [];
+  const nameById = new Map(loans.map((loan) => [loan.Id, loan.name]));
+
+  const data = balanceRows
+    .map((row) => {
+      const totalLoanTaken = normalizeAmount(row.totalLoanTaken);
+      const totalLoanPaid = normalizeAmount(row.totalLoanPaid);
+      const receivable = Math.max(totalLoanPaid - totalLoanTaken, 0);
+
+      return {
+        loanId: row.loanId,
+        name: nameById.get(row.loanId) || "Unknown Lender",
+        advance: receivable,
+      };
+    })
+    .filter((row) => row.advance > 0)
+    .sort((a, b) => b.advance - a.advance);
+
+  const totalAdvance = data.reduce((sum, row) => sum + row.advance, 0);
+
+  return {
+    meta: { to: to || null, count: data.length, totalAdvance },
+    data,
+  };
+};
+
+// Positive "কত পাবে" in the Lender table means the company still owes money
+// to that lender (netBalance = totalLoanTaken - totalLoanPaid). This is shown
+// separately in the book report as "কোম্পানির কাছে পাবে (লেন্ডার)".
+const getLenderPayableReport = async () => {
+  const balanceRows = await CashInOut.findAll({
+    attributes: [
+      "loanId",
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.literal(
+            "CASE WHEN paymentStatus = 'CashIn' THEN amount ELSE 0 END",
+          ),
+        ),
+        "totalLoanTaken",
+      ],
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.literal(
+            "CASE WHEN paymentStatus = 'CashOut' THEN amount ELSE 0 END",
+          ),
+        ),
+        "totalLoanPaid",
+      ],
+    ],
+    where: { loanId: { [Op.ne]: null } },
+    group: ["loanId"],
+    raw: true,
+  });
+
+  const loanIds = balanceRows.map((row) => row.loanId).filter(Boolean);
+  const loans = loanIds.length
+    ? await Loan.findAll({
+        where: { Id: { [Op.in]: loanIds } },
+        attributes: ["Id", "name"],
+        paranoid: false,
+        raw: true,
+      })
+    : [];
+  const nameById = new Map(loans.map((loan) => [loan.Id, loan.name]));
+
+  const data = balanceRows
+    .map((row) => {
+      const totalLoanTaken = normalizeAmount(row.totalLoanTaken);
+      const totalLoanPaid = normalizeAmount(row.totalLoanPaid);
+      const due = Math.max(totalLoanTaken - totalLoanPaid, 0);
+
+      return {
+        loanId: row.loanId,
+        name: nameById.get(row.loanId) || "Unknown Lender",
+        due,
+      };
+    })
+    .filter((row) => row.due > 0)
+    .sort((a, b) => b.due - a.due);
+
+  const totalDue = data.reduce((sum, row) => sum + row.due, 0);
+
+  return {
+    meta: { count: data.length, totalDue },
+    data,
+  };
+};
+
 module.exports = {
   getAllFromDB,
   insertIntoDB,
@@ -178,4 +311,6 @@ module.exports = {
   updateOneFromDB,
   deleteIdFromDB,
   getAllFromDBWithoutQuery,
+  getLenderReceivableReport,
+  getLenderPayableReport,
 };

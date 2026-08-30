@@ -14,6 +14,10 @@ const Director = db.director;
 const Book = db.book;
 const OwnerTransaction = db.ownerTransaction;
 const DirectorProfitShare = db.directorProfitShare;
+const Manufacturer = db.manufacturer;
+const ManufacturerTransaction = db.manufacturerTransaction;
+const PackagingManufacturer = db.packagingManufacturer;
+const PackagingManufacturerTransaction = db.packagingManufacturerTransaction;
 
 const toDateOnly = (value) => {
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
@@ -228,6 +232,8 @@ const insertIntoDB = async (data) => {
     date,
     bookId,
     supplierId,
+    manufacturerId,
+    packagingManufacturerId,
     ownerId,
     directorId,
     employeeId,
@@ -242,6 +248,14 @@ const insertIntoDB = async (data) => {
     supplierId !== undefined &&
     supplierId !== null &&
     String(supplierId) !== "";
+  const hasManufacturerId =
+    manufacturerId !== undefined &&
+    manufacturerId !== null &&
+    String(manufacturerId) !== "";
+  const hasPackagingManufacturerId =
+    packagingManufacturerId !== undefined &&
+    packagingManufacturerId !== null &&
+    String(packagingManufacturerId) !== "";
   const finalOwnerId = normalizeOptionalId(ownerId);
   const finalDirectorId = normalizeOptionalId(directorId);
   const finalBookId = normalizeOptionalId(bookId);
@@ -277,6 +291,24 @@ const insertIntoDB = async (data) => {
       if (!book) throw new ApiError(404, "Book not found");
     }
 
+    let manufacturer = null;
+    if (hasManufacturerId) {
+      manufacturer = await Manufacturer.findByPk(manufacturerId, {
+        transaction: t,
+      });
+      if (!manufacturer) throw new ApiError(404, "Manufacturer not found");
+    }
+
+    let packagingManufacturer = null;
+    if (hasPackagingManufacturerId) {
+      packagingManufacturer = await PackagingManufacturer.findByPk(
+        packagingManufacturerId,
+        { transaction: t },
+      );
+      if (!packagingManufacturer)
+        throw new ApiError(404, "Packaging manufacturer not found");
+    }
+
     const voucherNo = await generateMonthlyVoucherNo(date, voucherPrefix, t);
     const { date: normalizedDate } = getMonthRange(date);
     const { voucherPrefix: _voucherPrefix, ...cashInOutData } = data;
@@ -305,6 +337,40 @@ const insertIntoDB = async (data) => {
       console.log("supplierData", supplierData);
 
       await SupplierHistory.create(supplierData, { transaction: t });
+    }
+
+    if (hasManufacturerId) {
+      await ManufacturerTransaction.create(
+        {
+          manufacturerId,
+          manufacturerName: manufacturer.name,
+          mixerId: null,
+          type: "PAYMENT",
+          description: "Manufacturer payment (Book)",
+          debit: 0,
+          credit: amount,
+          date: date || normalizedDate,
+          note: note || "",
+        },
+        { transaction: t },
+      );
+    }
+
+    if (hasPackagingManufacturerId) {
+      await PackagingManufacturerTransaction.create(
+        {
+          manufacturerId: packagingManufacturerId,
+          manufacturerName: packagingManufacturer.name,
+          mixerId: null,
+          type: "PAYMENT",
+          description: "Packaging manufacturer payment (Book)",
+          debit: 0,
+          credit: amount,
+          date: date || normalizedDate,
+          note: note || "",
+        },
+        { transaction: t },
+      );
     }
 
     if (hasOwnerId) {
@@ -830,6 +896,8 @@ const updateOneFromDB = async (id, payload) => {
     userId,
     bookId,
     supplierId,
+    manufacturerId,
+    packagingManufacturerId,
     ownerId,
     directorId,
     date,
@@ -841,6 +909,14 @@ const updateOneFromDB = async (id, payload) => {
     supplierId !== undefined &&
     supplierId !== null &&
     String(supplierId) !== "";
+  const hasManufacturerId =
+    manufacturerId !== undefined &&
+    manufacturerId !== null &&
+    String(manufacturerId) !== "";
+  const hasPackagingManufacturerId =
+    packagingManufacturerId !== undefined &&
+    packagingManufacturerId !== null &&
+    String(packagingManufacturerId) !== "";
   const finalOwnerId = normalizeOptionalId(ownerId);
   const finalDirectorId = normalizeOptionalId(directorId);
   const finalBookId = normalizeOptionalId(bookId);
@@ -905,6 +981,52 @@ const updateOneFromDB = async (id, payload) => {
       };
 
       await SupplierHistory.create(supplierData, { transaction: t });
+    }
+
+    if (hasManufacturerId) {
+      const manufacturer = await Manufacturer.findByPk(manufacturerId, {
+        transaction: t,
+      });
+      if (!manufacturer) throw new ApiError(404, "Manufacturer not found");
+
+      await ManufacturerTransaction.create(
+        {
+          manufacturerId,
+          manufacturerName: manufacturer.name,
+          mixerId: null,
+          type: "PAYMENT",
+          description: "Manufacturer payment (Book)",
+          debit: 0,
+          credit: amount,
+          date,
+          note: note || "",
+        },
+        { transaction: t },
+      );
+    }
+
+    if (hasPackagingManufacturerId) {
+      const packagingManufacturer = await PackagingManufacturer.findByPk(
+        packagingManufacturerId,
+        { transaction: t },
+      );
+      if (!packagingManufacturer)
+        throw new ApiError(404, "Packaging manufacturer not found");
+
+      await PackagingManufacturerTransaction.create(
+        {
+          manufacturerId: packagingManufacturerId,
+          manufacturerName: packagingManufacturer.name,
+          mixerId: null,
+          type: "PAYMENT",
+          description: "Packaging manufacturer payment (Book)",
+          debit: 0,
+          credit: amount,
+          date,
+          note: note || "",
+        },
+        { transaction: t },
+      );
     }
 
     const existingOwnerTransaction = shouldSyncOwnerTransaction

@@ -202,6 +202,8 @@ const insertIntoDB = catchAsync(async (req, res) => {
     loanId,
     bookId,
     supplierId,
+    manufacturerId,
+    packagingManufacturerId,
     ownerId,
     directorId,
     partyType,
@@ -217,6 +219,10 @@ const insertIntoDB = catchAsync(async (req, res) => {
     String(partyType || "").trim().toLowerCase() === "owner";
   const isDirectorParty =
     String(partyType || "").trim().toLowerCase() === "director";
+  const isManufacturerParty =
+    String(partyType || "").trim().toLowerCase() === "manufacturer";
+  const isPackagingManufacturerParty =
+    String(partyType || "").trim().toLowerCase() === "packaging manufacturer";
 
   // ✅ bankAccount sanitize
   const bankAccountNumber =
@@ -252,6 +258,48 @@ const insertIntoDB = catchAsync(async (req, res) => {
 
   if (isCashOut && finalSupplierId !== null && Number.isNaN(finalSupplierId)) {
     throw new ApiError(400, "SupplierId must be a valid number");
+  }
+
+  // ✅ manufacturerId sanitize only for CashOut
+  const finalManufacturerId =
+    isCashOut &&
+    manufacturerId !== undefined &&
+    manufacturerId !== null &&
+    String(manufacturerId).trim() !== ""
+      ? Number(manufacturerId)
+      : null;
+
+  if (
+    isCashOut &&
+    finalManufacturerId !== null &&
+    Number.isNaN(finalManufacturerId)
+  ) {
+    throw new ApiError(400, "ManufacturerId must be a valid number");
+  }
+
+  if (isManufacturerParty && !finalManufacturerId) {
+    throw new ApiError(400, "Manufacturer is required");
+  }
+
+  // ✅ packagingManufacturerId sanitize only for CashOut
+  const finalPackagingManufacturerId =
+    isCashOut &&
+    packagingManufacturerId !== undefined &&
+    packagingManufacturerId !== null &&
+    String(packagingManufacturerId).trim() !== ""
+      ? Number(packagingManufacturerId)
+      : null;
+
+  if (
+    isCashOut &&
+    finalPackagingManufacturerId !== null &&
+    Number.isNaN(finalPackagingManufacturerId)
+  ) {
+    throw new ApiError(400, "PackagingManufacturerId must be a valid number");
+  }
+
+  if (isPackagingManufacturerParty && !finalPackagingManufacturerId) {
+    throw new ApiError(400, "Packaging manufacturer is required");
   }
 
   const finalOwnerId =
@@ -310,6 +358,8 @@ const insertIntoDB = catchAsync(async (req, res) => {
     categoryId,
     bookId,
     supplierId: finalSupplierId, // ✅ only CashOut হলে value যাবে, নাহলে null
+    manufacturerId: finalManufacturerId, // ✅ only CashOut হলে value যাবে, নাহলে null
+    packagingManufacturerId: finalPackagingManufacturerId, // ✅ only CashOut হলে value যাবে, নাহলে null
     ownerId: finalOwnerId,
     directorId: finalDirectorId,
     voucherPrefix: normalizeOptionalText(voucherPrefix) || "KM-",
@@ -466,6 +516,8 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     lender,
     loanId,
     supplierId,
+    manufacturerId,
+    packagingManufacturerId,
     ownerId,
     directorId,
     partyType,
@@ -576,6 +628,12 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     loanId: shouldTrackLoan ? loanFields.loanId : null,
     bookId: bookId || undefined,
     supplierId: supplierId !== undefined ? supplierId || null : undefined,
+    manufacturerId:
+      manufacturerId !== undefined ? manufacturerId || null : undefined,
+    packagingManufacturerId:
+      packagingManufacturerId !== undefined
+        ? packagingManufacturerId || null
+        : undefined,
     ownerId: ownerId !== undefined ? finalOwnerId : undefined,
     directorId: directorId !== undefined ? finalDirectorId : undefined,
     ...(amountNumber !== undefined ? { amount: amountNumber } : {}),

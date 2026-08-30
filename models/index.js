@@ -132,6 +132,19 @@ db.courierNoEntry =
     db.sequelize,
     DataTypes,
   );
+db.courierProductStock =
+  require("../app/modules/courierProductStock/courierProductStock.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.salesDue = require("../app/modules/salesDue/salesDue.model")(
+  db.sequelize,
+  DataTypes,
+);
+db.salaryAdvance = require("../app/modules/salaryAdvance/salaryAdvance.model")(
+  db.sequelize,
+  DataTypes,
+);
 
 db.returnProduct = require("../app/modules/returnProduct/returnProduct.model")(
   db.sequelize,
@@ -2816,6 +2829,41 @@ const ensureCashInOutManufacturerColumn = async () => {
   }
 };
 
+const ensureCashInOutPackagingManufacturerColumn = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.cashInOut.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.packagingManufacturerId) {
+    await queryInterface.addColumn(tableName, "packagingManufacturerId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+};
+
+// Superseded by paidAmount below — a running paid total (like Supplier's
+// SupplierHistory / Manufacturer's ManufacturerTransaction) makes more sense
+// here than a single Paid/Unpaid flag, since partial payments need to reduce
+// Due and any overpayment needs to show up as Advance.
+const ensureSalesLedgerPaidAmountColumn = async (modelKey) => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db[modelKey].getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.paidAmount) {
+    await queryInterface.addColumn(tableName, "paidAmount", {
+      type: DataTypes.DECIMAL(15, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
+
+  if (tableDefinition.status) {
+    await queryInterface.removeColumn(tableName, "status");
+  }
+};
+
 const ensurePackagingMixerColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.packagingMixer.getTableName();
@@ -3500,6 +3548,12 @@ db.sequelize
     await ensureMixerManufacturerColumns();
     await ensureLedgerHistoryManufacturerColumns();
     await ensureCashInOutManufacturerColumn();
+    await ensureCashInOutPackagingManufacturerColumn();
+    await Promise.all(
+      ["salesDue", "salaryAdvance"].map((modelKey) =>
+        ensureSalesLedgerPaidAmountColumn(modelKey),
+      ),
+    );
     await ensureLedgerManufacturerColumns();
     await ensureStockMovementDateColumn();
     await ensurePackagingMixerColumns();

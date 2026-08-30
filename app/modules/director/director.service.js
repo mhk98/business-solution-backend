@@ -154,6 +154,31 @@ const getAllFromDBWithoutQuery = async () => {
   return addBalancesToDirectors(rows);
 };
 
+const getDirectorInvestmentReport = async () => {
+  const directors = await Director.findAll({
+    paranoid: true,
+    order: [["name", "ASC"]],
+  });
+  const directorsWithBalances = await addBalancesToDirectors(directors);
+  const data = directorsWithBalances
+    .map((director) => ({
+      directorId: director.Id,
+      name: director.name || "Unknown Director",
+      investAmount: normalizeAmount(director.totalInvest),
+    }))
+    .filter((row) => row.investAmount > 0)
+    .sort((a, b) => b.investAmount - a.investAmount);
+  const totalInvestAmount = data.reduce(
+    (sum, row) => sum + row.investAmount,
+    0,
+  );
+
+  return {
+    meta: { count: data.length, totalInvestAmount },
+    data,
+  };
+};
+
 module.exports = {
   getAllFromDB,
   insertIntoDB,
@@ -161,4 +186,5 @@ module.exports = {
   updateOneFromDB,
   deleteIdFromDB,
   getAllFromDBWithoutQuery,
+  getDirectorInvestmentReport,
 };
