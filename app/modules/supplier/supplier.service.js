@@ -122,7 +122,6 @@ const getSupplierReceivableReport = async ({ to } = {}) => {
     ? await Supplier.findAll({
         where: { Id: { [Op.in]: supplierIds } },
         attributes: ["Id", "name"],
-        paranoid: false,
         raw: true,
       })
     : [];
@@ -136,11 +135,13 @@ const getSupplierReceivableReport = async ({ to } = {}) => {
 
       return {
         supplierId: row.supplierId,
-        name: nameById.get(row.supplierId) || "Unknown Supplier",
+        name: nameById.get(row.supplierId) || null,
         advance,
       };
     })
-    .filter((row) => row.advance > 0)
+    // Skip deleted/unknown suppliers — this report only lists live suppliers
+    // the company has actually overpaid.
+    .filter((row) => row.name && row.advance > 0)
     .sort((a, b) => b.advance - a.advance);
 
   const totalAdvance = data.reduce((sum, row) => sum + row.advance, 0);
@@ -185,7 +186,6 @@ const getSupplierDueReport = async () => {
     ? await Supplier.findAll({
         where: { Id: { [Op.in]: supplierIds } },
         attributes: ["Id", "name"],
-        paranoid: false,
         raw: true,
       })
     : [];
@@ -199,11 +199,13 @@ const getSupplierDueReport = async () => {
 
       return {
         supplierId: row.supplierId,
-        name: nameById.get(row.supplierId) || "Unknown Supplier",
+        name: nameById.get(row.supplierId) || null,
         due,
       };
     })
-    .filter((row) => row.due > 0)
+    // Skip deleted/unknown suppliers — only live suppliers with an outstanding
+    // due belong in this report.
+    .filter((row) => row.name && row.due > 0)
     .sort((a, b) => b.due - a.due);
 
   const totalDue = data.reduce((sum, row) => sum + row.due, 0);

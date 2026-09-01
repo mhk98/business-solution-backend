@@ -85,6 +85,28 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.JSON,
         allowNull: true,
       },
+      // Movement-based costing (Phase 0 — capture only, not yet read by reports).
+      // IN rows: unitCost = actual per-unit purchase cost of this lot.
+      // OUT rows: unitSalePrice = per-unit price charged at sale time;
+      //           unitCostConsumed = per-unit FIFO cost of the units that left
+      //           (provisional last-cost until Phase 1 wires the cost layers);
+      //           costBreakdown = [{ layerId, qty, unitCost }] once FIFO lands.
+      unitCost: {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: true,
+      },
+      unitSalePrice: {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: true,
+      },
+      unitCostConsumed: {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: true,
+      },
+      costBreakdown: {
+        type: DataTypes.JSON,
+        allowNull: true,
+      },
     },
     {
       timestamps: true,

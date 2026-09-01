@@ -19,6 +19,8 @@ const {
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const { resolveUnitPrice } = require("../../../shared/movementUnitPrice");
+const fifo = require("../../../shared/fifoCostLayers");
 
 const ReceivedProduct = db.receivedProduct;
 const Product = db.product;
@@ -117,6 +119,12 @@ const applyReceivedItemToInventory = async (
   const productId = Number(item.productId);
   const purchasePrice = toNumber(item.purchase_price);
   const salePrice = toNumber(item.sale_price);
+  // Received-form prices are already per-unit; variant lines (if any) win.
+  const unitCost = resolveUnitPrice(
+    { variants: incomingVariants, purchase_price: purchasePrice, quantity },
+    "purchase_price",
+    { mode: "unit" },
+  );
 
   await assertCatalogInventoryMovementVariants({
     db,
@@ -156,7 +164,7 @@ const applyReceivedItemToInventory = async (
     );
 
     await syncProductStockId(productData, inv.Id, transaction);
-    await logStockMovement({
+    const inStockMovement = await logStockMovement({
       transaction,
       sourceType: "ReceivedProduct",
       operation: "CREATE",
@@ -168,7 +176,18 @@ const applyReceivedItemToInventory = async (
       quantityChange: quantity,
       balanceBefore,
       balanceAfter,
+      unitCost,
     });
+    await fifo.openForRow({
+      transaction,
+      productId,
+      unitCost,
+      quantity,
+      variants: incomingVariants,
+      receivedDate: date,
+      sourceType: "ReceivedProduct",
+      sourceMovementId: inStockMovement ? inStockMovement.Id : null,
+      });
 
     return;
   }
@@ -188,7 +207,7 @@ const applyReceivedItemToInventory = async (
   );
 
   await syncProductStockId(productData, stock.Id, transaction);
-  await logStockMovement({
+  const newStockMovement = await logStockMovement({
     transaction,
     sourceType: "ReceivedProduct",
     operation: "CREATE",
@@ -200,7 +219,18 @@ const applyReceivedItemToInventory = async (
     quantityChange: quantity,
     balanceBefore: 0,
     balanceAfter: quantity,
+    unitCost,
   });
+  await fifo.openForRow({
+    transaction,
+    productId,
+    unitCost,
+    quantity,
+    variants: incomingVariants,
+    receivedDate: date,
+    sourceType: "ReceivedProduct",
+    sourceMovementId: newStockMovement ? newStockMovement.Id : null,
+    });
 };
 
 const removeReceivedItemFromInventory = async (
@@ -262,6 +292,13 @@ const removeReceivedItemFromInventory = async (
     quantityChange: -quantity,
     balanceBefore,
     balanceAfter: nextQty,
+  });
+  // Undo the cost layer(s) this receipt opened — newest first.
+  await fifo.unwindForRow({
+    transaction,
+    productId,
+    quantity,
+    variants: parseVariants(item.variants),
   });
 };
 

@@ -32,6 +32,14 @@ module.exports = (sequelize, DataTypes) => {
           notEmpty: true, // Ensure name is not empty
         },
       },
+      // Movement-based costing: the FIFO cost of the units this dispatch
+      // consumed (line total). New dispatches get it from the cost layers;
+      // historical rows are backfilled from `purchase_price`. Reports read this,
+      // never the catalog.
+      fifo_cost: {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: true,
+      },
 
       quantity: {
         type: DataTypes.INTEGER(10),

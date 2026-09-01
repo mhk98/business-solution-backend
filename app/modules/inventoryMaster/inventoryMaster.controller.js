@@ -53,6 +53,17 @@ const updateOneFromDB = catchAsync(async (req, res) => {
   });
 });
 
+const updatePrice = catchAsync(async (req, res) => {
+  const { id } = req.params;
+  const result = await InventoryMasterService.updatePriceFromDB(id, req.body);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Stock product price updated successfully!!",
+    data: result,
+  });
+});
+
 const deleteIdFromDB = catchAsync(async (req, res) => {
   const result = await InventoryMasterService.deleteIdFromDB(req.params.id);
   sendResponse(res, {
@@ -115,6 +126,7 @@ const InventoryMasterController = {
   insertIntoDB,
   getDataById,
   updateOneFromDB,
+  updatePrice,
   deleteIdFromDB,
   getAllFromDBWithoutQuery,
   getLowStockProducts,

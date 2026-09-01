@@ -232,7 +232,6 @@ const getManufacturerReceivableReport = async ({ to } = {}) => {
     ? await Manufacturer.findAll({
         where: { Id: { [Op.in]: manufacturerIds } },
         attributes: ["Id", "name"],
-        paranoid: false,
         raw: true,
       })
     : [];
@@ -246,11 +245,13 @@ const getManufacturerReceivableReport = async ({ to } = {}) => {
 
       return {
         manufacturerId: row.manufacturerId,
-        name: nameById.get(row.manufacturerId) || "Unknown Manufacturer",
+        name: nameById.get(row.manufacturerId) || null,
         advance,
       };
     })
-    .filter((row) => row.advance > 0)
+    // Skip deleted/unknown manufacturers — only live ones the company has
+    // overpaid belong here.
+    .filter((row) => row.name && row.advance > 0)
     .sort((a, b) => b.advance - a.advance);
 
   const totalAdvance = data.reduce((sum, row) => sum + row.advance, 0);
@@ -279,7 +280,6 @@ const getManufacturerDueReport = async () => {
     ? await Manufacturer.findAll({
         where: { Id: { [Op.in]: manufacturerIds } },
         attributes: ["Id", "name"],
-        paranoid: false,
         raw: true,
       })
     : [];
@@ -293,11 +293,13 @@ const getManufacturerDueReport = async () => {
 
       return {
         manufacturerId: row.manufacturerId,
-        name: nameById.get(row.manufacturerId) || "Unknown Manufacturer",
+        name: nameById.get(row.manufacturerId) || null,
         due,
       };
     })
-    .filter((row) => row.due > 0)
+    // Skip deleted/unknown manufacturers — only live ones with an outstanding
+    // due belong here.
+    .filter((row) => row.name && row.due > 0)
     .sort((a, b) => b.due - a.due);
 
   const totalDue = data.reduce((sum, row) => sum + row.due, 0);

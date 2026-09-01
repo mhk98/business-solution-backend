@@ -19,6 +19,7 @@ const {
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const fifo = require("../../../shared/fifoCostLayers");
 const InTransitProduct = db.inTransitProduct;
 const Notification = db.notification;
 const User = db.user;
@@ -209,6 +210,26 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
     }),
     { transaction },
   );
+
+  const movementPrices = resolveMovementPrices(
+    inventory,
+    returnQty,
+    incomingVariants,
+    item.purchase_price,
+    customSalePrice !== null ? customSalePrice : item.sale_price,
+  );
+  // resolveMovementPrices returns line totals — divide back to per-unit.
+  const perUnitSalePrice =
+    returnQty > 0 ? movementPrices.sale_price / returnQty : 0;
+
+  // Real FIFO cost of the units leaving stock (per variant when applicable).
+  const consumed = await fifo.consumeForRow({
+    transaction,
+    productId: inventory.productId,
+    quantity: returnQty,
+    variants: incomingVariants,
+  });
+
   await logStockMovement({
     transaction,
     sourceType: "InTransitProduct",
@@ -221,15 +242,10 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
     quantityChange: -returnQty,
     balanceBefore: oldQty,
     balanceAfter: oldQty - returnQty,
+    unitSalePrice: perUnitSalePrice,
+    unitCostConsumed: consumed.unitCostConsumed,
+    costBreakdown: consumed.costBreakdown,
   });
-
-  const movementPrices = resolveMovementPrices(
-    inventory,
-    returnQty,
-    incomingVariants,
-    item.purchase_price,
-    customSalePrice !== null ? customSalePrice : item.sale_price,
-  );
 
   return {
     receivedId: rid,
@@ -239,10 +255,15 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
     variants: incomingVariants,
     purchase_price: movementPrices.purchase_price,
     sale_price: movementPrices.sale_price,
+    fifo_cost: consumed.totalCost,
   };
 };
 
-const restoreItemsToInventory = async (items = [], transaction) => {
+const restoreItemsToInventory = async (
+  items = [],
+  transaction,
+  sourceId = null,
+) => {
   for (const item of items) {
     const inventory = await findInventoryByStoredReference(
       Number(item.productId ?? item.receivedId),
@@ -282,6 +303,15 @@ const restoreItemsToInventory = async (items = [], transaction) => {
       quantityChange: restoreQty,
       balanceBefore: restoreBalanceBefore,
       balanceAfter: restoreBalanceBefore + restoreQty,
+    });
+    await fifo.restoreStock({
+      transaction,
+      productId: inventory.productId,
+      quantity: restoreQty,
+      receivedDate: item.date || null,
+      sourceType: "InTransitProduct",
+      sourceId,
+      fallbackUnitCost: 0, // no invented cost — shortfall stays 0 (flagged)
     });
   }
 };
@@ -406,6 +436,13 @@ const insertIntoDB = async (data) => {
       }),
       { where: { Id: inventory.Id }, transaction: t },
     );
+    const consumed = await fifo.consumeForRow({
+      transaction: t,
+      productId: inventory.productId,
+      quantity: returnQty,
+      variants: incomingVariants,
+    });
+    await result.update({ fifo_cost: consumed.totalCost }, { transaction: t });
     await logStockMovement({
       transaction: t,
       sourceType: "InTransitProduct",
@@ -419,6 +456,10 @@ const insertIntoDB = async (data) => {
       quantityChange: -returnQty,
       balanceBefore: oldQty,
       balanceAfter: finalQuantity,
+      unitSalePrice:
+        returnQty > 0 ? movementPrices.sale_price / returnQty : 0,
+      unitCostConsumed: consumed.unitCostConsumed,
+      costBreakdown: consumed.costBreakdown,
     });
 
     const users = await User.findAll({
@@ -488,6 +529,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
           batchId: batchId || null,
           purchase_price: normalizedItem.purchase_price,
           sale_price: normalizedItem.sale_price,
+          fifo_cost: normalizedItem.fifo_cost,
           productId: normalizedItem.productId,
           status: finalStatus || "---",
           note: finalStatus === "Approved" ? null : note || null,
@@ -633,11 +675,15 @@ const getDataById = async (id) => {
 };
 
 const deleteIdFromDB = async (id) => {
+  await fifo.assertNotClosedPeriod({
+    sourceType: "InTransitProduct",
+    sourceId: id,
+  });
   return await db.sequelize.transaction(async (t) => {
     // 1) Return row খুঁজে বের করো
     const ret = await InTransitProduct.findOne({
       where: { Id: id },
-      attributes: ["Id", "productId", "quantity", "variants", "items"],
+      attributes: ["Id", "productId", "quantity", "variants", "items", "date"],
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
@@ -646,7 +692,7 @@ const deleteIdFromDB = async (id) => {
 
     const returnItems = parseItems(ret.items);
     if (returnItems.length > 0) {
-      await restoreItemsToInventory(returnItems, t);
+      await restoreItemsToInventory(returnItems, t, id);
 
       await InTransitProduct.destroy({
         where: { Id: id },
@@ -692,6 +738,16 @@ const deleteIdFromDB = async (id) => {
       quantityChange: qty,
       balanceBefore: deleteBalanceBefore,
       balanceAfter: finalQuantity,
+    });
+    // Put the dispatched units' cost back into the layers they came from.
+    await fifo.restoreStock({
+      transaction: t,
+      productId: received.productId,
+      quantity: qty,
+      receivedDate: ret.date || null,
+      sourceType: "InTransitProduct",
+      sourceId: id,
+      fallbackUnitCost: 0, // no invented cost — shortfall stays 0 (flagged)
     });
 
     // 4) Return row delete
@@ -949,7 +1005,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
           },
         ];
 
-    await restoreItemsToInventory(restoreItems, t);
+    await restoreItemsToInventory(restoreItems, t, id);
 
     const nextItems = preparedItems.length ? preparedItems : oldItems;
     const normalizedItems = [];
@@ -974,6 +1030,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
           batchId: resolvedBatchId,
           purchase_price: normalizedItem.purchase_price,
           sale_price: normalizedItem.sale_price,
+          fifo_cost: normalizedItem.fifo_cost,
           productId: normalizedItem.productId,
           note: finalStatus === "Approved" ? null : newNote || null,
           status: finalStatus,
@@ -1021,6 +1078,11 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
 };
 
 const updateOneFromDB = async (id, payload) => {
+  await fifo.assertNotClosedPeriod({
+    sourceType: "InTransitProduct",
+    sourceId: id,
+  });
+
   const incomingBulkItems = getBulkItems(payload);
   if (incomingBulkItems.length) {
     return updateBulkOneFromDB(id, payload, incomingBulkItems);

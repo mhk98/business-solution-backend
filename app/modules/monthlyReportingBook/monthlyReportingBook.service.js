@@ -79,7 +79,12 @@ const buildBaseConditions = (filters, { start, end }) => {
 
 const buildNameMaps = async () => {
   const [books, categories] = await Promise.all([
-    Book.findAll({ attributes: ["Id", "name"], paranoid: false }),
+    // Books: live only — a deleted book must not resurface as a "book" in the
+    // Monthly Reporting table or the "All Books" statement, even if stray
+    // CashInOut rows still point at it. Categories stay paranoid:false so a
+    // legit transaction keeps its historical category label after the category
+    // is deleted.
+    Book.findAll({ attributes: ["Id", "name"] }),
     Category.findAll({ attributes: ["Id", "name"], paranoid: false }),
   ]);
 
@@ -137,6 +142,9 @@ const getMonthlySummary = async (filters, options) => {
     ]);
 
   const rows = rawRows
+    // Drop CashInOut rows whose book has been deleted (or is missing) so the
+    // report and its credit/debit totals only ever reflect live books.
+    .filter((row) => bookNameById.has(row.bookId))
     .map((row) => {
       const totalCredit = Number(row.totalCredit || 0);
       const totalDebit = Number(row.totalDebit || 0);

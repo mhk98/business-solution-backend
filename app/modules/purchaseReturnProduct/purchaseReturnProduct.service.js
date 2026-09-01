@@ -19,6 +19,7 @@ const {
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const fifo = require("../../../shared/fifoCostLayers");
 const PurchaseReturnProduct = db.purchaseReturnProduct;
 const Notification = db.notification;
 const User = db.user;
@@ -183,6 +184,14 @@ const normalizeReturnItem = async (item, transaction, date = null) => {
     balanceBefore: oldQty,
     balanceAfter: oldQty - returnQty,
   });
+  // Returning goods to the supplier reverses a purchase — take from the newest
+  // cost layers first.
+  await fifo.unwindForRow({
+    transaction,
+    productId: inventory.productId,
+    quantity: returnQty,
+    variants: incomingVariants,
+  });
 
   return {
     name: inventory.name,
@@ -234,6 +243,16 @@ const restoreReturnItemsToInventory = async (items = [], transaction) => {
       quantityChange: qty,
       balanceBefore: restoreBalanceBefore,
       balanceAfter: restoreBalanceBefore + qty,
+    });
+    // Undoing a supplier return puts the goods back — no invented cost.
+    await fifo.openForRow({
+      transaction,
+      productId: inventory.productId,
+      quantity: qty,
+      unitCost: 0,
+      variants: parseVariants(item.variants),
+      receivedDate: item.date || null,
+      sourceType: "PurchaseReturnProduct",
     });
   }
 };
@@ -346,6 +365,12 @@ const insertIntoDB = async (data) => {
       quantityChange: -returnQty,
       balanceBefore: oldQty,
       balanceAfter: finalQuantity,
+    });
+    await fifo.unwindForRow({
+      transaction: t,
+      productId: inventory.productId,
+      quantity: returnQty,
+      variants: incomingVariants,
     });
 
     const users = await User.findAll({
@@ -621,6 +646,15 @@ const deleteIdFromDB = async (id) => {
       quantityChange: qty,
       balanceBefore: deleteBalanceBefore,
       balanceAfter: finalQuantity,
+    });
+    await fifo.openForRow({
+      transaction: t,
+      productId: inventory.productId,
+      quantity: qty,
+      unitCost: 0,
+      variants: parseVariants(ret.variants),
+      receivedDate: ret.date || null,
+      sourceType: "PurchaseReturnProduct",
     });
 
     // 4) Return row delete

@@ -52,6 +52,13 @@ router.get(
   requireMenuPermission("inventory"),
   InventoryMasterController.getDataById,
 );
+// Unit Purchase Price / Unit Sale Price edit — admin & superAdmin only.
+router.patch(
+  "/:id/price",
+  auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
+  requireMenuPermission("inventory"),
+  InventoryMasterController.updatePrice,
+);
 router.delete(
   "/:id",
   auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),

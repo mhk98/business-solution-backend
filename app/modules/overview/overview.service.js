@@ -293,6 +293,50 @@ const sumField = async (Model, field, where = {}) => {
   return n(total);
 };
 
+// SUM(COALESCE(primary, fallback)) — used for the FIFO cost column, which is
+// null on rows the Phase 3 backfill hasn't touched yet (fall back to the frozen
+// purchase_price there).
+const sumCoalesce = async (Model, primary, fallback, where = {}) => {
+  if (!Model) return 0;
+  const row = await Model.findOne({
+    attributes: [
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.fn(
+            "COALESCE",
+            db.Sequelize.col(primary),
+            db.Sequelize.col(fallback),
+          ),
+        ),
+        "total",
+      ],
+    ],
+    where: activeWhere(Model, where),
+    paranoid: true,
+    raw: true,
+  });
+  return n(row && row.total);
+};
+
+// Current stock value from the FIFO cost layers (point-in-time, no date filter).
+const getStockLayerValue = async () => {
+  if (!db.inventoryCostLayer) return 0;
+  const row = await db.inventoryCostLayer.findOne({
+    attributes: [
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.literal("remainingQty * unitCost"),
+        ),
+        "value",
+      ],
+    ],
+    raw: true,
+  });
+  return n(row && row.value);
+};
+
 const getDmBalanceSummary = async (where = {}) => {
   const [cashIn, cashOut] = await Promise.all([
     sumField(MarketingExpense, "amount", {
@@ -784,6 +828,9 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     pendingPurchaseRequisitionCount,
     pendingPettyCashRequisitionCount,
     pendingAssetsRequisitionCount,
+    stockLayerValue,
+    legacyInTransitPurchaseAmount,
+    legacySalesReturnPurchaseAmount,
   ] = await Promise.all([
     sumField(MarketingExpense, "amount", {
       ...transactionDateWhere,
@@ -823,8 +870,18 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     sumField(ConfirmOrder, "sale_price", transactionDateWhere),
     sumField(IntransitProduct, "sale_price", transactionDateWhere),
     sumField(ReturnProduct, "sale_price", transactionDateWhere),
-    sumField(IntransitProduct, "purchase_price", transactionDateWhere),
-    sumField(ReturnProduct, "purchase_price", transactionDateWhere),
+    sumCoalesce(
+      IntransitProduct,
+      "fifo_cost",
+      "purchase_price",
+      transactionDateWhere,
+    ),
+    sumCoalesce(
+      ReturnProduct,
+      "fifo_cost",
+      "purchase_price",
+      transactionDateWhere,
+    ),
     sumField(CodCharge, "amount", transactionDateWhere),
     sumField(CodChange, "amount", transactionDateWhere),
     sumField(DeliveryCharge, "amount", transactionDateWhere),
@@ -842,6 +899,9 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
       ...transactionDateWhere,
       status: "Pending",
     }),
+    getStockLayerValue(),
+    sumField(IntransitProduct, "purchase_price", transactionDateWhere),
+    sumField(ReturnProduct, "purchase_price", transactionDateWhere),
   ]);
 
   const netCashPosition = n(totalCashInAmount - totalCashOutAmount);
@@ -862,6 +922,16 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
   const netPurchase = n(inTransitPurchaseAmount - salesReturnPurchaseAmount);
   const grossProfit = n(netRevenue - netPurchase);
   const netProfitLoss = n(grossProfit - othersExpense);
+
+  // Pre-FIFO comparison — remove once the new numbers are signed off.
+  const legacyNetPurchase = n(
+    legacyInTransitPurchaseAmount - legacySalesReturnPurchaseAmount,
+  );
+  const costingComparison = {
+    netPurchaseFifo: netPurchase,
+    netPurchaseLegacy: legacyNetPurchase,
+    stockValueFromLayers: n(stockLayerValue),
+  };
   const dmBalance = n(totalDmCashInAmount - totalMetaAmount);
   const totalPendingApprovalCount = n(
     pendingPurchaseRequisitionCount +
@@ -902,6 +972,8 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     grossProfit,
     othersExpense,
     netProfitLoss,
+    stockLayerValue: n(stockLayerValue),
+    costingComparison,
     totalCashInAmount,
     totalCashOutAmount,
     netCashPosition,

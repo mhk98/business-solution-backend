@@ -210,7 +210,6 @@ const getLenderReceivableReport = async ({ to } = {}) => {
     ? await Loan.findAll({
         where: { Id: { [Op.in]: loanIds } },
         attributes: ["Id", "name"],
-        paranoid: false,
         raw: true,
       })
     : [];
@@ -224,11 +223,13 @@ const getLenderReceivableReport = async ({ to } = {}) => {
 
       return {
         loanId: row.loanId,
-        name: nameById.get(row.loanId) || "Unknown Lender",
+        name: nameById.get(row.loanId) || null,
         advance: receivable,
       };
     })
-    .filter((row) => row.advance > 0)
+    // Skip deleted/unknown lenders — only live lenders the company has overpaid
+    // belong here.
+    .filter((row) => row.name && row.advance > 0)
     .sort((a, b) => b.advance - a.advance);
 
   const totalAdvance = data.reduce((sum, row) => sum + row.advance, 0);
@@ -275,7 +276,6 @@ const getLenderPayableReport = async () => {
     ? await Loan.findAll({
         where: { Id: { [Op.in]: loanIds } },
         attributes: ["Id", "name"],
-        paranoid: false,
         raw: true,
       })
     : [];
@@ -289,11 +289,13 @@ const getLenderPayableReport = async () => {
 
       return {
         loanId: row.loanId,
-        name: nameById.get(row.loanId) || "Unknown Lender",
+        name: nameById.get(row.loanId) || null,
         due,
       };
     })
-    .filter((row) => row.due > 0)
+    // Skip deleted/unknown lenders — only live lenders with an outstanding due
+    // belong here.
+    .filter((row) => row.name && row.due > 0)
     .sort((a, b) => b.due - a.due);
 
   const totalDue = data.reduce((sum, row) => sum + row.due, 0);

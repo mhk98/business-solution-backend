@@ -94,6 +94,33 @@ const normalizeSaleType = (value) => {
 const sumReportFields = (data, fields) =>
   fields.reduce((total, field) => total + normalizeNumber(data[field], field), 0);
 
+const normalizeReportProducts = (products) => {
+  if (!Array.isArray(products)) return [];
+
+  return products
+    .map((item) => {
+      const productId = Number(item?.productId || 0);
+      if (!productId) return null;
+
+      const quantity = normalizeNumber(item?.quantity, "quantity");
+      // purchasePrice / salePrice are the line's TOTAL amounts (already
+      // quantity × unit price, computed on the frontend) — not per-unit.
+      const purchasePrice = normalizeNumber(item?.purchasePrice, "purchasePrice");
+      const salePrice = normalizeNumber(item?.salePrice, "salePrice");
+      if (!quantity) return null;
+
+      return {
+        productId,
+        productName: String(item?.productName || "").trim() || null,
+        quantity,
+        purchasePrice,
+        salePrice,
+        totalPurchasePrice: purchasePrice,
+      };
+    })
+    .filter(Boolean);
+};
+
 const buildPayload = (payload = {}, fallbackDate, fallbackName) => {
   const data = {
     reportDate: normalizeDate(payload.reportDate, fallbackDate),
@@ -107,6 +134,7 @@ const buildPayload = (payload = {}, fallbackDate, fallbackName) => {
 
   data.totalAssign = sumReportFields(data, TOTAL_ASSIGN_SOURCE_FIELDS);
   data.totalOrder = sumReportFields(data, TOTAL_ORDER_SOURCE_FIELDS);
+  data.products = normalizeReportProducts(payload.products);
 
   if (!data.reportDate) {
     throw new ApiError(400, "reportDate is required");

@@ -20,6 +20,7 @@ const {
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const fifo = require("../../../shared/fifoCostLayers");
 const DamageProduct = db.damageProduct;
 const Notification = db.notification;
 const User = db.user;
@@ -226,6 +227,13 @@ const moveDamageProductItem = async (item, transaction, date = null) => {
     },
     { where: { Id: inventory.Id }, transaction },
   );
+  const damageOutQty = oldQty - finalQuantity;
+  const damageConsumed = await fifo.consumeForRow({
+    transaction,
+    productId: catalogProductId,
+    quantity: damageOutQty,
+    variants: incomingVariants,
+    });
   await logStockMovement({
     transaction,
     sourceType: "DamageProduct",
@@ -235,9 +243,11 @@ const moveDamageProductItem = async (item, transaction, date = null) => {
     name: inventory.name,
     unit: "Pcs",
     date,
-    quantityChange: -(oldQty - finalQuantity),
+    quantityChange: -damageOutQty,
     balanceBefore: oldQty,
     balanceAfter: finalQuantity,
+    unitCostConsumed: damageConsumed.unitCostConsumed,
+    costBreakdown: damageConsumed.costBreakdown,
   });
 
   return {
@@ -565,6 +575,13 @@ const insertIntoDB = async (data) => {
       },
       { where: { Id: inventory.Id }, transaction: t },
     );
+    const damageOutQty = oldQty - finalQuantity;
+    const damageConsumed = await fifo.consumeForRow({
+      transaction: t,
+      productId: inventory.productId,
+      quantity: damageOutQty,
+      variants: incomingVariants,
+    });
     await logStockMovement({
       transaction: t,
       sourceType: "DamageProduct",
@@ -578,6 +595,8 @@ const insertIntoDB = async (data) => {
       quantityChange: finalQuantity - oldQty,
       balanceBefore: oldQty,
       balanceAfter: finalQuantity,
+      unitCostConsumed: damageConsumed.unitCostConsumed,
+      costBreakdown: damageConsumed.costBreakdown,
     });
 
     const users = await User.findAll({
@@ -757,6 +776,15 @@ const deleteIdFromDB = async (id) => {
           balanceBefore: itemBalanceBefore,
           balanceAfter: finalQuantity,
         });
+        await fifo.restoreStock({
+          transaction: t,
+          productId: inventoryMaster.productId,
+          quantity: finalQuantity - itemBalanceBefore,
+          receivedDate: null,
+          sourceType: "DamageProduct",
+          sourceId: id,
+          fallbackUnitCost: 0, // no invented cost — shortfall stays 0 (flagged)
+        });
 
         const damageStock = await findDamageStockByProductId(
           Number(inventoryMaster.productId),
@@ -886,6 +914,15 @@ const deleteIdFromDB = async (id) => {
       quantityChange: qty,
       balanceBefore: deleteBalanceBefore,
       balanceAfter: finalQuantity,
+    });
+    await fifo.restoreStock({
+      transaction: t,
+      productId: inventoryMaster.productId,
+      quantity: qty,
+      receivedDate: null,
+      sourceType: "DamageProduct",
+      sourceId: id,
+      fallbackUnitCost: 0, // no invented cost — shortfall stays 0 (flagged)
     });
 
     // 4) Return row delete

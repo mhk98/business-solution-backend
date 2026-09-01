@@ -13,6 +13,35 @@ const parseVariants = require("../../../shared/parseVariants");
 const subtractVariants = require("../../../shared/subtractVariants");
 const subtractVariantsPreserveZero = require("../../../shared/subtractVariantsPreserveZero");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const fifo = require("../../../shared/fifoCostLayers");
+
+// Repaired goods re-entering ProductStock open a cost layer; deleting a repair
+// record removes them again (FIFO). Cost basis is the catalog purchase price —
+// per-batch repair cost is not tracked.
+const productStockLayerIn = async ({
+  transaction,
+  productId,
+  quantity,
+  unitCost,
+  variants,
+  date,
+}) => {
+  if (Number(quantity) <= 0) return;
+  await fifo.openForRow({
+    transaction,
+    productId,
+    quantity,
+    unitCost: Number(unitCost) || 0,
+    variants,
+    receivedDate: date || null,
+    sourceType: "DamageRepaired",
+  });
+};
+
+const productStockLayerOut = async ({ transaction, productId, quantity, variants }) => {
+  if (Number(quantity) <= 0) return;
+  await fifo.consumeForRow({ transaction, productId, quantity, variants });
+};
 const DamageRepaired = db.damageRepaired;
 const Notification = db.notification;
 const User = db.user;
@@ -257,6 +286,14 @@ const moveDamageRepairedItem = async (item, transaction, date = null) => {
     quantityChange: nextInventoryQty - inventoryBalanceBefore,
     balanceBefore: inventoryBalanceBefore,
     balanceAfter: nextInventoryQty,
+  });
+  await productStockLayerIn({
+    transaction,
+    productId: catalogProductId,
+    quantity: nextInventoryQty - inventoryBalanceBefore,
+    unitCost: inventory.purchase_price,
+    variants: incomingVariants,
+    date,
   });
 
   return {
@@ -538,6 +575,14 @@ const insertIntoDB = async (data) => {
       balanceBefore: receivedOldQty,
       balanceAfter: nextInventoryQty,
     });
+    await productStockLayerIn({
+      transaction: t,
+      productId: damageStockRepairingProductId,
+      quantity: nextInventoryQty - receivedOldQty,
+      unitCost: inventory.purchase_price,
+      variants: incomingVariants,
+      date,
+    });
 
     const users = await User.findAll({
       attributes: ["Id", "role"],
@@ -768,6 +813,12 @@ const deleteIdFromDB = async (id) => {
           balanceBefore: inventoryBalanceBefore,
           balanceAfter: finalQuantity,
         });
+        await productStockLayerOut({
+          transaction: t,
+          productId: inventory.productId,
+          quantity: inventoryBalanceBefore - finalQuantity,
+          variants: itemVariants,
+        });
       }
 
       await DamageRepaired.destroy({ where: { Id: id }, transaction: t });
@@ -862,6 +913,12 @@ const deleteIdFromDB = async (id) => {
       quantityChange: finalQuantity - deleteInventoryBalanceBefore,
       balanceBefore: deleteInventoryBalanceBefore,
       balanceAfter: finalQuantity,
+    });
+    await productStockLayerOut({
+      transaction: t,
+      productId: inventory.productId,
+      quantity: deleteInventoryBalanceBefore - finalQuantity,
+      variants: parseVariants(ret.variants),
     });
 
     // 4) Return row delete

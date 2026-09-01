@@ -16,6 +16,7 @@ const {
   assertInventoryMovementVariants,
 } = require("../../../shared/inventoryVariantGuard");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const fifo = require("../../../shared/fifoCostLayers");
 const PosReport = db.posReport;
 const Notification = db.notification;
 const User = db.user;
@@ -107,6 +108,37 @@ const applyPosItemMovement = async (
       }),
       { transaction },
     );
+    // Per-unit sale price from the POS line (`price` is per-unit; `total` is the
+    // line total).
+    const perUnitSalePrice =
+      Number(item?.price) > 0
+        ? Number(item.price)
+        : quantity > 0 && Number(item?.total) > 0
+          ? Number(item.total) / quantity
+          : null;
+    let unitCostConsumed = null;
+    let costBreakdown = null;
+    if (isSale) {
+      const consumed = await fifo.consumeForRow({
+        transaction,
+        productId: inventory.productId,
+        quantity,
+        variants: itemVariants,
+      });
+      unitCostConsumed = consumed.unitCostConsumed;
+      costBreakdown = consumed.costBreakdown;
+    } else {
+      // POS return / restore — units go back into stock.
+      const restored = await fifo.restoreStock({
+        transaction,
+        productId: inventory.productId,
+        quantity,
+        receivedDate: date,
+        sourceType: "PosReport",
+      });
+      unitCostConsumed = restored.unitCost || 0;
+    }
+
     await logStockMovement({
       transaction,
       sourceType: "PosReport",
@@ -119,6 +151,9 @@ const applyPosItemMovement = async (
       quantityChange: nextQuantity - currentQuantity,
       balanceBefore: currentQuantity,
       balanceAfter: nextQuantity,
+      unitSalePrice: perUnitSalePrice,
+      unitCostConsumed,
+      costBreakdown,
     });
   }
 };

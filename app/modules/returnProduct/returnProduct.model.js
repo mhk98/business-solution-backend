@@ -32,6 +32,12 @@ module.exports = (sequelize, DataTypes) => {
           notEmpty: true, // Ensure name is not empty
         },
       },
+      // FIFO cost (line total) of the units this sales-return puts back into
+      // stock. Reports subtract this from the purchase side.
+      fifo_cost: {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: true,
+      },
       quantity: {
         type: DataTypes.INTEGER(10),
         defaultValue: 0,

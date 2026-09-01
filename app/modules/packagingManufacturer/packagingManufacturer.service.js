@@ -191,7 +191,6 @@ const getPackagingManufacturerReceivableReport = async ({ to } = {}) => {
     ? await PackagingManufacturer.findAll({
         where: { Id: { [Op.in]: manufacturerIds } },
         attributes: ["Id", "name"],
-        paranoid: false,
         raw: true,
       })
     : [];
@@ -205,11 +204,13 @@ const getPackagingManufacturerReceivableReport = async ({ to } = {}) => {
 
       return {
         manufacturerId: row.manufacturerId,
-        name: nameById.get(row.manufacturerId) || "Unknown Manufacturer",
+        name: nameById.get(row.manufacturerId) || null,
         advance,
       };
     })
-    .filter((row) => row.advance > 0)
+    // Skip deleted/unknown manufacturers — only live ones the company has
+    // overpaid belong here.
+    .filter((row) => row.name && row.advance > 0)
     .sort((a, b) => b.advance - a.advance);
 
   const totalAdvance = data.reduce((sum, row) => sum + row.advance, 0);

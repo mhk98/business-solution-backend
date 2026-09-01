@@ -8,6 +8,16 @@ const getDirection = (quantityChange) => {
   return "NONE";
 };
 
+// null = the flow did not supply a price (unknown). A supplied 0 is kept as 0
+// (a real, if unusual, value). Anything non-finite or negative is treated as
+// unknown.
+const normalizePrice = (value) => {
+  if (value === undefined || value === null || value === "") return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return null;
+  return number;
+};
+
 const logStockMovement = async ({
   transaction,
   sourceType,
@@ -27,6 +37,11 @@ const logStockMovement = async ({
   balanceBefore,
   balanceAfter,
   metadata = null,
+  // Movement-based costing (Phase 0). All nullable — pass what the flow knows.
+  unitCost = null,
+  unitSalePrice = null,
+  unitCostConsumed = null,
+  costBreakdown = null,
 }) => {
   if (!db.stockMovement || !sourceType || !operation || !stockType) return null;
 
@@ -56,6 +71,10 @@ const logStockMovement = async ({
       balanceBefore: toNumber(balanceBefore),
       balanceAfter: toNumber(balanceAfter),
       metadata,
+      unitCost: normalizePrice(unitCost),
+      unitSalePrice: normalizePrice(unitSalePrice),
+      unitCostConsumed: normalizePrice(unitCostConsumed),
+      costBreakdown: costBreakdown || null,
     },
     { transaction },
   );

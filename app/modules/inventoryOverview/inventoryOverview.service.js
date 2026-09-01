@@ -292,6 +292,7 @@ const findRows = async (Model, where = {}, label, include = []) => {
     "variants",
     "purchase_price",
     "sale_price",
+    "fifo_cost",
   ].filter((attribute) => modelAttributes[attribute]);
 
   const rows = await Model.findAll({
@@ -312,10 +313,30 @@ const findRows = async (Model, where = {}, label, include = []) => {
     quantity: n(r.quantity),
     purchase_price: n(r.purchase_price),
     sale_price: n(r.sale_price),
+    fifo_cost: modelAttributes.fifo_cost ? r.fifo_cost : null,
     variants: r.variants || [],
     date: r.date,
     createdAt: r.createdAt,
   }));
+};
+
+// For dispatch (Intransit) and Sales Return rows the money is frozen on the row
+// itself at transaction time — the reports read that, never the current catalog.
+// Purchase side prefers the FIFO cost, falling back to the frozen line total.
+const FROZEN_MONEY_SOURCES = new Set(["Intransit Product", "Sales Return"]);
+
+const rowPurchaseValue = (row, priceByName) => {
+  if (FROZEN_MONEY_SOURCES.has(row.source)) {
+    return n(row.fifo_cost) || n(row.purchase_price);
+  }
+  return n(row.quantity) * getStockPriceForRow(priceByName, row).purchase_price;
+};
+
+const rowSaleValue = (row, priceByName) => {
+  if (FROZEN_MONEY_SOURCES.has(row.source)) {
+    return n(row.sale_price);
+  }
+  return n(row.quantity) * getStockPriceForRow(priceByName, row).sale_price;
 };
 
 const parseRowVariants = (row) => {
@@ -1330,11 +1351,19 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
 const attachRowUnitPricing = (rows, priceByName) =>
   rows.map((row) => {
     const stockPrice = getStockPriceForRow(priceByName, row);
+    const qty = n(row.quantity);
+    const frozen = FROZEN_MONEY_SOURCES.has(row.source);
 
     return {
       ...row,
-      unitPurchasePrice: stockPrice.purchase_price,
-      unitSalePrice: stockPrice.sale_price,
+      unitPurchasePrice:
+        frozen && qty > 0
+          ? rowPurchaseValue(row, priceByName) / qty
+          : stockPrice.purchase_price,
+      unitSalePrice:
+        frozen && qty > 0
+          ? rowSaleValue(row, priceByName) / qty
+          : stockPrice.sale_price,
       // This movement's own variant/quantity split (e.g. which batches went
       // into this specific Intransit entry) — parsed since it can arrive as
       // a raw JSON string rather than an already-decoded array. Shown for
@@ -1374,16 +1403,31 @@ const getInventoryOverviewListFromDB = async (filters) => {
   const priceByName = await getStockPriceMap(all);
 
   const totalQuantity = all.reduce((sum, row) => sum + n(row.quantity), 0);
-  const totalPurchaseValue = all.reduce((sum, row) => {
-    const stockPrice = getStockPriceForRow(priceByName, row);
-    return sum + n(row.quantity) * stockPrice.purchase_price;
-  }, 0);
-  const totalSaleValue = all.reduce((sum, row) => {
-    const stockPrice = getStockPriceForRow(priceByName, row);
-    return sum + n(row.quantity) * stockPrice.sale_price;
-  }, 0);
+  const totalPurchaseValue = all.reduce(
+    (sum, row) => sum + rowPurchaseValue(row, priceByName),
+    0,
+  );
+  const totalSaleValue = all.reduce(
+    (sum, row) => sum + rowSaleValue(row, priceByName),
+    0,
+  );
 
   const paged = attachRowUnitPricing(all.slice(skip, skip + limit), priceByName);
+
+  const stockLayerValueRow = db.inventoryCostLayer
+    ? await db.inventoryCostLayer.findOne({
+        attributes: [
+          [
+            db.Sequelize.fn(
+              "SUM",
+              db.Sequelize.literal("remainingQty * unitCost"),
+            ),
+            "value",
+          ],
+        ],
+        raw: true,
+      })
+    : null;
 
   return {
     meta: {
@@ -1391,6 +1435,7 @@ const getInventoryOverviewListFromDB = async (filters) => {
       to: to || null,
       name: name || null,
       source: source || null,
+      stockLayerValue: n(stockLayerValueRow && stockLayerValueRow.value),
       requestedTotalQuantity:
         requestedTotalQuantity === undefined ||
         requestedTotalQuantity === null ||

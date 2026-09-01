@@ -109,6 +109,11 @@ db.stockMovement = require("../app/modules/stockMovement/stockMovement.model")(
   db.sequelize,
   DataTypes,
 );
+db.inventoryCostLayer =
+  require("../app/modules/inventoryCostLayer/inventoryCostLayer.model")(
+    db.sequelize,
+    DataTypes,
+  );
 db.mixer = require("../app/modules/mixer/mixer.model")(db.sequelize, DataTypes);
 
 db.receivedProduct =
@@ -1912,6 +1917,10 @@ const ensureEmployeeWorkReportColumns = async () => {
     allowNull: false,
     defaultValue: 0,
   });
+  await maybeAddColumn("products", {
+    type: DataTypes.JSON,
+    allowNull: true,
+  });
 };
 
 const ensureLogisticWorkReportColumns = async () => {
@@ -2798,6 +2807,154 @@ const ensureStockMovementDateColumn = async () => {
   }
 };
 
+// Movement-based costing (Phase 0). Nullable, additive — no report reads these
+// yet. IN rows carry unitCost; OUT rows carry unitSalePrice + unitCostConsumed
+// (+ costBreakdown once Phase 1 wires the FIFO cost layers).
+const ensureStockMovementCostingColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.stockMovement.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  const decimalColumns = ["unitCost", "unitSalePrice", "unitCostConsumed"];
+  for (const column of decimalColumns) {
+    if (!tableDefinition[column]) {
+      await queryInterface.addColumn(tableName, column, {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: true,
+      });
+    }
+  }
+
+  if (!tableDefinition.costBreakdown) {
+    await queryInterface.addColumn(tableName, "costBreakdown", {
+      type: DataTypes.JSON,
+      allowNull: true,
+    });
+  }
+};
+
+// FIFO cost column on the sale/return source tables (Phase 3). Reports read
+// this instead of catalog price. Nullable + additive.
+const ensureFifoCostColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  for (const model of [db.inTransitProduct, db.returnProduct]) {
+    if (!model) continue;
+    const tableName = model.getTableName();
+    const def = await queryInterface.describeTable(tableName);
+    if (!def.fifo_cost) {
+      await queryInterface.addColumn(tableName, "fifo_cost", {
+        type: DataTypes.DECIMAL(14, 2),
+        allowNull: true,
+      });
+    }
+  }
+};
+
+// One-time FIFO seed (Phase 1). When the cost-layer table is still empty, open
+// one "opening balance" layer per in-stock product, valued at its current
+// catalog purchase price (per the agreed policy). Runs before any real receipt,
+// so its early receivedDate makes FIFO consume opening stock first.
+const parseVariantsForSeed = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+// Opening layers for a product. A variant product gets one layer per variant at
+// that variant's own purchase_price (0 if the user hasn't set it — no
+// fallback). A flat product gets one null-key layer at its purchase_price.
+const buildOpeningLayers = (inv) => {
+  const productId = Number(inv.productId);
+  if (!productId) return [];
+
+  const variantRows = parseVariantsForSeed(inv.variants).filter(
+    (v) => v && (v.size || v.color) && Number(v.quantity) > 0,
+  );
+
+  if (variantRows.length) {
+    return variantRows.map((v) => ({
+      productId,
+      variantKey: `${String(v.size || "").trim()}__${String(v.color || "").trim()}`,
+      sourceType: "OpeningBalance",
+      sourceMovementId: null,
+      receivedDate: "2000-01-01",
+      originalQty: Number(v.quantity),
+      remainingQty: Number(v.quantity),
+      unitCost: Number(v.purchase_price) || 0,
+      note: "opening balance (variant)",
+    }));
+  }
+
+  if (Number(inv.quantity) > 0) {
+    return [
+      {
+        productId,
+        variantKey: null,
+        sourceType: "OpeningBalance",
+        sourceMovementId: null,
+        receivedDate: "2000-01-01",
+        originalQty: Number(inv.quantity),
+        remainingQty: Number(inv.quantity),
+        unitCost: Number(inv.purchase_price) || 0,
+        note: "opening balance",
+      },
+    ];
+  }
+  return [];
+};
+
+const seedOpeningCostLayers = async () => {
+  if (!db.inventoryCostLayer || !db.inventoryMaster) return;
+
+  const inventories = await db.inventoryMaster.findAll({
+    where: { deletedAt: { [Op.is]: null } },
+    attributes: ["productId", "quantity", "purchase_price", "variants"],
+    raw: true,
+  });
+
+  // Fresh install — seed everything.
+  const totalLayers = await db.inventoryCostLayer.count();
+  if (totalLayers === 0) {
+    const rows = inventories.flatMap(buildOpeningLayers);
+    if (rows.length) {
+      await db.inventoryCostLayer.bulkCreate(rows);
+      console.log(`Seeded ${rows.length} opening cost layers`);
+    }
+    return;
+  }
+
+  // Migrate variant products whose layers are still the flat (null-key)
+  // Phase-1 seed — replace them with per-variant opening layers. Only touch
+  // products that have ONLY OpeningBalance layers (no real movement yet).
+  for (const inv of inventories) {
+    const productId = Number(inv.productId);
+    if (!productId) continue;
+    const variantRows = parseVariantsForSeed(inv.variants).filter(
+      (v) => v && (v.size || v.color) && Number(v.quantity) > 0,
+    );
+    if (!variantRows.length) continue;
+
+    const layers = await db.inventoryCostLayer.findAll({
+      where: { productId },
+      attributes: ["Id", "sourceType", "variantKey"],
+      raw: true,
+    });
+    if (!layers.length) continue;
+    const allOpening = layers.every((l) => l.sourceType === "OpeningBalance");
+    const alreadyVariant = layers.some((l) => l.variantKey);
+    if (!allOpening || alreadyVariant) continue;
+
+    await db.inventoryCostLayer.destroy({ where: { productId } });
+    await db.inventoryCostLayer.bulkCreate(buildOpeningLayers(inv));
+    console.log(`Re-seeded product ${productId} with per-variant opening layers`);
+  }
+};
+
 const ensureLedgerManufacturerColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.ledger.getTableName();
@@ -3556,6 +3713,9 @@ db.sequelize
     );
     await ensureLedgerManufacturerColumns();
     await ensureStockMovementDateColumn();
+    await ensureStockMovementCostingColumns();
+    await ensureFifoCostColumns();
+    await seedOpeningCostLayers();
     await ensurePackagingMixerColumns();
     await Promise.all(
       ["pettyCash", "pettyCashRequisition"].map((modelKey) =>

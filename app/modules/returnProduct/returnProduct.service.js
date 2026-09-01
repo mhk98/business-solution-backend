@@ -17,6 +17,8 @@ const {
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const { resolveUnitPrice } = require("../../../shared/movementUnitPrice");
+const fifo = require("../../../shared/fifoCostLayers");
 const ReturnProduct = db.returnProduct;
 const Notification = db.notification;
 const User = db.user;
@@ -51,6 +53,8 @@ const toNumber = (value) => {
   const number = Number(value || 0);
   return Number.isFinite(number) ? number : 0;
 };
+
+const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
 const pickFirstValue = (...values) =>
   values.find((value) => value !== undefined && value !== null && value !== "");
@@ -160,7 +164,23 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
     }),
     { transaction },
   );
-  await logStockMovement({
+  // Sales return: the units re-enter stock at the cost they were sold at.
+  const priceRow = {
+    variants: incomingVariants,
+    quantity: returnQty,
+    purchase_price: toNumber(item.purchase_price),
+    sale_price:
+      customSalePrice !== null ? customSalePrice : toNumber(item.sale_price),
+  };
+  const returnUnitSale = resolveUnitPrice(priceRow, "sale_price", {
+    mode: "unit",
+  });
+  let returnUnitCost = resolveUnitPrice(priceRow, "purchase_price", {
+    mode: "unit",
+  });
+  // No invented cost — if the return form did not carry a unit cost it stays 0
+  // ("cost not recorded"); the user can set it later.
+  const returnMovement = await logStockMovement({
     transaction,
     sourceType: "ReturnProduct",
     operation: "CREATE",
@@ -172,6 +192,17 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
     quantityChange: returnQty,
     balanceBefore: oldQty,
     balanceAfter: oldQty + returnQty,
+    unitSalePrice: returnUnitSale,
+    unitCostConsumed: returnUnitCost,
+  });
+  await fifo.returnToStock({
+    transaction,
+    productId: inventory.productId,
+    quantity: returnQty,
+    unitCost: returnUnitCost,
+    variants: incomingVariants,
+    receivedDate: date,
+    sourceMovementId: returnMovement ? returnMovement.Id : null,
   });
 
   return {
@@ -183,6 +214,7 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
     purchase_price: toNumber(item.purchase_price),
     sale_price:
       customSalePrice !== null ? customSalePrice : toNumber(item.sale_price),
+    fifo_cost: round2(returnQty * returnUnitCost),
   };
 };
 
@@ -235,6 +267,13 @@ const restoreItemsToInventory = async (items = [], transaction) => {
       quantityChange: -restoreQty,
       balanceBefore: restoreBalanceBefore,
       balanceAfter: nextQuantity,
+    });
+    // Undo the layer this sales-return had opened (newest first).
+    await fifo.unwindForRow({
+      transaction,
+      productId: inventory.productId,
+      quantity: restoreQty,
+      variants: parseVariants(item.variants),
     });
   }
 };
@@ -347,7 +386,27 @@ const insertIntoDB = async (data) => {
       }),
       { where: { Id: inventory.Id }, transaction: t },
     );
-    await logStockMovement({
+    const directReturnUnitSale = resolveUnitPrice(
+      {
+        variants: incomingVariants,
+        quantity: returnQty,
+        sale_price:
+          customSalePrice !== null ? customSalePrice : Number(sale_price),
+      },
+      "sale_price",
+      { mode: "unit" },
+    );
+    let directReturnUnitCost = resolveUnitPrice(
+      {
+        variants: incomingVariants,
+        quantity: returnQty,
+        purchase_price: Number(purchase_price),
+      },
+      "purchase_price",
+      { mode: "unit" },
+    );
+    // No invented cost — 0 stays 0 when the return form has no unit cost.
+    const directReturnMovement = await logStockMovement({
       transaction: t,
       sourceType: "ReturnProduct",
       sourceId: result.Id,
@@ -360,7 +419,22 @@ const insertIntoDB = async (data) => {
       quantityChange: returnQty,
       balanceBefore: oldQty,
       balanceAfter: finalQuantity,
+      unitSalePrice: directReturnUnitSale,
+      unitCostConsumed: directReturnUnitCost,
     });
+    await fifo.returnToStock({
+      transaction: t,
+      productId: inventory.productId,
+      quantity: returnQty,
+      unitCost: directReturnUnitCost,
+      variants: incomingVariants,
+      receivedDate: date,
+      sourceMovementId: directReturnMovement ? directReturnMovement.Id : null,
+    });
+    await result.update(
+      { fifo_cost: round2(returnQty * directReturnUnitCost) },
+      { transaction: t },
+    );
 
     const users = await User.findAll({
       attributes: ["Id", "role"],
@@ -428,6 +502,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
           batchId: batchId || null,
           purchase_price: normalizedItem.purchase_price,
           sale_price: normalizedItem.sale_price,
+          fifo_cost: normalizedItem.fifo_cost,
           productId: normalizedItem.productId,
           status: finalStatus || "---",
           note: finalStatus === "Approved" ? null : note || null,
@@ -569,6 +644,10 @@ const getDataById = async (id) => {
 };
 
 const deleteIdFromDB = async (id) => {
+  await fifo.assertNotClosedPeriod({
+    sourceType: "ReturnProduct",
+    sourceId: id,
+  });
   return await db.sequelize.transaction(async (t) => {
     // 1) Return row খুঁজে বের করো
     const ret = await ReturnProduct.findOne({
@@ -648,6 +727,12 @@ const deleteIdFromDB = async (id) => {
       quantityChange: -qty,
       balanceBefore: deleteBalanceBefore,
       balanceAfter: finalQuantity,
+    });
+    await fifo.unwindForRow({
+      transaction: t,
+      productId: received.productId,
+      quantity: qty,
+      variants: retVariants,
     });
 
     // 4) Return row delete
@@ -930,6 +1015,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
           batchId: resolvedBatchId,
           purchase_price: normalizedItem.purchase_price,
           sale_price: normalizedItem.sale_price,
+          fifo_cost: normalizedItem.fifo_cost,
           productId: normalizedItem.productId,
           note: finalStatus === "Approved" ? null : newNote || null,
           status: finalStatus,
@@ -977,6 +1063,10 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
 };
 
 const updateOneFromDB = async (id, payload) => {
+  await fifo.assertNotClosedPeriod({
+    sourceType: "ReturnProduct",
+    sourceId: id,
+  });
   const incomingBulkItems = getBulkItems(payload);
   if (incomingBulkItems.length) {
     return updateBulkOneFromDB(id, payload, incomingBulkItems);

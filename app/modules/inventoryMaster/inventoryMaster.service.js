@@ -240,6 +240,46 @@ const updateOneFromDB = async (id, payload) => {
   return result;
 };
 
+// Restricted price edit for the Stock Product screen. Only the two unit-price
+// fields are ever touched here (route is admin/superAdmin only), and both are
+// stored as non-negative integers to match the column type.
+const parsePriceInput = (value, label) => {
+  if (value === undefined || value === null || value === "") return undefined;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    throw new ApiError(400, `${label} must be a non-negative number`);
+  }
+  return Math.round(number);
+};
+
+const updatePriceFromDB = async (id, payload = {}) => {
+  const record = await InventoryMaster.findOne({ where: { Id: id } });
+  if (!record) {
+    throw new ApiError(404, "Stock product not found");
+  }
+
+  const purchase_price = parsePriceInput(
+    payload.purchase_price,
+    "Unit purchase price",
+  );
+  const sale_price = parsePriceInput(payload.sale_price, "Unit sale price");
+
+  if (purchase_price === undefined && sale_price === undefined) {
+    throw new ApiError(
+      400,
+      "Provide purchase_price and/or sale_price to update",
+    );
+  }
+
+  const updates = {};
+  if (purchase_price !== undefined) updates.purchase_price = purchase_price;
+  if (sale_price !== undefined) updates.sale_price = sale_price;
+
+  await record.update(updates);
+
+  return getDataById(id);
+};
+
 const getAllFromDBWithoutQuery = async () => {
   const result = await InventoryMaster.findAll({
     include: [productVariationInclude],
@@ -321,6 +361,7 @@ const InventoryMasterService = {
   deleteIdFromDB,
   updateOneFromDB,
   getDataById,
+  updatePriceFromDB,
   getAllFromDBWithoutQuery,
   getLowStockProductsFromDB,
   getStockMismatchAuditFromDB,
