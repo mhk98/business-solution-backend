@@ -2951,7 +2951,9 @@ const seedOpeningCostLayers = async () => {
 
     await db.inventoryCostLayer.destroy({ where: { productId } });
     await db.inventoryCostLayer.bulkCreate(buildOpeningLayers(inv));
-    console.log(`Re-seeded product ${productId} with per-variant opening layers`);
+    console.log(
+      `Re-seeded product ${productId} with per-variant opening layers`,
+    );
   }
 };
 

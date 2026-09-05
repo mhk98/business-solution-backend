@@ -125,13 +125,20 @@ const createChargeSetting = async (payload, user) => {
 };
 
 const getChargeSettings = async (filters, options) => {
-  const { chargeType, searchTerm } = filters || {};
+  const { chargeType, searchTerm, from, to } = filters || {};
   const Model = getModelByType(chargeType);
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
   const andConditions = [{ deletedAt: { [Op.is]: null } }];
 
   if (searchTerm && searchTerm.trim()) {
     andConditions.push({ note: { [Op.like]: `%${searchTerm.trim()}%` } });
+  }
+
+  if (from || to) {
+    const dateRange = {};
+    if (from) dateRange[Op.gte] = String(from).trim();
+    if (to) dateRange[Op.lte] = String(to).trim();
+    andConditions.push({ date: dateRange });
   }
 
   const where = { [Op.and]: andConditions };
@@ -142,9 +149,15 @@ const getChargeSettings = async (filters, options) => {
     order: [["date", "DESC"], ["createdAt", "DESC"]],
     paranoid: true,
   });
-  const count = await Model.count({ where });
+  const [count, totalAmount] = await Promise.all([
+    Model.count({ where }),
+    Model.sum("amount", { where }),
+  ]);
 
-  return { meta: { count, page, limit }, data };
+  return {
+    meta: { count, page, limit, totalAmount: Number(totalAmount) || 0 },
+    data,
+  };
 };
 
 const updateChargeSetting = async (id, payload) => {

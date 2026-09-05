@@ -228,6 +228,21 @@ const getDashboardDateFilters = (filters = {}) => {
     };
   }
 
+  // "from"/"to" both empty is ambiguous: it means either no filter was ever
+  // applied (first load → default to last 30 days) or the user explicitly
+  // picked "All Data" (an unbounded range, also empty). Only the caller knows
+  // which — it signals "explicit" via applyFilter/hasDateFilter/isFiltered.
+  // Falling back to last-30-days in the explicit case would silently ignore
+  // "All Data" and always show the last-30-days totals instead.
+  const filterExplicitlyApplied =
+    isTruthyFilterFlag(filters.applyFilter) ||
+    isTruthyFilterFlag(filters.hasDateFilter) ||
+    isTruthyFilterFlag(filters.isFiltered);
+
+  if (filterExplicitlyApplied) {
+    return { from: null, to: null, filterType: "all" };
+  }
+
   return {
     ...getDefaultDateRange(),
     filterType: "last_30_days",
@@ -358,7 +373,7 @@ const getDmBalanceSummary = async (where = {}) => {
 
 const sumExcludedCashOutAmount = async (where = {}) => {
   const rows = await CashInOut.findAll({
-    attributes: ["amount"],
+    attributes: ["amount", "category"],
     where: activeWhere(CashInOut, {
       ...where,
       paymentStatus: "CashOut",
@@ -374,8 +389,37 @@ const sumExcludedCashOutAmount = async (where = {}) => {
     paranoid: true,
   });
 
+  // Some write paths (e.g. Purchase Requisition completion) set only the
+  // free-text `category` label without linking `categoryId`, so the
+  // categoryInfo include above misses them and they'd silently default to
+  // "Expense" even when their category is really "Not Expense". Fall back to
+  // matching that label against the Category table by name.
+  const unresolvedNames = Array.from(
+    new Set(
+      rows
+        .filter((row) => !row.categoryInfo && row.category)
+        .map((row) => String(row.category).trim())
+        .filter(Boolean),
+    ),
+  );
+
+  const statusByName = new Map();
+  if (unresolvedNames.length) {
+    const categories = await Category.findAll({
+      where: { name: { [Op.in]: unresolvedNames } },
+      attributes: ["name", "status"],
+      paranoid: true,
+    });
+    categories.forEach((category) => {
+      statusByName.set(category.name, category.status);
+    });
+  }
+
   return rows.reduce((total, row) => {
-    const status = row.categoryInfo?.status || "Expense";
+    const status =
+      row.categoryInfo?.status ||
+      statusByName.get(String(row.category || "").trim()) ||
+      "Expense";
     return status === "Not Expense" ? n(total + n(row.amount)) : total;
   }, 0);
 };
@@ -1368,8 +1412,17 @@ const getPayrollManagementSummary = async () => {
   };
 };
 
+// "All Data" (from/to both null — no natural bound) still has to feed a few
+// sub-reports below that require a concrete range: the stock movement ledger
+// needs a real `from` to compute Opening balance and throws without one, and
+// the sales trend chart enumerates day-by-day between from/to. Give those a
+// wide fallback window instead of the true unbounded from/to.
+const EARLIEST_REPORT_DATE = "2000-01-01";
+
 const getOverviewDashboardFromDB = async (filters = {}) => {
   const { from, to, filterType } = getDashboardDateFilters(filters);
+  const reportFrom = from || EARLIEST_REPORT_DATE;
+  const reportTo = to || formatDateOnly(new Date());
   const previousRange = getPreviousDateRange(from, to);
   const currentDateWhere = buildDateWhere(from, to, "date");
   const previousDateWhere = buildDateWhere(
@@ -1417,8 +1470,8 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
     countWhere(Product, productCreatedAtWhere),
     countWhere(Product, previousProductCreatedAtWhere),
     getInventorySnapshot(),
-    getInventoryStockReport({ from, to }),
-    getSalesOverviewChart(from, to),
+    getInventoryStockReport({ from: reportFrom, to: reportTo }),
+    getSalesOverviewChart(reportFrom, reportTo),
     getTopSellingProducts(currentDateWhere, 5),
     getRecentSales(currentDateWhere, 5),
     getRecentActivities(5),

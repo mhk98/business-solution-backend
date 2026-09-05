@@ -327,7 +327,14 @@ const FROZEN_MONEY_SOURCES = new Set(["Intransit Product", "Sales Return"]);
 
 const rowPurchaseValue = (row, priceByName) => {
   if (FROZEN_MONEY_SOURCES.has(row.source)) {
-    return n(row.fifo_cost) || n(row.purchase_price);
+    // fifo_cost === 0 means "recorded, genuinely zero" (no-invention rule) and
+    // must stay 0 — only fall back to purchase_price when it was never set
+    // (null/undefined). `n(row.fifo_cost) || ...` would wrongly treat 0 the
+    // same as unset, diverging from the Dashboard's SQL COALESCE (which only
+    // substitutes on NULL) and inflating this page's Total Purchase.
+    return row.fifo_cost === null || row.fifo_cost === undefined
+      ? n(row.purchase_price)
+      : n(row.fifo_cost);
   }
   return n(row.quantity) * getStockPriceForRow(priceByName, row).purchase_price;
 };

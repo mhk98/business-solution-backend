@@ -18,7 +18,13 @@ const createChargeSetting = catchAsync(async (req, res) => {
 });
 
 const getChargeSettings = catchAsync(async (req, res) => {
-  const filters = pick(req.query, ["chargeType", "status", "searchTerm"]);
+  const filters = pick(req.query, [
+    "chargeType",
+    "status",
+    "searchTerm",
+    "from",
+    "to",
+  ]);
   const options = pick(req.query, ["limit", "page", "sortBy", "sortOrder"]);
   const result = await ChargeSettingService.getChargeSettings(filters, options);
 

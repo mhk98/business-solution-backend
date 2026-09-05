@@ -290,6 +290,10 @@ const updateAdsAccount = async (id, payload, actor) => {
 const deleteAdsAccount = async (id) => {
   const adsAccount = await AdsAccount.findByPk(id);
   if (!adsAccount) throw new ApiError(404, "Ads account not found");
+  const entryCount = await Entry.count({ where: { ads_account_id: id } });
+  if (entryCount) {
+    throw new ApiError(400, "Cannot delete an ads account that has tracker entries. Delete or reassign its entries first.");
+  }
   await adsAccount.destroy();
   return adsAccount;
 };
@@ -348,6 +352,10 @@ const updateProduct = async (id, payload, actor) => {
 const deleteProduct = async (id) => {
   const product = await Product.findByPk(id);
   if (!product) throw new ApiError(404, "Product not found");
+  const entryCount = await Entry.count({ where: { product_id: id } });
+  if (entryCount) {
+    throw new ApiError(400, "Cannot delete a product that has tracker entries. Delete or reassign its entries first.");
+  }
   await product.destroy();
   return product;
 };
@@ -362,6 +370,15 @@ const updateChannel = async (id, payload, actor) => {
 const deleteChannel = async (id) => {
   const channel = await Channel.findByPk(id);
   if (!channel) throw new ApiError(404, "Tracker channel not found");
+  const entryCount = await Entry.count({ where: { channel_id: id } });
+  if (entryCount) {
+    throw new ApiError(400, "Cannot delete a channel that has tracker entries. Delete its entries first.");
+  }
+  await Promise.all([
+    AdsAccount.destroy({ where: { channel_id: id } }),
+    Product.destroy({ where: { channel_id: id } }),
+    Target.destroy({ where: { channel_id: id } }),
+  ]);
   await channel.destroy();
   return channel;
 };
