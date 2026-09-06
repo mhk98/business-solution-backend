@@ -99,6 +99,7 @@ const MENU_PERMISSIONS = {
   SMS_NOTIFICATION_PERMISSIONS: "sms_notification_permissions",
   MASTER_PERMISSION: "master_permission",
   LOG_HISTORY: "log_history",
+  DAILY_INACTIVE_USERS: "daily_inactive_users",
   REPORTS: "reports",
   HRM: "hrm",
   EMPLOYEE_MANAGEMENT: "employee_management",

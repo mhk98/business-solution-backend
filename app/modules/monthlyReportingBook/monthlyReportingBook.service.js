@@ -258,33 +258,166 @@ const getBookStatement = async (filters) => {
     throw new ApiError(400, "bookId is required");
   }
 
-  const { start, end } = resolveMonthRange(filters);
+  // "All Data" (no explicit month/date filter) means the whole history: no
+  // date bounds and no opening balance. An explicit filter is the only thing
+  // that carves the ledger into opening / period / ending.
+  const hasExplicitRange =
+    Boolean(filters.startDate) ||
+    Boolean(filters.endDate) ||
+    Boolean(filters.month) ||
+    Boolean(filters.year);
+  const resolvedRange = resolveMonthRange(filters);
+  const start = hasExplicitRange ? resolvedRange.start : null;
+  const end = hasExplicitRange ? resolvedRange.end : null;
+
   const conditions = buildBaseConditions(filters, { start, end });
   const where = { [Op.and]: conditions };
 
-  const [data, totalCreditRaw, totalDebitRaw, book, inventoryStockReport] =
-    await Promise.all([
-      CashInOut.findAll({
-        where,
-        include: [{ model: Category, as: "categoryInfo", required: false }],
-        paranoid: true,
-        order: [
-          ["date", "ASC"],
-          ["Id", "ASC"],
-        ],
-      }),
-      CashInOut.sum("amount", {
-        where: { [Op.and]: [...conditions, { paymentStatus: "CashIn" }] },
-      }),
-      CashInOut.sum("amount", {
-        where: { [Op.and]: [...conditions, { paymentStatus: "CashOut" }] },
-      }),
-      Book.findByPk(bookId, { paranoid: false }),
-      getInventoryStockReport({ from: start, to: end }),
-    ]);
+  // Opening balance = everything for this book (and matching filters) dated
+  // strictly before the statement's start date, grouped per category.
+  const openingConditions = buildBaseConditions(filters, {
+    start: null,
+    end: null,
+  });
+  if (start) openingConditions.push({ date: { [Op.lt]: start } });
+
+  // Assets Purchase / Sale / Damage follow the ledger's date filter; Assets
+  // Stock is a live snapshot (no date column).
+  const assetsDateWhere =
+    start && end
+      ? { date: { [Op.between]: [start, end] } }
+      : start
+        ? { date: { [Op.gte]: start } }
+        : end
+          ? { date: { [Op.lte]: end } }
+          : {};
+
+  const [
+    data,
+    totalCreditRaw,
+    totalDebitRaw,
+    book,
+    inventoryStockReport,
+    openingRows,
+    assetsStockRows,
+    assetsPurchaseRows,
+    assetsSaleRows,
+    assetsDamageRows,
+  ] = await Promise.all([
+    CashInOut.findAll({
+      where,
+      include: [{ model: Category, as: "categoryInfo", required: false }],
+      paranoid: true,
+      order: [
+        ["date", "ASC"],
+        ["Id", "ASC"],
+      ],
+    }),
+    CashInOut.sum("amount", {
+      where: { [Op.and]: [...conditions, { paymentStatus: "CashIn" }] },
+    }),
+    CashInOut.sum("amount", {
+      where: { [Op.and]: [...conditions, { paymentStatus: "CashOut" }] },
+    }),
+    Book.findByPk(bookId, { paranoid: false }),
+    // The inventory stock section always needs a concrete range; keep it on
+    // the resolved (current-month) window even when the ledger is "All Data".
+    getInventoryStockReport({
+      from: start || resolvedRange.start,
+      to: end || resolvedRange.end,
+    }),
+    start
+      ? CashInOut.findAll({
+          where: { [Op.and]: openingConditions },
+          attributes: [
+            "categoryId",
+            "paymentStatus",
+            [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "total"],
+          ],
+          group: ["categoryId", "paymentStatus"],
+          paranoid: true,
+          raw: true,
+        })
+      : Promise.resolve([]),
+    db.assetsStock.findAll({
+      attributes: ["name", "quantity", "price"],
+      paranoid: true,
+      raw: true,
+      order: [["name", "ASC"]],
+    }),
+    db.assetsPurchase.findAll({
+      where: assetsDateWhere,
+      attributes: ["name", "quantity", "price", "date", "total"],
+      paranoid: true,
+      raw: true,
+      order: [["date", "ASC"], ["Id", "ASC"]],
+    }),
+    db.assetsSale.findAll({
+      where: assetsDateWhere,
+      attributes: ["name", "quantity", "price", "date", "total"],
+      paranoid: true,
+      raw: true,
+      order: [["date", "ASC"], ["Id", "ASC"]],
+    }),
+    db.assetsDamage.findAll({
+      where: assetsDateWhere,
+      attributes: ["name", "quantity", "price", "date", "total"],
+      paranoid: true,
+      raw: true,
+      order: [["date", "ASC"], ["Id", "ASC"]],
+    }),
+  ]);
 
   const totalCredit = Number(totalCreditRaw || 0);
   const totalDebit = Number(totalDebitRaw || 0);
+
+  const toNum = (value) => Number(value || 0);
+  const buildAssetGroup = (rows, { withDate }) => {
+    const entries = rows.map((row) => {
+      const quantity = toNum(row.quantity);
+      const price = toNum(row.price);
+      const lineTotal =
+        row.total !== undefined && row.total !== null
+          ? toNum(row.total)
+          : quantity * price;
+      return {
+        name: row.name || "-",
+        date: withDate ? row.date || null : null,
+        quantity,
+        price,
+        total: lineTotal,
+      };
+    });
+    return {
+      data: entries,
+      totalQuantity: entries.reduce((sum, row) => sum + row.quantity, 0),
+      total: entries.reduce((sum, row) => sum + row.total, 0),
+    };
+  };
+
+  const assetsSummary = {
+    stock: buildAssetGroup(assetsStockRows, { withDate: false }),
+    purchase: buildAssetGroup(assetsPurchaseRows, { withDate: true }),
+    sale: buildAssetGroup(assetsSaleRows, { withDate: true }),
+    damage: buildAssetGroup(assetsDamageRows, { withDate: true }),
+  };
+
+  const openingByCategory = {};
+  let openingTotalCredit = 0;
+  let openingTotalDebit = 0;
+  openingRows.forEach((row) => {
+    const key = String(row.categoryId);
+    const amount = Number(row.total || 0);
+    const isCredit = String(row.paymentStatus || "").toLowerCase() === "cashin";
+    if (!openingByCategory[key]) openingByCategory[key] = { credit: 0, debit: 0 };
+    if (isCredit) {
+      openingByCategory[key].credit += amount;
+      openingTotalCredit += amount;
+    } else {
+      openingByCategory[key].debit += amount;
+      openingTotalDebit += amount;
+    }
+  });
 
   return {
     meta: {
@@ -296,6 +429,11 @@ const getBookStatement = async (filters) => {
       totalCredit,
       totalDebit,
       netBalance: totalCredit - totalDebit,
+      openingByCategory,
+      openingTotalCredit,
+      openingTotalDebit,
+      openingNetBalance: openingTotalCredit - openingTotalDebit,
+      assetsSummary,
     },
     inventoryStockReport,
     data,

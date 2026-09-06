@@ -86,6 +86,13 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      // For Cash In vouchers: who the money was received from (free text
+      // entered on the Cash In modal). The voucher's Receiver is always the
+      // company for Cash In.
+      fromParty: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
 
       note: {
         type: DataTypes.STRING,

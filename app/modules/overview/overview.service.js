@@ -582,9 +582,10 @@ const getSalesTotals = async (where = {}) => {
   return { revenue, orders };
 };
 
-const getSalesRowsByDate = async (from, to) => {
-  const rows = await ConfirmOrder.findAll({
-    where: activeWhere(ConfirmOrder, buildDateWhere(from, to, "date")),
+// Daily sales totals grouped by date for a single model.
+const getModelSalesRowsByDate = async (Model, from, to) =>
+  Model.findAll({
+    where: activeWhere(Model, buildDateWhere(from, to, "date")),
     attributes: [
       "date",
       [
@@ -611,14 +612,24 @@ const getSalesRowsByDate = async (from, to) => {
     raw: true,
   });
 
-  return rows.reduce((acc, row) => {
+// Sales Overview chart combines Confirm Orders + In-Transit dispatches.
+const getSalesRowsByDate = async (from, to) => {
+  const [confirmRows, intransitRows] = await Promise.all([
+    getModelSalesRowsByDate(ConfirmOrder, from, to),
+    getModelSalesRowsByDate(IntransitProduct, from, to),
+  ]);
+
+  const accumulate = (acc, row) => {
+    const existing = acc[row.date] || { revenue: 0, quantity: 0, orders: 0 };
     acc[row.date] = {
-      revenue: n(row.revenue),
-      quantity: n(row.quantity),
-      orders: n(row.orders),
+      revenue: existing.revenue + n(row.revenue),
+      quantity: existing.quantity + n(row.quantity),
+      orders: existing.orders + n(row.orders),
     };
     return acc;
-  }, {});
+  };
+
+  return [...confirmRows, ...intransitRows].reduce(accumulate, {});
 };
 
 const getSalesOverviewChart = async (from, to) => {
@@ -740,9 +751,10 @@ const getInventorySnapshot = async () => {
   };
 };
 
-const getTopSellingProducts = async (where = {}, limit = 5) => {
-  const rows = await ConfirmOrder.findAll({
-    where: activeWhere(ConfirmOrder, where),
+// Product-name totals for a single model.
+const getModelProductTotals = async (Model, where = {}) =>
+  Model.findAll({
+    where: activeWhere(Model, where),
     attributes: [
       "name",
       [
@@ -763,18 +775,38 @@ const getTopSellingProducts = async (where = {}, limit = 5) => {
       ],
     ],
     group: ["name"],
-    order: [[db.Sequelize.literal("revenue"), "DESC"]],
-    limit,
     paranoid: true,
     raw: true,
   });
 
-  return rows.map((row, index) => ({
-    rank: index + 1,
-    productName: row.name,
-    soldQty: n(row.soldQty),
-    revenue: n(row.revenue),
-  }));
+// Top Selling Products combines Confirm Orders + In-Transit dispatches,
+// merged by product name and ranked by total revenue.
+const getTopSellingProducts = async (where = {}, limit = 5) => {
+  const [confirmRows, intransitRows] = await Promise.all([
+    getModelProductTotals(ConfirmOrder, where),
+    getModelProductTotals(IntransitProduct, where),
+  ]);
+
+  const totalsByName = new Map();
+  [...confirmRows, ...intransitRows].forEach((row) => {
+    const name = row.name || "Unnamed";
+    const existing = totalsByName.get(name) || { soldQty: 0, revenue: 0 };
+    totalsByName.set(name, {
+      soldQty: existing.soldQty + n(row.soldQty),
+      revenue: existing.revenue + n(row.revenue),
+    });
+  });
+
+  return Array.from(totalsByName.entries())
+    .map(([name, totals]) => ({ productName: name, ...totals }))
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, limit)
+    .map((row, index) => ({
+      rank: index + 1,
+      productName: row.productName,
+      soldQty: row.soldQty,
+      revenue: row.revenue,
+    }));
 };
 
 const getRecentSales = async (where = {}, limit = 5) => {

@@ -3618,6 +3618,13 @@ const ensureCashInOutRefNoColumn = async () => {
       allowNull: true,
     });
   }
+
+  if (!tableDefinition.fromParty) {
+    await queryInterface.addColumn(tableName, "fromParty", {
+      type: DataTypes.STRING,
+      allowNull: true,
+    });
+  }
 };
 
 db.sequelize

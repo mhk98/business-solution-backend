@@ -110,6 +110,7 @@ const ProfileLossRoutes = require("../modules/profitLoss/profitLoss.routes");
 const RolePermissionRoutes = require("../modules/rolePermission/rolePermission.routes");
 const MasterPermissionRoutes = require("../modules/masterPermission/masterPermission.routes");
 const UserLogHistoryRoutes = require("../modules/userLogHistory/userLogHistory.routes");
+const InactiveUserReportRoutes = require("../modules/inactiveUserReport/inactiveUserReport.routes");
 const KPIRoutes = require("../modules/kpi/kpi.routes");
 const ChatRoutes = require("../modules/chat/chat.routes");
 const SystemResetRoutes = require("../modules/systemReset/systemReset.routes");
@@ -164,6 +165,10 @@ const moduleRoutes = [
   {
     path: "/user-log-history",
     route: UserLogHistoryRoutes,
+  },
+  {
+    path: "/today-not-worked",
+    route: InactiveUserReportRoutes,
   },
 
   {
