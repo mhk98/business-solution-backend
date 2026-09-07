@@ -1233,8 +1233,27 @@ const computeStockMovementClosingReport = async ({
     )
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
+  const purchaseCostByPrefix = {};
+  prefixes.forEach((prefix) => {
+    purchaseCostByPrefix[`${prefix}PurchaseCost`] = all.reduce(
+      (sum, row) => sum + n(row[`${prefix}Closing`]) * n(row.purchasePrice),
+      0,
+    );
+  });
+  const totalPurchaseCost = Object.values(purchaseCostByPrefix).reduce(
+    (sum, value) => sum + value,
+    0,
+  );
+
   return {
-    meta: { from: from || null, to, name: name || null, count: all.length },
+    meta: {
+      from: from || null,
+      to,
+      name: name || null,
+      count: all.length,
+      ...purchaseCostByPrefix,
+      totalPurchaseCost,
+    },
     data: all,
   };
 };
@@ -1345,6 +1364,15 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
         sumStockType("stockProduct", "Closing") +
         sumStockType("damageStock", "Closing") +
         sumStockType("repairingStock", "Closing"),
+      stockProductPurchaseCost: sumStockType(
+        "stockProduct",
+        "ClosingPurchaseCost",
+      ),
+      damageStockPurchaseCost: sumStockType("damageStock", "ClosingPurchaseCost"),
+      repairingStockPurchaseCost: sumStockType(
+        "repairingStock",
+        "ClosingPurchaseCost",
+      ),
       totalPurchaseCost:
         sumStockType("stockProduct", "ClosingPurchaseCost") +
         sumStockType("damageStock", "ClosingPurchaseCost") +
