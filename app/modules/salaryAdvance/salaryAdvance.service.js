@@ -147,29 +147,47 @@ const getAllFromDBWithoutQuery = async () => {
   return attachBalance(rows);
 };
 
-// Outstanding-due snapshot consumed by the shared "All Books" / Monthly
-// Reporting Book statement PDF and the Dashboard's Print/Download Book
-// action (see inventoryOverview.service.js's getInventoryStockReport).
-// Deliberately date-independent — like the Supplier/Manufacturer receivable
-// sections, it always lists whatever is currently outstanding rather than
-// being scoped to the report's selected period.
-const getSalaryAdvanceReport = async () => {
+// Outstanding-due list consumed by the shared "All Books" / Monthly Reporting
+// Book statement PDF and the Dashboard's Print/Download Book action (see
+// inventoryOverview.service.js's getInventoryStockReport). `due` is the
+// current (unfiltered) outstanding — the "বাকি" column. `openingBalance` /
+// `endingBalance` scope the same entry's due to `date < from` and `date <= to`
+// so the PDF can show the period movement (paidAmount is undated, so those are
+// an approximation on the entry's own date).
+const getSalaryAdvanceReport = async ({ from, to } = {}) => {
   const rows = await SalaryAdvance.findAll({
     order: [["date", "ASC"], ["createdAt", "ASC"]],
   });
 
   const data = rows
-    .map((row) => ({
-      Id: row.Id,
-      date: row.date,
-      name: row.name,
-      due: Math.max(Number(row.amount || 0) - Number(row.paidAmount || 0), 0),
-    }))
+    .map((row) => {
+      const due = Math.max(
+        Number(row.amount || 0) - Number(row.paidAmount || 0),
+        0,
+      );
+      const date = row.date || null;
+      return {
+        Id: row.Id,
+        date,
+        name: row.name,
+        due,
+        openingBalance: from && date && date < from ? due : 0,
+        endingBalance: !to || (date && date <= to) ? due : 0,
+      };
+    })
     .filter((row) => row.due > 0);
-  const totalDue = data.reduce((sum, row) => sum + row.due, 0);
+
+  const sum = (key) => data.reduce((acc, row) => acc + row[key], 0);
 
   return {
-    meta: { count: data.length, totalDue },
+    meta: {
+      from: from || null,
+      to: to || null,
+      count: data.length,
+      totalDue: sum("due"),
+      totalOpeningBalance: sum("openingBalance"),
+      totalEndingBalance: sum("endingBalance"),
+    },
     data,
   };
 };

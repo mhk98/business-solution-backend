@@ -165,28 +165,52 @@ const payManufacturerAmount = async (id, payload = {}) => {
   });
 };
 
-// Packaging manufacturers the company has overpaid as of `to` — i.e. ones
-// who still owe the company wage work/refund. Point-in-time snapshot
-// filtered to PackagingManufacturerTransaction rows on or before `to`, for
-// the shared "All Books" / dashboard statement report. Mirrors
-// manufacturer.service.js's getManufacturerReceivableReport.
-const getPackagingManufacturerReceivableReport = async ({ to } = {}) => {
-  const dateWhere = to ? { date: { [Op.lte]: to } } : {};
+// Packaging manufacturers the company has overpaid — i.e. ones who still owe
+// the company wage work/refund. For the shared "All Books" / dashboard
+// statement report. `advance` is the current (unfiltered) overpayment;
+// `openingBalance` / `endingBalance` are the same figure as of `< from` and
+// `<= to`. Mirrors manufacturer.service.js's getManufacturerReceivableReport.
+const getPackagingManufacturerReceivableReport = async ({ from, to } = {}) => {
+  const advanceByManufacturer = async (dateWhere) => {
+    const rows = await PackagingManufacturerTransaction.findAll({
+      attributes: [
+        "manufacturerId",
+        [db.sequelize.fn("SUM", db.sequelize.col("debit")), "totalDebit"],
+        [db.sequelize.fn("SUM", db.sequelize.col("credit")), "totalCredit"],
+      ],
+      where: dateWhere,
+      group: ["manufacturerId"],
+      raw: true,
+    });
+    const map = new Map();
+    rows.forEach((row) => {
+      if (!row.manufacturerId) return;
+      const advance = Math.max(
+        toNumber(row.totalCredit) - toNumber(row.totalDebit),
+        0,
+      );
+      map.set(row.manufacturerId, advance);
+    });
+    return map;
+  };
 
-  const balanceRows = await PackagingManufacturerTransaction.findAll({
-    attributes: [
-      "manufacturerId",
-      [db.sequelize.fn("SUM", db.sequelize.col("debit")), "totalDebit"],
-      [db.sequelize.fn("SUM", db.sequelize.col("credit")), "totalCredit"],
-    ],
-    where: dateWhere,
-    group: ["manufacturerId"],
-    raw: true,
-  });
+  const [currentMap, openingMap, endingMap] = await Promise.all([
+    advanceByManufacturer({}),
+    from
+      ? advanceByManufacturer({ date: { [Op.lt]: from } })
+      : Promise.resolve(new Map()),
+    to
+      ? advanceByManufacturer({ date: { [Op.lte]: to } })
+      : advanceByManufacturer({}),
+  ]);
 
-  const manufacturerIds = balanceRows
-    .map((row) => row.manufacturerId)
-    .filter(Boolean);
+  const manufacturerIds = [
+    ...new Set([
+      ...currentMap.keys(),
+      ...openingMap.keys(),
+      ...endingMap.keys(),
+    ]),
+  ];
   const manufacturers = manufacturerIds.length
     ? await PackagingManufacturer.findAll({
         where: { Id: { [Op.in]: manufacturerIds } },
@@ -196,27 +220,34 @@ const getPackagingManufacturerReceivableReport = async ({ to } = {}) => {
     : [];
   const nameById = new Map(manufacturers.map((m) => [m.Id, m.name]));
 
-  const data = balanceRows
-    .map((row) => {
-      const totalDebit = toNumber(row.totalDebit);
-      const totalCredit = toNumber(row.totalCredit);
-      const advance = Math.max(totalCredit - totalDebit, 0);
-
-      return {
-        manufacturerId: row.manufacturerId,
-        name: nameById.get(row.manufacturerId) || null,
-        advance,
-      };
-    })
+  const data = manufacturerIds
+    .map((manufacturerId) => ({
+      manufacturerId,
+      name: nameById.get(manufacturerId) || null,
+      advance: currentMap.get(manufacturerId) || 0,
+      openingBalance: openingMap.get(manufacturerId) || 0,
+      endingBalance: endingMap.get(manufacturerId) || 0,
+    }))
     // Skip deleted/unknown manufacturers — only live ones the company has
-    // overpaid belong here.
-    .filter((row) => row.name && row.advance > 0)
+    // overpaid (now or during the period) belong here.
+    .filter(
+      (row) =>
+        row.name &&
+        (row.advance > 0 || row.openingBalance > 0 || row.endingBalance > 0),
+    )
     .sort((a, b) => b.advance - a.advance);
 
-  const totalAdvance = data.reduce((sum, row) => sum + row.advance, 0);
+  const sum = (key) => data.reduce((acc, row) => acc + row[key], 0);
 
   return {
-    meta: { to: to || null, count: data.length, totalAdvance },
+    meta: {
+      from: from || null,
+      to: to || null,
+      count: data.length,
+      totalAdvance: sum("advance"),
+      totalOpeningBalance: sum("openingBalance"),
+      totalEndingBalance: sum("endingBalance"),
+    },
     data,
   };
 };

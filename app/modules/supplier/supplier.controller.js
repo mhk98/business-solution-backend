@@ -61,7 +61,9 @@ const deleteIdFromDB = catchAsync(async (req, res) => {
 });
 
 const getAllFromDBWithoutQuery = catchAsync(async (req, res) => {
-  const result = await SupplierService.getAllFromDBWithoutQuery();
+  const result = await SupplierService.getAllFromDBWithoutQuery(
+    pick(req.query, ["startDate", "endDate"]),
+  );
   sendResponse(res, {
     statusCode: 200,
     success: true,

@@ -2805,6 +2805,15 @@ const ensureStockMovementDateColumn = async () => {
       allowNull: true,
     });
   }
+
+  // Rows written before the logger started stamping `date` (and any flow that
+  // still omits it) keep a NULL date, which is silently skipped by the
+  // `WHERE date <= ...` range filter in the stock ledger reports — so their
+  // opening/closing stock comes out wrong. Backfill from each row's own
+  // createdAt calendar date (stored in +06:00, so DATE() is the local day).
+  await db.sequelize.query(
+    `UPDATE \`${tableName}\` SET \`date\` = DATE(\`createdAt\`) WHERE \`date\` IS NULL`,
+  );
 };
 
 // Movement-based costing (Phase 0). Nullable, additive — no report reads these

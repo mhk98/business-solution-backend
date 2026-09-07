@@ -12,6 +12,10 @@ const Book = db.book;
 
 const pad2 = (value) => String(value).padStart(2, "0");
 
+// Sentinel "beginning of time" used as the inventory ledger's `from` when the
+// statement is unfiltered ("All Data") so opening stock resolves to 0.
+const ALL_TIME_FROM = "1970-01-01";
+
 const toDateOnly = (value) => {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
@@ -270,11 +274,26 @@ const getBookStatement = async (filters) => {
   const start = hasExplicitRange ? resolvedRange.start : null;
   const end = hasExplicitRange ? resolvedRange.end : null;
 
+  // The inventory stock section's backend (computeStockMovementLedgerReport)
+  // requires a concrete [from, to]. With an explicit filter it uses that
+  // window (opening stock = balance before `from`). With "All Data" it must
+  // match the cash ledger's opening-balance behaviour — all-time, opening = 0 —
+  // so the window starts at the epoch instead of the current month.
+  const inventoryFrom =
+    (hasExplicitRange ? resolvedRange.start : null) || ALL_TIME_FROM;
+  const inventoryTo = resolvedRange.end || toDateOnly(new Date());
+
   const conditions = buildBaseConditions(filters, { start, end });
   const where = { [Op.and]: conditions };
 
   // Opening balance = everything for this book (and matching filters) dated
   // strictly before the statement's start date, grouped per category.
+  // `currentConditions` is the same but date-independent — the live figure
+  // that ignores the filter (used for the payment-mode "বর্তমান ব্যালেন্স").
+  const currentConditions = buildBaseConditions(filters, {
+    start: null,
+    end: null,
+  });
   const openingConditions = buildBaseConditions(filters, {
     start: null,
     end: null,
@@ -292,6 +311,15 @@ const getBookStatement = async (filters) => {
           ? { date: { [Op.lte]: end } }
           : {};
 
+  // Payment-mode balance section (between Profit/Loss and Assets): net cash
+  // (CashIn − CashOut) per paymentMode, scoped like the credit/debit ledger.
+  const cashMovementWhere = { paymentStatus: { [Op.in]: ["CashIn", "CashOut"] } };
+  const paymentModeAttributes = [
+    "paymentMode",
+    "paymentStatus",
+    [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "total"],
+  ];
+
   const [
     data,
     totalCreditRaw,
@@ -303,6 +331,9 @@ const getBookStatement = async (filters) => {
     assetsPurchaseRows,
     assetsSaleRows,
     assetsDamageRows,
+    paymentModePeriodRows,
+    paymentModeOpeningRows,
+    paymentModeCurrentRows,
   ] = await Promise.all([
     CashInOut.findAll({
       where,
@@ -320,12 +351,7 @@ const getBookStatement = async (filters) => {
       where: { [Op.and]: [...conditions, { paymentStatus: "CashOut" }] },
     }),
     Book.findByPk(bookId, { paranoid: false }),
-    // The inventory stock section always needs a concrete range; keep it on
-    // the resolved (current-month) window even when the ledger is "All Data".
-    getInventoryStockReport({
-      from: start || resolvedRange.start,
-      to: end || resolvedRange.end,
-    }),
+    getInventoryStockReport({ from: inventoryFrom, to: inventoryTo }),
     start
       ? CashInOut.findAll({
           where: { [Op.and]: openingConditions },
@@ -366,6 +392,29 @@ const getBookStatement = async (filters) => {
       raw: true,
       order: [["date", "ASC"], ["Id", "ASC"]],
     }),
+    CashInOut.findAll({
+      where: { [Op.and]: [...conditions, cashMovementWhere] },
+      attributes: paymentModeAttributes,
+      group: ["paymentMode", "paymentStatus"],
+      paranoid: true,
+      raw: true,
+    }),
+    start
+      ? CashInOut.findAll({
+          where: { [Op.and]: [...openingConditions, cashMovementWhere] },
+          attributes: paymentModeAttributes,
+          group: ["paymentMode", "paymentStatus"],
+          paranoid: true,
+          raw: true,
+        })
+      : Promise.resolve([]),
+    CashInOut.findAll({
+      where: { [Op.and]: [...currentConditions, cashMovementWhere] },
+      attributes: paymentModeAttributes,
+      group: ["paymentMode", "paymentStatus"],
+      paranoid: true,
+      raw: true,
+    }),
   ]);
 
   const totalCredit = Number(totalCreditRaw || 0);
@@ -402,6 +451,37 @@ const getBookStatement = async (filters) => {
     damage: buildAssetGroup(assetsDamageRows, { withDate: true }),
   };
 
+  // Net cash (CashIn − CashOut) per payment mode: opening (< start), the
+  // period movement (ব্যালেন্স পার্থক্য) and ending (opening + period).
+  const paymentModeMap = {};
+  const applyPaymentModeRows = (rows, key) => {
+    rows.forEach((row) => {
+      const mode = (row.paymentMode && String(row.paymentMode).trim()) || "উল্লেখ নেই";
+      const amount = Number(row.total || 0);
+      const signed =
+        String(row.paymentStatus || "").toLowerCase() === "cashin"
+          ? amount
+          : -amount;
+      if (!paymentModeMap[mode]) {
+        paymentModeMap[mode] = { opening: 0, period: 0, current: 0 };
+      }
+      paymentModeMap[mode][key] += signed;
+    });
+  };
+  applyPaymentModeRows(paymentModeOpeningRows, "opening");
+  applyPaymentModeRows(paymentModePeriodRows, "period");
+  applyPaymentModeRows(paymentModeCurrentRows, "current");
+
+  const paymentModeSummary = Object.entries(paymentModeMap)
+    .map(([mode, value]) => ({
+      mode,
+      opening: value.opening,
+      diff: value.period,
+      ending: value.opening + value.period,
+      current: value.current,
+    }))
+    .sort((a, b) => b.current - a.current);
+
   const openingByCategory = {};
   let openingTotalCredit = 0;
   let openingTotalDebit = 0;
@@ -434,6 +514,7 @@ const getBookStatement = async (filters) => {
       openingTotalDebit,
       openingNetBalance: openingTotalCredit - openingTotalDebit,
       assetsSummary,
+      paymentModeSummary,
     },
     inventoryStockReport,
     data,

@@ -206,28 +206,53 @@ const getTransactionHistory = async (id, options = {}) => {
   };
 };
 
-// Manufacturers the company has overpaid as of `to` — i.e. manufacturers who
-// still owe the company wage work/refund. Point-in-time snapshot filtered to
-// ManufacturerTransaction rows on or before `to`, for the shared "All Books"
-// / dashboard statement report. Mirrors supplier.service.js's
-// getSupplierReceivableReport.
-const getManufacturerReceivableReport = async ({ to } = {}) => {
-  const dateWhere = to ? { date: { [Op.lte]: to } } : {};
+// Manufacturers the company has overpaid — i.e. manufacturers who still owe
+// the company wage work/refund. For the shared "All Books" / dashboard
+// statement report. `advance` is the current (unfiltered) overpayment;
+// `openingBalance` / `endingBalance` are the same figure as of `< from` and
+// `<= to` so the PDF can show the period movement. Mirrors
+// supplier.service.js's getSupplierReceivableReport.
+const getManufacturerReceivableReport = async ({ from, to } = {}) => {
+  const advanceByManufacturer = async (dateWhere) => {
+    const rows = await ManufacturerTransaction.findAll({
+      attributes: [
+        "manufacturerId",
+        [db.sequelize.fn("SUM", db.sequelize.col("debit")), "totalDebit"],
+        [db.sequelize.fn("SUM", db.sequelize.col("credit")), "totalCredit"],
+      ],
+      where: dateWhere,
+      group: ["manufacturerId"],
+      raw: true,
+    });
+    const map = new Map();
+    rows.forEach((row) => {
+      if (!row.manufacturerId) return;
+      const advance = Math.max(
+        toNumber(row.totalCredit) - toNumber(row.totalDebit),
+        0,
+      );
+      map.set(row.manufacturerId, advance);
+    });
+    return map;
+  };
 
-  const balanceRows = await ManufacturerTransaction.findAll({
-    attributes: [
-      "manufacturerId",
-      [db.sequelize.fn("SUM", db.sequelize.col("debit")), "totalDebit"],
-      [db.sequelize.fn("SUM", db.sequelize.col("credit")), "totalCredit"],
-    ],
-    where: dateWhere,
-    group: ["manufacturerId"],
-    raw: true,
-  });
+  const [currentMap, openingMap, endingMap] = await Promise.all([
+    advanceByManufacturer({}),
+    from
+      ? advanceByManufacturer({ date: { [Op.lt]: from } })
+      : Promise.resolve(new Map()),
+    to
+      ? advanceByManufacturer({ date: { [Op.lte]: to } })
+      : advanceByManufacturer({}),
+  ]);
 
-  const manufacturerIds = balanceRows
-    .map((row) => row.manufacturerId)
-    .filter(Boolean);
+  const manufacturerIds = [
+    ...new Set([
+      ...currentMap.keys(),
+      ...openingMap.keys(),
+      ...endingMap.keys(),
+    ]),
+  ];
   const manufacturers = manufacturerIds.length
     ? await Manufacturer.findAll({
         where: { Id: { [Op.in]: manufacturerIds } },
@@ -237,45 +262,80 @@ const getManufacturerReceivableReport = async ({ to } = {}) => {
     : [];
   const nameById = new Map(manufacturers.map((m) => [m.Id, m.name]));
 
-  const data = balanceRows
-    .map((row) => {
-      const totalDebit = toNumber(row.totalDebit);
-      const totalCredit = toNumber(row.totalCredit);
-      const advance = Math.max(totalCredit - totalDebit, 0);
-
-      return {
-        manufacturerId: row.manufacturerId,
-        name: nameById.get(row.manufacturerId) || null,
-        advance,
-      };
-    })
+  const data = manufacturerIds
+    .map((manufacturerId) => ({
+      manufacturerId,
+      name: nameById.get(manufacturerId) || null,
+      advance: currentMap.get(manufacturerId) || 0,
+      openingBalance: openingMap.get(manufacturerId) || 0,
+      endingBalance: endingMap.get(manufacturerId) || 0,
+    }))
     // Skip deleted/unknown manufacturers — only live ones the company has
-    // overpaid belong here.
-    .filter((row) => row.name && row.advance > 0)
+    // overpaid (now or during the period) belong here.
+    .filter(
+      (row) =>
+        row.name &&
+        (row.advance > 0 || row.openingBalance > 0 || row.endingBalance > 0),
+    )
     .sort((a, b) => b.advance - a.advance);
 
-  const totalAdvance = data.reduce((sum, row) => sum + row.advance, 0);
+  const sum = (key) => data.reduce((acc, row) => acc + row[key], 0);
 
   return {
-    meta: { to: to || null, count: data.length, totalAdvance },
+    meta: {
+      from: from || null,
+      to: to || null,
+      count: data.length,
+      totalAdvance: sum("advance"),
+      totalOpeningBalance: sum("openingBalance"),
+      totalEndingBalance: sum("endingBalance"),
+    },
     data,
   };
 };
 
-const getManufacturerDueReport = async () => {
-  const balanceRows = await ManufacturerTransaction.findAll({
-    attributes: [
-      "manufacturerId",
-      [db.sequelize.fn("SUM", db.sequelize.col("debit")), "totalDebit"],
-      [db.sequelize.fn("SUM", db.sequelize.col("credit")), "totalCredit"],
-    ],
-    group: ["manufacturerId"],
-    raw: true,
-  });
+// Manufacturers the company still owes — the mirror of
+// getManufacturerReceivableReport. `due` is the current (unfiltered) figure;
+// `openingBalance` / `endingBalance` are the same as of `< from` and `<= to`.
+const getManufacturerDueReport = async ({ from, to } = {}) => {
+  const dueByManufacturer = async (dateWhere) => {
+    const rows = await ManufacturerTransaction.findAll({
+      attributes: [
+        "manufacturerId",
+        [db.sequelize.fn("SUM", db.sequelize.col("debit")), "totalDebit"],
+        [db.sequelize.fn("SUM", db.sequelize.col("credit")), "totalCredit"],
+      ],
+      where: dateWhere,
+      group: ["manufacturerId"],
+      raw: true,
+    });
+    const map = new Map();
+    rows.forEach((row) => {
+      if (!row.manufacturerId) return;
+      const due = Math.max(
+        toNumber(row.totalDebit) - toNumber(row.totalCredit),
+        0,
+      );
+      map.set(row.manufacturerId, due);
+    });
+    return map;
+  };
 
-  const manufacturerIds = balanceRows
-    .map((row) => row.manufacturerId)
-    .filter(Boolean);
+  const [currentMap, openingMap, endingMap] = await Promise.all([
+    dueByManufacturer({}),
+    from
+      ? dueByManufacturer({ date: { [Op.lt]: from } })
+      : Promise.resolve(new Map()),
+    to ? dueByManufacturer({ date: { [Op.lte]: to } }) : dueByManufacturer({}),
+  ]);
+
+  const manufacturerIds = [
+    ...new Set([
+      ...currentMap.keys(),
+      ...openingMap.keys(),
+      ...endingMap.keys(),
+    ]),
+  ];
   const manufacturers = manufacturerIds.length
     ? await Manufacturer.findAll({
         where: { Id: { [Op.in]: manufacturerIds } },
@@ -285,27 +345,34 @@ const getManufacturerDueReport = async () => {
     : [];
   const nameById = new Map(manufacturers.map((m) => [m.Id, m.name]));
 
-  const data = balanceRows
-    .map((row) => {
-      const totalDebit = toNumber(row.totalDebit);
-      const totalCredit = toNumber(row.totalCredit);
-      const due = Math.max(totalDebit - totalCredit, 0);
-
-      return {
-        manufacturerId: row.manufacturerId,
-        name: nameById.get(row.manufacturerId) || null,
-        due,
-      };
-    })
+  const data = manufacturerIds
+    .map((manufacturerId) => ({
+      manufacturerId,
+      name: nameById.get(manufacturerId) || null,
+      due: currentMap.get(manufacturerId) || 0,
+      openingBalance: openingMap.get(manufacturerId) || 0,
+      endingBalance: endingMap.get(manufacturerId) || 0,
+    }))
     // Skip deleted/unknown manufacturers — only live ones with an outstanding
-    // due belong here.
-    .filter((row) => row.name && row.due > 0)
+    // due (now or during the period) belong here.
+    .filter(
+      (row) =>
+        row.name &&
+        (row.due > 0 || row.openingBalance > 0 || row.endingBalance > 0),
+    )
     .sort((a, b) => b.due - a.due);
 
-  const totalDue = data.reduce((sum, row) => sum + row.due, 0);
+  const sum = (key) => data.reduce((acc, row) => acc + row[key], 0);
 
   return {
-    meta: { count: data.length, totalDue },
+    meta: {
+      from: from || null,
+      to: to || null,
+      count: data.length,
+      totalDue: sum("due"),
+      totalOpeningBalance: sum("openingBalance"),
+      totalEndingBalance: sum("endingBalance"),
+    },
     data,
   };
 };

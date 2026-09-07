@@ -109,20 +109,62 @@ const getAllFromDBWithoutQuery = async () => {
 // Period ledger consumed by the shared "All Books" / Monthly Reporting Book
 // statement PDF and the Dashboard's Print/Download Book action (see
 // inventoryOverview.service.js's getInventoryStockReport).
+// Summarised one row per status for the "All Books" / Monthly Reporting Book
+// statement PDF: `periodAmount` = that status's total inside [from, to],
+// `openingAmount` = its total dated strictly before `from`, `endingAmount` =
+// the two combined.
 const getCourierProductStockReport = async ({ from, to } = {}) => {
-  const whereConditions =
-    from && to ? { date: { [Op.between]: [from, to] } } : {};
+  const { fn, col } = db.Sequelize;
+  const periodWhere = from && to ? { date: { [Op.between]: [from, to] } } : {};
 
-  const [data, totalAmount] = await Promise.all([
+  const sumByStatus = (where) =>
     CourierProductStock.findAll({
-      where: whereConditions,
-      order: [["date", "ASC"], ["createdAt", "ASC"]],
-    }),
-    CourierProductStock.sum("amount", { where: whereConditions }),
+      where,
+      attributes: ["status", [fn("SUM", col("amount")), "total"]],
+      group: ["status"],
+      raw: true,
+    });
+
+  const [periodRows, openingRows] = await Promise.all([
+    sumByStatus(periodWhere),
+    from
+      ? sumByStatus({ date: { [Op.lt]: from } })
+      : Promise.resolve([]),
   ]);
 
+  const periodByStatus = new Map(
+    periodRows.map((row) => [row.status, Number(row.total) || 0]),
+  );
+  const openingByStatus = new Map(
+    openingRows.map((row) => [row.status, Number(row.total) || 0]),
+  );
+
+  const data = [
+    ...new Set([...periodByStatus.keys(), ...openingByStatus.keys()]),
+  ]
+    .sort()
+    .map((status) => {
+      const openingAmount = openingByStatus.get(status) || 0;
+      const periodAmount = periodByStatus.get(status) || 0;
+      return {
+        status,
+        openingAmount,
+        periodAmount,
+        endingAmount: openingAmount + periodAmount,
+      };
+    });
+
+  const sum = (key) => data.reduce((acc, row) => acc + row[key], 0);
+
   return {
-    meta: { from: from || null, to: to || null, count: data.length, totalAmount: totalAmount || 0 },
+    meta: {
+      from: from || null,
+      to: to || null,
+      count: data.length,
+      totalAmount: sum("periodAmount"),
+      totalOpeningAmount: sum("openingAmount"),
+      totalEndingAmount: sum("endingAmount"),
+    },
     data,
   };
 };

@@ -171,41 +171,65 @@ const getAllFromDBWithoutQuery = async () => {
   return addBalancesToLoans(rows);
 };
 
-// Lenders the company has overpaid as of `to` — i.e. lenders who still owe
-// the company money back (repaid more than was borrowed). Point-in-time
-// snapshot filtered to CashInOut rows on or before `to`, for the shared
-// "All Books" / dashboard statement report.
-const getLenderReceivableReport = async ({ to } = {}) => {
-  const dateWhere = to ? { date: { [Op.lte]: to } } : {};
-
-  const balanceRows = await CashInOut.findAll({
-    attributes: [
-      "loanId",
-      [
-        db.Sequelize.fn(
-          "SUM",
-          db.Sequelize.literal(
-            "CASE WHEN paymentStatus = 'CashIn' THEN amount ELSE 0 END",
+// Lenders the company has overpaid — i.e. lenders who still owe the company
+// money back (repaid more than was borrowed). For the shared "All Books" /
+// dashboard statement report. `advance` is the current (unfiltered) figure;
+// `openingBalance` / `endingBalance` are the same as of `< from` and `<= to`.
+const getLenderReceivableReport = async ({ from, to } = {}) => {
+  const receivableByLoan = async (dateWhere) => {
+    const rows = await CashInOut.findAll({
+      attributes: [
+        "loanId",
+        [
+          db.Sequelize.fn(
+            "SUM",
+            db.Sequelize.literal(
+              "CASE WHEN paymentStatus = 'CashIn' THEN amount ELSE 0 END",
+            ),
           ),
-        ),
-        "totalLoanTaken",
-      ],
-      [
-        db.Sequelize.fn(
-          "SUM",
-          db.Sequelize.literal(
-            "CASE WHEN paymentStatus = 'CashOut' THEN amount ELSE 0 END",
+          "totalLoanTaken",
+        ],
+        [
+          db.Sequelize.fn(
+            "SUM",
+            db.Sequelize.literal(
+              "CASE WHEN paymentStatus = 'CashOut' THEN amount ELSE 0 END",
+            ),
           ),
-        ),
-        "totalLoanPaid",
+          "totalLoanPaid",
+        ],
       ],
-    ],
-    where: { ...dateWhere, loanId: { [Op.ne]: null } },
-    group: ["loanId"],
-    raw: true,
-  });
+      where: { ...dateWhere, loanId: { [Op.ne]: null } },
+      group: ["loanId"],
+      raw: true,
+    });
+    const map = new Map();
+    rows.forEach((row) => {
+      if (!row.loanId) return;
+      const receivable = Math.max(
+        normalizeAmount(row.totalLoanPaid) - normalizeAmount(row.totalLoanTaken),
+        0,
+      );
+      map.set(row.loanId, receivable);
+    });
+    return map;
+  };
 
-  const loanIds = balanceRows.map((row) => row.loanId).filter(Boolean);
+  const [currentMap, openingMap, endingMap] = await Promise.all([
+    receivableByLoan({}),
+    from
+      ? receivableByLoan({ date: { [Op.lt]: from } })
+      : Promise.resolve(new Map()),
+    to ? receivableByLoan({ date: { [Op.lte]: to } }) : receivableByLoan({}),
+  ]);
+
+  const loanIds = [
+    ...new Set([
+      ...currentMap.keys(),
+      ...openingMap.keys(),
+      ...endingMap.keys(),
+    ]),
+  ];
   const loans = loanIds.length
     ? await Loan.findAll({
         where: { Id: { [Op.in]: loanIds } },
@@ -215,63 +239,96 @@ const getLenderReceivableReport = async ({ to } = {}) => {
     : [];
   const nameById = new Map(loans.map((loan) => [loan.Id, loan.name]));
 
-  const data = balanceRows
-    .map((row) => {
-      const totalLoanTaken = normalizeAmount(row.totalLoanTaken);
-      const totalLoanPaid = normalizeAmount(row.totalLoanPaid);
-      const receivable = Math.max(totalLoanPaid - totalLoanTaken, 0);
-
-      return {
-        loanId: row.loanId,
-        name: nameById.get(row.loanId) || null,
-        advance: receivable,
-      };
-    })
+  const data = loanIds
+    .map((loanId) => ({
+      loanId,
+      name: nameById.get(loanId) || null,
+      advance: currentMap.get(loanId) || 0,
+      openingBalance: openingMap.get(loanId) || 0,
+      endingBalance: endingMap.get(loanId) || 0,
+    }))
     // Skip deleted/unknown lenders — only live lenders the company has overpaid
-    // belong here.
-    .filter((row) => row.name && row.advance > 0)
+    // (now or during the period) belong here.
+    .filter(
+      (row) =>
+        row.name &&
+        (row.advance > 0 || row.openingBalance > 0 || row.endingBalance > 0),
+    )
     .sort((a, b) => b.advance - a.advance);
 
-  const totalAdvance = data.reduce((sum, row) => sum + row.advance, 0);
+  const sum = (key) => data.reduce((acc, row) => acc + row[key], 0);
 
   return {
-    meta: { to: to || null, count: data.length, totalAdvance },
+    meta: {
+      from: from || null,
+      to: to || null,
+      count: data.length,
+      totalAdvance: sum("advance"),
+      totalOpeningBalance: sum("openingBalance"),
+      totalEndingBalance: sum("endingBalance"),
+    },
     data,
   };
 };
 
 // Positive "কত পাবে" in the Lender table means the company still owes money
-// to that lender (netBalance = totalLoanTaken - totalLoanPaid). This is shown
-// separately in the book report as "কোম্পানির কাছে পাবে (লেন্ডার)".
-const getLenderPayableReport = async () => {
-  const balanceRows = await CashInOut.findAll({
-    attributes: [
-      "loanId",
-      [
-        db.Sequelize.fn(
-          "SUM",
-          db.Sequelize.literal(
-            "CASE WHEN paymentStatus = 'CashIn' THEN amount ELSE 0 END",
+// to that lender (netBalance = totalLoanTaken - totalLoanPaid). Shown in the
+// book report as "কোম্পানির কাছে পাবে (লেন্ডার)". `due` is the current
+// (unfiltered) figure; `openingBalance` / `endingBalance` are the same as of
+// `< from` and `<= to` so the PDF can show the period movement.
+const getLenderPayableReport = async ({ from, to } = {}) => {
+  const dueByLoan = async (dateWhere) => {
+    const rows = await CashInOut.findAll({
+      attributes: [
+        "loanId",
+        [
+          db.Sequelize.fn(
+            "SUM",
+            db.Sequelize.literal(
+              "CASE WHEN paymentStatus = 'CashIn' THEN amount ELSE 0 END",
+            ),
           ),
-        ),
-        "totalLoanTaken",
-      ],
-      [
-        db.Sequelize.fn(
-          "SUM",
-          db.Sequelize.literal(
-            "CASE WHEN paymentStatus = 'CashOut' THEN amount ELSE 0 END",
+          "totalLoanTaken",
+        ],
+        [
+          db.Sequelize.fn(
+            "SUM",
+            db.Sequelize.literal(
+              "CASE WHEN paymentStatus = 'CashOut' THEN amount ELSE 0 END",
+            ),
           ),
-        ),
-        "totalLoanPaid",
+          "totalLoanPaid",
+        ],
       ],
-    ],
-    where: { loanId: { [Op.ne]: null } },
-    group: ["loanId"],
-    raw: true,
-  });
+      where: { ...dateWhere, loanId: { [Op.ne]: null } },
+      group: ["loanId"],
+      raw: true,
+    });
+    const map = new Map();
+    rows.forEach((row) => {
+      if (!row.loanId) return;
+      const due = Math.max(
+        normalizeAmount(row.totalLoanTaken) - normalizeAmount(row.totalLoanPaid),
+        0,
+      );
+      map.set(row.loanId, due);
+    });
+    return map;
+  };
 
-  const loanIds = balanceRows.map((row) => row.loanId).filter(Boolean);
+  const [currentMap, openingMap, endingMap] = await Promise.all([
+    dueByLoan({}),
+    from ? dueByLoan({ date: { [Op.lt]: from } }) : Promise.resolve(new Map()),
+    to ? dueByLoan({ date: { [Op.lte]: to } }) : dueByLoan({}),
+  ]);
+
+  const loanIds = [
+    ...new Set([
+      ...currentMap.keys(),
+      ...openingMap.keys(),
+      ...endingMap.keys(),
+    ]),
+  ];
   const loans = loanIds.length
     ? await Loan.findAll({
         where: { Id: { [Op.in]: loanIds } },
@@ -281,27 +338,34 @@ const getLenderPayableReport = async () => {
     : [];
   const nameById = new Map(loans.map((loan) => [loan.Id, loan.name]));
 
-  const data = balanceRows
-    .map((row) => {
-      const totalLoanTaken = normalizeAmount(row.totalLoanTaken);
-      const totalLoanPaid = normalizeAmount(row.totalLoanPaid);
-      const due = Math.max(totalLoanTaken - totalLoanPaid, 0);
-
-      return {
-        loanId: row.loanId,
-        name: nameById.get(row.loanId) || null,
-        due,
-      };
-    })
+  const data = loanIds
+    .map((loanId) => ({
+      loanId,
+      name: nameById.get(loanId) || null,
+      due: currentMap.get(loanId) || 0,
+      openingBalance: openingMap.get(loanId) || 0,
+      endingBalance: endingMap.get(loanId) || 0,
+    }))
     // Skip deleted/unknown lenders — only live lenders with an outstanding due
-    // belong here.
-    .filter((row) => row.name && row.due > 0)
+    // (now or during the period) belong here.
+    .filter(
+      (row) =>
+        row.name &&
+        (row.due > 0 || row.openingBalance > 0 || row.endingBalance > 0),
+    )
     .sort((a, b) => b.due - a.due);
 
-  const totalDue = data.reduce((sum, row) => sum + row.due, 0);
+  const sum = (key) => data.reduce((acc, row) => acc + row[key], 0);
 
   return {
-    meta: { count: data.length, totalDue },
+    meta: {
+      from: from || null,
+      to: to || null,
+      count: data.length,
+      totalDue: sum("due"),
+      totalOpeningBalance: sum("openingBalance"),
+      totalEndingBalance: sum("endingBalance"),
+    },
     data,
   };
 };

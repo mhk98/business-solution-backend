@@ -10,7 +10,26 @@ const SupplierHistory = db.supplierHistory;
 // (gross due). Every SupplierHistory row is either "Paid" or "Unpaid" — never
 // both — so this is a plain aggregate, not a per-row guess. A positive net
 // balance is an advance (they've been overpaid); a negative one is due.
-const getBalanceMap = async (supplierIds) => {
+const getHistoryDateWhere = ({ startDate, endDate } = {}) => {
+  for (const value of [startDate, endDate]) {
+    if (!value) continue;
+    const parsed = new Date(value);
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+        Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+      throw new ApiError(400, "Dates must be valid YYYY-MM-DD values");
+    }
+  }
+  if (startDate && endDate && startDate > endDate) {
+    throw new ApiError(400, "Start date must be on or before end date");
+  }
+  if (!startDate && !endDate) return {};
+  return { date: {
+    ...(startDate ? { [Op.gte]: startDate } : {}),
+    ...(endDate ? { [Op.lte]: endDate } : {}),
+  } };
+};
+
+const getBalanceMap = async (supplierIds, dateWhere = {}) => {
   const balanceRows = await SupplierHistory.findAll({
     attributes: [
       "supplierId",
@@ -35,6 +54,7 @@ const getBalanceMap = async (supplierIds) => {
     ],
     where: {
       supplierId: { [Op.in]: supplierIds },
+      ...dateWhere,
     },
     group: ["supplierId"],
     raw: true,
@@ -49,7 +69,7 @@ const getBalanceMap = async (supplierIds) => {
   }, {});
 };
 
-const addBalancesToSuppliers = async (suppliers) => {
+const addBalancesToSuppliers = async (suppliers, dateWhere = {}) => {
   const plainSuppliers = suppliers.map((supplier) =>
     supplier.get ? supplier.get({ plain: true }) : supplier,
   );
@@ -59,7 +79,7 @@ const addBalancesToSuppliers = async (suppliers) => {
     return plainSuppliers;
   }
 
-  const balanceMap = await getBalanceMap(supplierIds);
+  const balanceMap = await getBalanceMap(supplierIds, dateWhere);
 
   return plainSuppliers.map((supplier) => {
     const balance = balanceMap[supplier.Id] || {};
@@ -81,43 +101,66 @@ const addBalancesToSuppliers = async (suppliers) => {
   });
 };
 
-// Suppliers the company has overpaid as of `to` — i.e. suppliers who still
-// owe the company goods/refund (mirrors addBalancesToSuppliers' netBalance
-// logic, but as a point-in-time snapshot filtered to SupplierHistory rows on
-// or before `to`, for the shared "All Books" / dashboard statement report).
-const getSupplierReceivableReport = async ({ to } = {}) => {
-  const dateWhere = to ? { date: { [Op.lte]: to } } : {};
-
-  const balanceRows = await SupplierHistory.findAll({
-    attributes: [
-      "supplierId",
-      [
-        db.Sequelize.fn(
-          "SUM",
-          db.Sequelize.literal(
-            "CASE WHEN status = 'Paid' THEN amount ELSE 0 END",
+// Suppliers the company has overpaid — i.e. suppliers who still owe the company
+// goods/refund (mirrors addBalancesToSuppliers' netBalance logic). For the
+// shared "All Books" / dashboard statement report. `advance` is the current
+// (unfiltered) overpayment; `openingBalance` / `endingBalance` are the same
+// figure as of `< from` and `<= to` so the PDF can show the period movement.
+const getSupplierReceivableReport = async ({ from, to } = {}) => {
+  const advanceBySupplier = async (dateWhere) => {
+    const rows = await SupplierHistory.findAll({
+      attributes: [
+        "supplierId",
+        [
+          db.Sequelize.fn(
+            "SUM",
+            db.Sequelize.literal(
+              "CASE WHEN status = 'Paid' THEN amount ELSE 0 END",
+            ),
           ),
-        ),
-        "totalPaid",
-      ],
-      [
-        db.Sequelize.fn(
-          "SUM",
-          db.Sequelize.literal(
-            "CASE WHEN status = 'Unpaid' THEN amount ELSE 0 END",
+          "totalPaid",
+        ],
+        [
+          db.Sequelize.fn(
+            "SUM",
+            db.Sequelize.literal(
+              "CASE WHEN status = 'Unpaid' THEN amount ELSE 0 END",
+            ),
           ),
-        ),
-        "grossDue",
+          "grossDue",
+        ],
       ],
-    ],
-    where: dateWhere,
-    group: ["supplierId"],
-    raw: true,
-  });
+      where: dateWhere,
+      group: ["supplierId"],
+      raw: true,
+    });
+    const map = new Map();
+    rows.forEach((row) => {
+      if (!row.supplierId) return;
+      const advance = Math.max(
+        Number(row.totalPaid || 0) - Number(row.grossDue || 0),
+        0,
+      );
+      map.set(row.supplierId, advance);
+    });
+    return map;
+  };
 
-  const supplierIds = balanceRows
-    .map((row) => row.supplierId)
-    .filter(Boolean);
+  const [currentMap, openingMap, endingMap] = await Promise.all([
+    advanceBySupplier({}),
+    from
+      ? advanceBySupplier({ date: { [Op.lt]: from } })
+      : Promise.resolve(new Map()),
+    to ? advanceBySupplier({ date: { [Op.lte]: to } }) : advanceBySupplier({}),
+  ]);
+
+  const supplierIds = [
+    ...new Set([
+      ...currentMap.keys(),
+      ...openingMap.keys(),
+      ...endingMap.keys(),
+    ]),
+  ];
   const suppliers = supplierIds.length
     ? await Supplier.findAll({
         where: { Id: { [Op.in]: supplierIds } },
@@ -127,61 +170,97 @@ const getSupplierReceivableReport = async ({ to } = {}) => {
     : [];
   const nameById = new Map(suppliers.map((s) => [s.Id, s.name]));
 
-  const data = balanceRows
-    .map((row) => {
-      const totalPaid = Number(row.totalPaid || 0);
-      const grossDue = Number(row.grossDue || 0);
-      const advance = Math.max(totalPaid - grossDue, 0);
-
-      return {
-        supplierId: row.supplierId,
-        name: nameById.get(row.supplierId) || null,
-        advance,
-      };
-    })
+  const data = supplierIds
+    .map((supplierId) => ({
+      supplierId,
+      name: nameById.get(supplierId) || null,
+      advance: currentMap.get(supplierId) || 0,
+      openingBalance: openingMap.get(supplierId) || 0,
+      endingBalance: endingMap.get(supplierId) || 0,
+    }))
     // Skip deleted/unknown suppliers — this report only lists live suppliers
-    // the company has actually overpaid.
-    .filter((row) => row.name && row.advance > 0)
+    // the company has actually overpaid (now or during the period).
+    .filter(
+      (row) =>
+        row.name &&
+        (row.advance > 0 || row.openingBalance > 0 || row.endingBalance > 0),
+    )
     .sort((a, b) => b.advance - a.advance);
 
-  const totalAdvance = data.reduce((sum, row) => sum + row.advance, 0);
+  const sum = (key) => data.reduce((acc, row) => acc + row[key], 0);
 
   return {
-    meta: { to: to || null, count: data.length, totalAdvance },
+    meta: {
+      from: from || null,
+      to: to || null,
+      count: data.length,
+      totalAdvance: sum("advance"),
+      totalOpeningBalance: sum("openingBalance"),
+      totalEndingBalance: sum("endingBalance"),
+    },
     data,
   };
 };
 
-const getSupplierDueReport = async () => {
-  const balanceRows = await SupplierHistory.findAll({
-    attributes: [
-      "supplierId",
-      [
-        db.Sequelize.fn(
-          "SUM",
-          db.Sequelize.literal(
-            "CASE WHEN status = 'Paid' THEN amount ELSE 0 END",
+// Suppliers the company still owes (gross due beyond what's been paid) — the
+// mirror of getSupplierReceivableReport. `due` is the current (unfiltered)
+// figure; `openingBalance` / `endingBalance` are the same as of `< from` and
+// `<= to` so the PDF can show the period movement.
+const getSupplierDueReport = async ({ from, to } = {}) => {
+  const dueBySupplier = async (dateWhere) => {
+    const rows = await SupplierHistory.findAll({
+      attributes: [
+        "supplierId",
+        [
+          db.Sequelize.fn(
+            "SUM",
+            db.Sequelize.literal(
+              "CASE WHEN status = 'Paid' THEN amount ELSE 0 END",
+            ),
           ),
-        ),
-        "totalPaid",
-      ],
-      [
-        db.Sequelize.fn(
-          "SUM",
-          db.Sequelize.literal(
-            "CASE WHEN status = 'Unpaid' THEN amount ELSE 0 END",
+          "totalPaid",
+        ],
+        [
+          db.Sequelize.fn(
+            "SUM",
+            db.Sequelize.literal(
+              "CASE WHEN status = 'Unpaid' THEN amount ELSE 0 END",
+            ),
           ),
-        ),
-        "grossDue",
+          "grossDue",
+        ],
       ],
-    ],
-    group: ["supplierId"],
-    raw: true,
-  });
+      where: dateWhere,
+      group: ["supplierId"],
+      raw: true,
+    });
+    const map = new Map();
+    rows.forEach((row) => {
+      if (!row.supplierId) return;
+      const due = Math.max(
+        Number(row.grossDue || 0) - Number(row.totalPaid || 0),
+        0,
+      );
+      map.set(row.supplierId, due);
+    });
+    return map;
+  };
 
-  const supplierIds = balanceRows
-    .map((row) => row.supplierId)
-    .filter(Boolean);
+  const [currentMap, openingMap, endingMap] = await Promise.all([
+    dueBySupplier({}),
+    from
+      ? dueBySupplier({ date: { [Op.lt]: from } })
+      : Promise.resolve(new Map()),
+    to ? dueBySupplier({ date: { [Op.lte]: to } }) : dueBySupplier({}),
+  ]);
+
+  const supplierIds = [
+    ...new Set([
+      ...currentMap.keys(),
+      ...openingMap.keys(),
+      ...endingMap.keys(),
+    ]),
+  ];
   const suppliers = supplierIds.length
     ? await Supplier.findAll({
         where: { Id: { [Op.in]: supplierIds } },
@@ -191,27 +270,34 @@ const getSupplierDueReport = async () => {
     : [];
   const nameById = new Map(suppliers.map((s) => [s.Id, s.name]));
 
-  const data = balanceRows
-    .map((row) => {
-      const totalPaid = Number(row.totalPaid || 0);
-      const grossDue = Number(row.grossDue || 0);
-      const due = Math.max(grossDue - totalPaid, 0);
-
-      return {
-        supplierId: row.supplierId,
-        name: nameById.get(row.supplierId) || null,
-        due,
-      };
-    })
+  const data = supplierIds
+    .map((supplierId) => ({
+      supplierId,
+      name: nameById.get(supplierId) || null,
+      due: currentMap.get(supplierId) || 0,
+      openingBalance: openingMap.get(supplierId) || 0,
+      endingBalance: endingMap.get(supplierId) || 0,
+    }))
     // Skip deleted/unknown suppliers — only live suppliers with an outstanding
-    // due belong in this report.
-    .filter((row) => row.name && row.due > 0)
+    // due (now or during the period) belong in this report.
+    .filter(
+      (row) =>
+        row.name &&
+        (row.due > 0 || row.openingBalance > 0 || row.endingBalance > 0),
+    )
     .sort((a, b) => b.due - a.due);
 
-  const totalDue = data.reduce((sum, row) => sum + row.due, 0);
+  const sum = (key) => data.reduce((acc, row) => acc + row[key], 0);
 
   return {
-    meta: { count: data.length, totalDue },
+    meta: {
+      from: from || null,
+      to: to || null,
+      count: data.length,
+      totalDue: sum("due"),
+      totalOpeningBalance: sum("openingBalance"),
+      totalEndingBalance: sum("endingBalance"),
+    },
     data,
   };
 };
@@ -224,7 +310,8 @@ const insertIntoDB = async (data) => {
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
 
-  const { searchTerm, ...filterData } = filters;
+  const { searchTerm, startDate, endDate, ...filterData } = filters;
+  const dateWhere = getHistoryDateWhere({ startDate, endDate });
 
   const andConditions = [];
 
@@ -283,7 +370,7 @@ const getAllFromDB = async (filters, options) => {
 
   const count = await Supplier.count({ where: whereConditions });
 
-  const data = await addBalancesToSuppliers(result);
+  const data = await addBalancesToSuppliers(result, dateWhere);
 
   return {
     meta: { count, page, limit },
@@ -321,13 +408,14 @@ const updateOneFromDB = async (id, payload) => {
   return result;
 };
 
-const getAllFromDBWithoutQuery = async () => {
+const getAllFromDBWithoutQuery = async (filters = {}) => {
+  const dateWhere = getHistoryDateWhere(filters);
   const result = await Supplier.findAll({
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });
 
-  return addBalancesToSuppliers(result);
+  return addBalancesToSuppliers(result, dateWhere);
 };
 
 const SupplierService = {

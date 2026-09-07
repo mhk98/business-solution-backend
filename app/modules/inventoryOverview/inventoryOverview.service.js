@@ -1164,11 +1164,13 @@ const computeStockMovementLedgerReport = async ({ from, to, name } = {}) => {
   };
 };
 
-// Closing-only sibling of computeStockMovementLedgerReport, for stock pools
-// that don't need Opening/In/Out — just "how much is on hand as of `to`",
+// Opening/Closing sibling of computeStockMovementLedgerReport, for stock pools
 // grouped by whichever id field StockMovement was logged with for that pool
 // (productId for Product/Damage/Repairing, itemId for everything else).
+// `from` is optional: when given, each pool also gets an `${prefix}Opening`
+// (balance as of the last movement dated before `from`); otherwise Opening is 0.
 const computeStockMovementClosingReport = async ({
+  from,
   to,
   name,
   groupIdField,
@@ -1207,6 +1209,9 @@ const computeStockMovementClosingReport = async ({
     const entry = map.get(key);
     entry.name = row.name || entry.name;
     entry[`${prefix}Closing`] = n(row.balanceAfter);
+    if (from && row.date < from) {
+      entry[`${prefix}Opening`] = n(row.balanceAfter);
+    }
   });
 
   const prefixes = [...new Set(Object.values(stockTypeMap))];
@@ -1214,16 +1219,22 @@ const computeStockMovementClosingReport = async ({
     .map((row) => {
       const result = { groupId: row.groupId, name: row.name };
       prefixes.forEach((prefix) => {
+        result[`${prefix}Opening`] = n(row[`${prefix}Opening`]);
         result[`${prefix}Closing`] = n(row[`${prefix}Closing`]);
       });
       result.purchasePrice = priceByGroupId.get(Number(row.groupId)) || 0;
       return result;
     })
-    .filter((row) => prefixes.some((prefix) => n(row[`${prefix}Closing`]) > 0))
+    .filter((row) =>
+      prefixes.some(
+        (prefix) =>
+          n(row[`${prefix}Closing`]) > 0 || n(row[`${prefix}Opening`]) > 0,
+      ),
+    )
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
   return {
-    meta: { to, name: name || null, count: all.length },
+    meta: { from: from || null, to, name: name || null, count: all.length },
     data: all,
   };
 };
@@ -1241,7 +1252,7 @@ const buildUnitPriceMap = (rows, idField) => {
 
 // Item Stock (general raw-material pool) + Factory Stock (the same item,
 // held against a specific manufacturer) — both keyed by itemId.
-const computeItemFactoryStockReport = async ({ to, name } = {}) => {
+const computeItemFactoryStockReport = async ({ from, to, name } = {}) => {
   const currentRows = await ItemMaster.findAll({
     where: buildNameWhere(name),
     attributes: ["itemId", "cost", "unitValue"],
@@ -1249,6 +1260,7 @@ const computeItemFactoryStockReport = async ({ to, name } = {}) => {
   });
 
   return computeStockMovementClosingReport({
+    from,
     to,
     name,
     groupIdField: "itemId",
@@ -1259,7 +1271,7 @@ const computeItemFactoryStockReport = async ({ to, name } = {}) => {
 
 // Packaging Item Stock + Packaging Factory Stock — both keyed by
 // packagingItemId (logged onto StockMovement.itemId).
-const computePackagingStockReport = async ({ to, name } = {}) => {
+const computePackagingStockReport = async ({ from, to, name } = {}) => {
   const currentRows = await PackagingItemStock.findAll({
     where: buildNameWhere(name),
     attributes: ["packagingItemId", "cost", "unitValue"],
@@ -1267,6 +1279,7 @@ const computePackagingStockReport = async ({ to, name } = {}) => {
   });
 
   return computeStockMovementClosingReport({
+    from,
     to,
     name,
     groupIdField: "itemId",
@@ -1300,19 +1313,19 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     directorInvestment,
   ] = await Promise.all([
     computeStockMovementLedgerReport({ from, to }),
-    computeItemFactoryStockReport({ to }),
-    computePackagingStockReport({ to }),
+    computeItemFactoryStockReport({ from, to }),
+    computePackagingStockReport({ from, to }),
     getCourierProductStockReport({ from, to }),
-    getSupplierReceivableReport({ to }),
-    getManufacturerReceivableReport({ to }),
-    getPackagingManufacturerReceivableReport({ to }),
-    getLenderReceivableReport({ to }),
-    getSalesDueReport(),
-    getSalaryAdvanceReport(),
+    getSupplierReceivableReport({ from, to }),
+    getManufacturerReceivableReport({ from, to }),
+    getPackagingManufacturerReceivableReport({ from, to }),
+    getLenderReceivableReport({ from, to }),
+    getSalesDueReport({ from, to }),
+    getSalaryAdvanceReport({ from, to }),
     getPendingPayrollSalaryReport({ from, to }),
-    getSupplierDueReport(),
-    getManufacturerDueReport(),
-    getLenderPayableReport(),
+    getSupplierDueReport({ from, to }),
+    getManufacturerDueReport({ from, to }),
+    getLenderPayableReport({ from, to }),
     getDirectorInvestmentReport(),
   ]);
   const rows = report.data || [];
