@@ -7,6 +7,7 @@ const StockMovementFilterableFields = [
   "itemId",
   "productId",
   "manufacturerId",
+  "name",
   "startDate",
   "endDate",
 ];

@@ -65,7 +65,25 @@ const getDataById = async (id) => {
   return StockMovement.findOne({ where: { Id: id } });
 };
 
+// Distinct item/product names that have actually appeared in the movement
+// log — spans every stockType (ItemStock, FactoryStock, ProductStock,
+// PackagingStock) since `name` is denormalized onto every row, unlike
+// productId/itemId which are separate, only-sometimes-populated id spaces.
+const getDistinctNames = async () => {
+  const rows = await StockMovement.findAll({
+    attributes: [
+      [db.Sequelize.fn("DISTINCT", db.Sequelize.col("name")), "name"],
+    ],
+    where: { name: { [Op.ne]: null } },
+    order: [["name", "ASC"]],
+    raw: true,
+  });
+
+  return rows.map((row) => row.name).filter(Boolean);
+};
+
 module.exports = {
   getAllFromDB,
   getDataById,
+  getDistinctNames,
 };

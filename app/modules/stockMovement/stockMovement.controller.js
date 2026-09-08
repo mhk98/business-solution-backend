@@ -30,7 +30,18 @@ const getDataById = catchAsync(async (req, res) => {
   });
 });
 
+const getDistinctNames = catchAsync(async (req, res) => {
+  const result = await StockMovementService.getDistinctNames();
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Stock movement names fetched!!",
+    data: result,
+  });
+});
+
 module.exports = {
   getAllFromDB,
   getDataById,
+  getDistinctNames,
 };

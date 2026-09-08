@@ -1264,6 +1264,42 @@ const getAccountsManagementSummary = async (dateWhere = {}) => {
   };
 };
 
+// Live, company-wide net balance (CashIn − CashOut) per payment mode — no
+// date filter, matching the per-book statement's "বর্তমান ব্যালেন্স" semantics
+// (the book report's own payment-mode section is date-filtered/per-book; this
+// is the always-current, all-books figure shown on the dashboard).
+const getPaymentModeCurrentBalance = async () => {
+  const rows = await CashInOut.findAll({
+    attributes: [
+      "paymentMode",
+      "paymentStatus",
+      [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "total"],
+    ],
+    where: activeWhere(CashInOut, {
+      paymentStatus: { [Op.in]: ["CashIn", "CashOut"] },
+    }),
+    group: ["paymentMode", "paymentStatus"],
+    paranoid: true,
+    raw: true,
+  });
+
+  const balanceByMode = {};
+  rows.forEach((row) => {
+    const mode =
+      (row.paymentMode && String(row.paymentMode).trim()) || "উল্লেখ নেই";
+    const amount = n(row.total);
+    const signed =
+      String(row.paymentStatus || "").toLowerCase() === "cashin"
+        ? amount
+        : -amount;
+    balanceByMode[mode] = (balanceByMode[mode] || 0) + signed;
+  });
+
+  return Object.entries(balanceByMode)
+    .map(([mode, balance]) => ({ mode, balance: n(balance) }))
+    .sort((a, b) => b.balance - a.balance);
+};
+
 const getEmployeeManagementSummary = async ({ from, to }) => {
   const today = formatDateOnly(new Date());
   const selectedRange = { from, to };
@@ -1488,6 +1524,7 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
     employeeManagement,
     assetManagement,
     payrollManagement,
+    paymentModeBalances,
   ] = await Promise.all([
     getOverviewSummaryFromDB({ from, to, applyFilter: true }),
     getOverviewSummaryFromDB({
@@ -1511,6 +1548,7 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
     getEmployeeManagementSummary({ from, to }),
     getAssetManagementSummary(currentDateWhere),
     getPayrollManagementSummary(),
+    getPaymentModeCurrentBalance(),
   ]);
 
   return {
@@ -1560,6 +1598,7 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
       assets: assetManagement,
       payroll: payrollManagement,
     },
+    paymentModeBalances,
     summary: currentSummary,
   };
 };

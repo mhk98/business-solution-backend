@@ -3,6 +3,7 @@ const StockMovementController = require("./stockMovement.controller");
 const router = require("express").Router();
 
 router.get("/", auth(), StockMovementController.getAllFromDB);
+router.get("/names", auth(), StockMovementController.getDistinctNames);
 router.get("/:id", auth(), StockMovementController.getDataById);
 
 const StockMovementRoutes = router;
