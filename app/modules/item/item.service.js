@@ -2,6 +2,7 @@ const { Op, where } = require("sequelize"); // Ensure Op is imported
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const ensureUniqueName = require("../../../shared/ensureUniqueName");
 const { ItemSearchableFields } = require("./item.constants");
 const Item = db.item;
 const ItemMaster = db.itemMaster;
@@ -54,10 +55,11 @@ const syncItemNameReferences = async ({
 const insertIntoDB = async (data) => {
   const { name } = data;
 
+  await ensureUniqueName(Item, name, { label: "Item" });
+
   const payload = {
     name,
   };
-  console.log("data", data);
   const result = await Item.create(payload);
   return result;
 };
@@ -165,6 +167,8 @@ const updateOneFromDB = async (id, payload) => {
     if (!existing) {
       throw new ApiError(404, "Item not found");
     }
+
+    await ensureUniqueName(Item, name, { excludeId: id, label: "Item" });
 
     const [updatedCount] = await Item.update(data, {
       where: {

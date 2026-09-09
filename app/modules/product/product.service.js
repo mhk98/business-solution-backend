@@ -2,6 +2,7 @@ const { Op, where } = require("sequelize"); // Ensure Op is imported
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const ensureUniqueName = require("../../../shared/ensureUniqueName");
 const { ProductSearchableFields } = require("./product.constants");
 const Product = db.product;
 const Variation = db.variation;
@@ -230,6 +231,8 @@ const attachDeleteRestriction = async (rows, transaction) => {
 const insertIntoDB = async (data) => {
   const { name, size, color, sku } = data;
 
+  await ensureUniqueName(Product, name, { label: "Product" });
+
   const payload = {
     name,
     sku,
@@ -397,6 +400,8 @@ const updateOneFromDB = async (id, payload) => {
     });
 
     if (!existingProduct) throw new ApiError(404, "Product not found");
+
+    await ensureUniqueName(Product, name, { excludeId: id, label: "Product" });
 
     const data = {
       name,

@@ -2,10 +2,13 @@ const { Op, where } = require("sequelize"); // Ensure Op is imported
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const ensureUniqueName = require("../../../shared/ensureUniqueName");
 const { WarehouseSearchableFields } = require("./warehouse.constants");
 const Warehouse = db.warehouse;
 
 const insertIntoDB = async (data) => {
+  await ensureUniqueName(Warehouse, data.name, { label: "Warehouse" });
+
   const result = await Warehouse.create(data);
   return result;
 };
@@ -101,6 +104,11 @@ const deleteIdFromDB = async (id) => {
 };
 
 const updateOneFromDB = async (id, payload) => {
+  await ensureUniqueName(Warehouse, payload.name, {
+    excludeId: id,
+    label: "Warehouse",
+  });
+
   const result = await Warehouse.update(payload, {
     where: {
       Id: id,

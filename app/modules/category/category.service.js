@@ -2,6 +2,7 @@ const { Op } = require("sequelize");
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const ensureUniqueName = require("../../../shared/ensureUniqueName");
 const Category = db.category;
 
 const normalizeStatus = (value) => {
@@ -31,6 +32,7 @@ const normalizePayload = (payload = {}, { defaultStatus = false } = {}) => {
 const insertIntoDB = async (data) => {
   const payload = normalizePayload(data, { defaultStatus: true });
   if (!payload.name) throw new ApiError(400, "Category name is required");
+  await ensureUniqueName(Category, payload.name, { label: "Category" });
   const result = await Category.create(payload);
   return result;
 };
@@ -124,7 +126,13 @@ const updateOneFromDB = async (id, payload) => {
   const category = await Category.findByPk(id);
   if (!category) throw new ApiError(404, "Category not found");
 
-  await category.update(normalizePayload(payload));
+  const normalized = normalizePayload(payload);
+  await ensureUniqueName(Category, normalized.name, {
+    excludeId: id,
+    label: "Category",
+  });
+
+  await category.update(normalized);
   await category.reload();
 
   return category;

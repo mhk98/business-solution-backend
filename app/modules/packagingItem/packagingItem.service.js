@@ -1,6 +1,7 @@
 const { Op } = require("sequelize");
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
+const ensureUniqueName = require("../../../shared/ensureUniqueName");
 const {
   PackagingItemSearchableFields,
 } = require("./packagingItem.constants");
@@ -8,6 +9,8 @@ const {
 const PackagingItem = db.packagingItem;
 
 const insertIntoDB = async (data) => {
+  await ensureUniqueName(PackagingItem, data.name, { label: "Packaging item" });
+
   const result = await PackagingItem.create({
     name: data.name,
     date: data.date || null,
@@ -97,6 +100,11 @@ const deleteIdFromDB = async (id) => {
 };
 
 const updateOneFromDB = async (id, payload) => {
+  await ensureUniqueName(PackagingItem, payload.name, {
+    excludeId: id,
+    label: "Packaging item",
+  });
+
   const result = await PackagingItem.update(
     {
       name: payload.name,

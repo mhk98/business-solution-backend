@@ -2,6 +2,7 @@ const { Op, where } = require("sequelize"); // Ensure Op is imported
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const ensureUniqueName = require("../../../shared/ensureUniqueName");
 const { BookSearchableFields } = require("./book.constants");
 const Book = db.book;
 const CashInOut = db.cashInOut;
@@ -112,6 +113,8 @@ const getCashBalancesByBook = async () => {
 };
 
 const insertIntoDB = async (data) => {
+  await ensureUniqueName(Book, data.name, { label: "Book" });
+
   const result = await Book.create(data);
   return result;
 };
@@ -223,7 +226,7 @@ const deleteIdFromDB = async (id) => {
 const updateOneFromDB = async (id, payload) => {
   const { name, note, status } = payload;
 
-  console.log("Accounting book", payload);
+  await ensureUniqueName(Book, name, { excludeId: id, label: "Book" });
 
   const data = {
     name,

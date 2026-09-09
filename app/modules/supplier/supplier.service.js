@@ -2,6 +2,7 @@ const { Op, where } = require("sequelize"); // Ensure Op is imported
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const ensureUniqueName = require("../../../shared/ensureUniqueName");
 const { SupplierSearchableFields } = require("./supplier.constants");
 const Supplier = db.supplier;
 const SupplierHistory = db.supplierHistory;
@@ -303,6 +304,8 @@ const getSupplierDueReport = async ({ from, to } = {}) => {
 };
 
 const insertIntoDB = async (data) => {
+  await ensureUniqueName(Supplier, data.name, { label: "Supplier" });
+
   const result = await Supplier.create(data);
   return result;
 };
@@ -399,6 +402,11 @@ const deleteIdFromDB = async (id) => {
 };
 
 const updateOneFromDB = async (id, payload) => {
+  await ensureUniqueName(Supplier, payload.name, {
+    excludeId: id,
+    label: "Supplier",
+  });
+
   const result = await Supplier.update(payload, {
     where: {
       Id: id,
