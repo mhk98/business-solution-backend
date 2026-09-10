@@ -10,7 +10,17 @@ const CHARGE_MODELS = {
   codchange: db.codChange,
   delivery: db.deliveryCharge,
   deliveryadvance: db.deliveryAdvance,
+  shippingcharge: db.shippingCharge,
 };
+
+// Charge types that carry an employee link (rows synced from CS Work Reports).
+const EMPLOYEE_LINKED_TYPES = new Set([
+  "codchange",
+  "deliveryadvance",
+  "shippingcharge",
+]);
+
+const EmployeeList = db.employeeList;
 
 const normalizeChargeType = (chargeType) => {
   const value = String(chargeType || "")
@@ -142,8 +152,25 @@ const getChargeSettings = async (filters, options) => {
   }
 
   const where = { [Op.and]: andConditions };
+  const include = EMPLOYEE_LINKED_TYPES.has(normalizeChargeType(chargeType))
+    ? [
+        {
+          model: EmployeeList,
+          as: "employee",
+          attributes: ["Id", "name", "employeeCode"],
+          required: false,
+        },
+        {
+          model: db.employeeWorkReport,
+          as: "workReport",
+          attributes: ["Id", "name"],
+          required: false,
+        },
+      ]
+    : [];
   const data = await Model.findAll({
     where,
+    include,
     offset: skip,
     limit,
     order: [["date", "DESC"], ["createdAt", "DESC"]],
@@ -156,7 +183,14 @@ const getChargeSettings = async (filters, options) => {
 
   return {
     meta: { count, page, limit, totalAmount: Number(totalAmount) || 0 },
-    data,
+    data: data.map((row) => {
+      const json = row.toJSON();
+      return {
+        ...json,
+        employeeName: json.employee?.name || json.workReport?.name || null,
+        isFromWorkReport: json.source === "cs_work_report",
+      };
+    }),
   };
 };
 
@@ -166,6 +200,12 @@ const updateChargeSetting = async (id, payload) => {
   const existing = await Model.findOne({ where: { Id: id } });
   if (!existing) {
     throw new ApiError(404, "Charge not found");
+  }
+  if (existing.source === "cs_work_report") {
+    throw new ApiError(
+      400,
+      "This entry is managed from the CS Work Report and cannot be edited here",
+    );
   }
 
   const next = {};
@@ -225,6 +265,12 @@ const deleteChargeSetting = async (id, chargeType) => {
   const existing = await Model.findOne({ where: { Id: id } });
   if (!existing) {
     throw new ApiError(404, "Charge not found");
+  }
+  if (existing.source === "cs_work_report") {
+    throw new ApiError(
+      400,
+      "This entry is managed from the CS Work Report and cannot be deleted here",
+    );
   }
 
   if (normalizedType === "deliveryadvance") {

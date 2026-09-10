@@ -114,6 +114,15 @@ db.inventoryCostLayer =
     db.sequelize,
     DataTypes,
   );
+db.packagingCostLayer =
+  require("../app/modules/packagingCostLayer/packagingCostLayer.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.itemCostLayer = require("../app/modules/itemCostLayer/itemCostLayer.model")(
+  db.sequelize,
+  DataTypes,
+);
 db.mixer = require("../app/modules/mixer/mixer.model")(db.sequelize, DataTypes);
 
 db.receivedProduct =
@@ -354,6 +363,16 @@ db.supplierHistory =
     DataTypes,
   );
 
+db.dollarSupplier = require("../app/modules/dollarSupplier/dollarSupplier.model")(
+  db.sequelize,
+  DataTypes,
+);
+db.dollarSupplierHistory =
+  require("../app/modules/dollarSupplierHistory/dollarSupplierHistory.model")(
+    db.sequelize,
+    DataTypes,
+  );
+
 db.warehouse = require("../app/modules/warehouse/warehouse.model")(
   db.sequelize,
   DataTypes,
@@ -544,6 +563,11 @@ db.deliveryAdvance =
     db.sequelize,
     DataTypes,
   );
+db.shippingCharge =
+  require("../app/modules/chargeSetting/shippingCharge.model")(
+    db.sequelize,
+    DataTypes,
+  );
 db.apiGatewaySetting =
   require("../app/modules/apiGatewaySetting/apiGatewaySetting.model")(
     db.sequelize,
@@ -636,6 +660,21 @@ db.supplierHistory.belongsTo(db.supplier, {
 
 db.book.hasMany(db.supplierHistory, { foreignKey: "bookId" });
 db.supplierHistory.belongsTo(db.book, { foreignKey: "bookId", as: "book" });
+
+db.dollarSupplier.hasMany(db.dollarSupplierHistory, {
+  foreignKey: "dollarSupplierId",
+});
+db.dollarSupplierHistory.belongsTo(db.dollarSupplier, {
+  foreignKey: "dollarSupplierId",
+  as: "dollarSupplier",
+});
+db.book.hasMany(db.dollarSupplierHistory, { foreignKey: "bookId" });
+db.dollarSupplierHistory.belongsTo(db.book, {
+  foreignKey: "bookId",
+  as: "book",
+});
+db.dollarSupplier.hasMany(db.cashInOut, { foreignKey: "dollarSupplierId" });
+db.cashInOut.belongsTo(db.dollarSupplier, { foreignKey: "dollarSupplierId" });
 
 db.item.hasMany(db.manufacture, { foreignKey: "itemId" });
 db.manufacture.belongsTo(db.item, { foreignKey: "itemId" });
@@ -1083,6 +1122,23 @@ db.employeeWorkReport.belongsTo(db.employeeList, {
   as: "employee",
 });
 
+// Charge rows synced from CS Work Reports carry the submitting employee so the
+// settings screens can show a name alongside the amount.
+[db.codChange, db.shippingCharge, db.deliveryAdvance].forEach((ChargeModel) => {
+  db.employeeList.hasMany(ChargeModel, {
+    foreignKey: "employeeId",
+    as: `${ChargeModel.name.toLowerCase()}Charges`,
+  });
+  ChargeModel.belongsTo(db.employeeList, {
+    foreignKey: "employeeId",
+    as: "employee",
+  });
+  ChargeModel.belongsTo(db.employeeWorkReport, {
+    foreignKey: "employeeWorkReportId",
+    as: "workReport",
+  });
+});
+
 db.user.hasMany(db.logisticWorkReport, {
   foreignKey: "userId",
   as: "logisticWorkReports",
@@ -1444,6 +1500,14 @@ db.cashInOut.belongsTo(db.loan, { foreignKey: "loanId", as: "loan" });
 
 db.marketingBook.hasMany(db.marketingExpense, { foreignKey: "bookId" });
 db.marketingExpense.belongsTo(db.marketingBook, { foreignKey: "bookId" });
+
+db.dollarSupplier.hasMany(db.marketingExpense, {
+  foreignKey: "dollarSupplierId",
+});
+db.marketingExpense.belongsTo(db.dollarSupplier, {
+  foreignKey: "dollarSupplierId",
+  as: "dollarSupplier",
+});
 
 // =====================
 // Standard Supplier + Warehouse relations
@@ -1921,6 +1985,54 @@ const ensureEmployeeWorkReportColumns = async () => {
     type: DataTypes.JSON,
     allowNull: true,
   });
+
+  const decimalColumn = () => ({
+    type: DataTypes.DECIMAL(15, 2),
+    allowNull: false,
+    defaultValue: 0,
+  });
+
+  await maybeAddColumn("codChangeDiscount", decimalColumn());
+  await maybeAddColumn("shippingCharge", decimalColumn());
+  await maybeAddColumn("advancePayment", decimalColumn());
+};
+
+// codChange / shippingCharge / deliveryAdvance gained employee + work-report
+// linkage columns so CS Work Report amounts can flow into the charge screens.
+const ensureChargeEmployeeColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const models = [db.codChange, db.shippingCharge, db.deliveryAdvance];
+
+  for (const Model of models) {
+    const tableName = Model.getTableName();
+    const tableDefinition = await queryInterface.describeTable(tableName);
+
+    const maybeAddColumn = async (columnName, definition) => {
+      if (!tableDefinition[columnName]) {
+        await queryInterface.addColumn(tableName, columnName, definition);
+      }
+    };
+
+    await maybeAddColumn("source", {
+      type: DataTypes.STRING(32),
+      allowNull: false,
+      defaultValue: "manual",
+    });
+    await maybeAddColumn("employeeId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+    await maybeAddColumn("employeeWorkReportId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+
+    // Existing rows predate the column — mark them manual so the overview
+    // exclusion (source != 'cs_work_report') keeps counting them.
+    await db.sequelize.query(
+      `UPDATE \`${tableName}\` SET \`source\` = 'manual' WHERE \`source\` IS NULL`,
+    );
+  }
 };
 
 const ensureLogisticWorkReportColumns = async () => {
@@ -2966,6 +3078,228 @@ const seedOpeningCostLayers = async () => {
   }
 };
 
+const ensurePackagingFactoryCostBreakdownColumn = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  for (const model of [db.packagingFactory, db.manufactureProduction]) {
+    if (!model) continue;
+    const tableName = model.getTableName();
+    const tableDefinition = await queryInterface.describeTable(tableName);
+    if (!tableDefinition.costBreakdown) {
+      await queryInterface.addColumn(tableName, "costBreakdown", {
+        type: DataTypes.JSON,
+        allowNull: true,
+      });
+    }
+  }
+};
+
+// One-time: seed FIFO cost layers for packaging items (opening balance =
+// weighted-average unit cost from that item's purchases) and backfill the
+// historical 0-cost factory moves / factory stock so the chain shows real cost.
+const seedPackagingOpeningLayers = async () => {
+  if (!db.packagingCostLayer || !db.packagingItemStock) return;
+  if ((await db.packagingCostLayer.count()) > 0) return; // already seeded
+
+  const {
+    toBaseStockPayload: toBase,
+  } = require("../helpers/unitConversionHelper");
+  const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+  const round4 = (v) => Math.round((Number(v) || 0) * 10000) / 10000;
+  const baseOf = (unit, value) => toBase(unit, value).unitValue;
+
+  // Weighted-average unit cost per packaging item, from all its purchases.
+  const purchases = await db.packagingItemPurchase.findAll({
+    attributes: ["packagingItemId", "unit", "unitValue", "cost"],
+    paranoid: false,
+    raw: true,
+  });
+  const agg = {};
+  for (const p of purchases) {
+    const base = baseOf(p.unit, p.unitValue);
+    if (base <= 0) continue;
+    agg[p.packagingItemId] ||= { qty: 0, value: 0 };
+    agg[p.packagingItemId].qty += base;
+    agg[p.packagingItemId].value += Number(p.cost) || 0;
+  }
+  const unitCostOf = (itemId, fallback = 0) => {
+    const a = agg[itemId];
+    return a && a.qty > 0 ? round4(a.value / a.qty) : round4(fallback);
+  };
+
+  // 1) Opening layers for whatever is currently in Packaging Item Stock.
+  const stocks = await db.packagingItemStock.findAll({
+    where: { deletedAt: { [Op.is]: null } },
+    raw: true,
+  });
+  const layerRows = [];
+  for (const s of stocks) {
+    const base = baseOf(s.unit, s.unitValue);
+    if (base <= 0) continue;
+    const fallbackUc = base > 0 ? (Number(s.cost) || 0) / base : 0;
+    const uc = unitCostOf(s.packagingItemId, fallbackUc);
+    layerRows.push({
+      packagingItemId: s.packagingItemId,
+      sourceType: "OpeningBalance",
+      sourceMovementId: null,
+      receivedDate: "2000-01-01",
+      originalQty: round2(base),
+      remainingQty: round2(base),
+      unitCost: uc,
+      note: "opening balance",
+    });
+    await db.packagingItemStock.update(
+      { cost: round2(base * uc) },
+      { where: { Id: s.Id } },
+    );
+  }
+  if (layerRows.length) {
+    await db.packagingCostLayer.bulkCreate(layerRows);
+    console.log(`Seeded ${layerRows.length} packaging opening cost layers`);
+  }
+
+  // 2) Backfill historical 0-cost factory moves + factory stock.
+  const fixCost = async (Model, valueCol = "cost") => {
+    const rows = await Model.findAll({
+      where: { [valueCol]: 0 },
+      paranoid: false,
+      raw: true,
+    });
+    let fixed = 0;
+    for (const r of rows) {
+      const base = baseOf(r.unit, r.unitValue);
+      const uc = unitCostOf(r.packagingItemId);
+      if (base <= 0 || uc <= 0) continue;
+      await Model.update(
+        { [valueCol]: round2(base * uc) },
+        { where: { Id: r.Id } },
+      );
+      fixed += 1;
+    }
+    if (fixed) {
+      console.log(`Backfilled ${fixed} ${Model.getTableName()} cost rows`);
+    }
+  };
+  await fixCost(db.packagingFactory);
+  await fixCost(db.packagingFactoryStock);
+};
+
+// Per-item base-unit cost: weighted-average of that item's purchases, falling
+// back to the flat Item Stock row's current unit cost.
+const buildItemUnitCostResolver = async (baseOf, round4) => {
+  const purchases = await db.manufacture.findAll({
+    attributes: ["itemId", "unit", "unitValue", "cost"],
+    paranoid: false,
+    raw: true,
+  });
+  const agg = {};
+  for (const p of purchases) {
+    const base = baseOf(p.unit, p.unitValue);
+    if (base <= 0) continue;
+    agg[p.itemId] ||= { qty: 0, value: 0 };
+    agg[p.itemId].qty += base;
+    agg[p.itemId].value += Number(p.cost) || 0;
+  }
+
+  const flatStocks = await db.itemMaster.findAll({
+    where: {
+      itemId: { [Op.ne]: null },
+      [Op.or]: [{ productId: null }, { productId: 0 }],
+    },
+    raw: true,
+  });
+  const flatUc = {};
+  for (const s of flatStocks) {
+    const base = baseOf(s.unit, s.unitValue);
+    if (base > 0 && Number(s.cost) > 0) flatUc[s.itemId] = Number(s.cost) / base;
+  }
+
+  return (itemId, fallback = 0) => {
+    const a = agg[itemId];
+    if (a && a.qty > 0) return round4(a.value / a.qty);
+    if (flatUc[itemId] > 0) return round4(flatUc[itemId]);
+    return round4(fallback);
+  };
+};
+
+// One-time: seed FIFO cost layers for manufacture raw-material items (opening
+// balance = weighted-average unit cost from that item's purchases).
+const seedItemOpeningLayers = async () => {
+  if (!db.itemCostLayer || !db.itemMaster) return;
+  if ((await db.itemCostLayer.count()) > 0) return; // already seeded
+
+  const {
+    toBaseStockPayload: toBase,
+  } = require("../helpers/unitConversionHelper");
+  const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+  const round4 = (v) => Math.round((Number(v) || 0) * 10000) / 10000;
+  const baseOf = (unit, value) => toBase(unit, value).unitValue;
+  const unitCostOf = await buildItemUnitCostResolver(baseOf, round4);
+
+  const stocks = await db.itemMaster.findAll({
+    where: {
+      itemId: { [Op.ne]: null },
+      [Op.or]: [{ productId: null }, { productId: 0 }],
+    },
+    raw: true,
+  });
+  const layerRows = [];
+  for (const s of stocks) {
+    const base = baseOf(s.unit, s.unitValue);
+    if (base <= 0) continue;
+    const fallbackUc = base > 0 ? (Number(s.cost) || 0) / base : 0;
+    const uc = unitCostOf(s.itemId, fallbackUc);
+    layerRows.push({
+      itemId: s.itemId,
+      sourceType: "OpeningBalance",
+      sourceMovementId: null,
+      receivedDate: "2000-01-01",
+      originalQty: round2(base),
+      remainingQty: round2(base),
+      unitCost: uc,
+      note: "opening balance",
+    });
+    await db.itemMaster.update(
+      { cost: round2(base * uc) },
+      { where: { Id: s.Id } },
+    );
+  }
+  if (layerRows.length) {
+    await db.itemCostLayer.bulkCreate(layerRows);
+    console.log(`Seeded ${layerRows.length} item opening cost layers`);
+  }
+};
+
+// Idempotent: any Factory Stock row still showing ৳0 gets
+// `baseQty × that item's unit cost`. Runs every boot; only touches cost=0 rows.
+const backfillFactoryStockCost = async () => {
+  if (!db.manufactureStock || !db.itemMaster) return;
+  const {
+    toBaseStockPayload: toBase,
+  } = require("../helpers/unitConversionHelper");
+  const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+  const round4 = (v) => Math.round((Number(v) || 0) * 10000) / 10000;
+  const baseOf = (unit, value) => toBase(unit, value).unitValue;
+  const unitCostOf = await buildItemUnitCostResolver(baseOf, round4);
+
+  const rows = await db.manufactureStock.findAll({
+    where: { cost: 0, itemId: { [Op.ne]: null } },
+    paranoid: false,
+    raw: true,
+  });
+  let fixed = 0;
+  for (const r of rows) {
+    const base = baseOf(r.unit, r.unitValue);
+    const uc = unitCostOf(r.itemId);
+    if (base <= 0 || uc <= 0) continue;
+    await db.manufactureStock.update(
+      { cost: round2(base * uc) },
+      { where: { Id: r.Id } },
+    );
+    fixed += 1;
+  }
+  if (fixed) console.log(`Backfilled ${fixed} factory stock cost rows`);
+};
+
 const ensureLedgerManufacturerColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.ledger.getTableName();
@@ -3634,18 +3968,74 @@ const ensureCashInOutRefNoColumn = async () => {
       allowNull: true,
     });
   }
+
+  if (!tableDefinition.dollarSupplierId) {
+    await queryInterface.addColumn(tableName, "dollarSupplierId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+};
+
+// DollarSupplierHistory gained USD breakdown columns (purchases entered in USD).
+const ensureDollarSupplierHistoryColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.dollarSupplierHistory.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.usdAmount) {
+    await queryInterface.addColumn(tableName, "usdAmount", {
+      type: DataTypes.DECIMAL(15, 2),
+      allowNull: true,
+    });
+  }
+  if (!tableDefinition.usdRate) {
+    await queryInterface.addColumn(tableName, "usdRate", {
+      type: DataTypes.DECIMAL(15, 4),
+      allowNull: true,
+    });
+  }
+};
+
+// MarketingExpense gained dollar-supplier / USD purchase columns.
+const ensureMarketingExpenseColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.marketingExpense.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  const maybeAddColumn = async (columnName, definition) => {
+    if (!tableDefinition[columnName]) {
+      await queryInterface.addColumn(tableName, columnName, definition);
+    }
+  };
+
+  await maybeAddColumn("dollarSupplierId", {
+    type: DataTypes.INTEGER(10),
+    allowNull: true,
+  });
+  await maybeAddColumn("usdAmount", {
+    type: DataTypes.DECIMAL(15, 2),
+    allowNull: true,
+  });
+  await maybeAddColumn("usdRate", {
+    type: DataTypes.DECIMAL(15, 4),
+    allowNull: true,
+  });
 };
 
 db.sequelize
   .sync({ force: false })
   .then(async () => {
     await ensureCashInOutRefNoColumn();
+    await ensureDollarSupplierHistoryColumns();
+    await ensureMarketingExpenseColumns();
     await ensureHolidayRangeColumns();
     await ensurePerformanceTrackerEntryColumns();
     await ensureAttendanceDeviceApiKeyColumn();
     await ensureEmployeeListColumns();
     await ensureEmployeeColumns();
     await ensureEmployeeWorkReportColumns();
+    await ensureChargeEmployeeColumns();
     await ensureLogisticWorkReportColumns();
     await ensureShifaReportColumns();
     await ensureShifaIncentiveColumns();
@@ -3734,6 +4124,10 @@ db.sequelize
     await ensureStockMovementCostingColumns();
     await ensureFifoCostColumns();
     await seedOpeningCostLayers();
+    await ensurePackagingFactoryCostBreakdownColumn();
+    await seedPackagingOpeningLayers();
+    await seedItemOpeningLayers();
+    await backfillFactoryStockCost();
     await ensurePackagingMixerColumns();
     await Promise.all(
       ["pettyCash", "pettyCashRequisition"].map((modelKey) =>

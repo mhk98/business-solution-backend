@@ -11,6 +11,7 @@ const {
   PackagingFactorySearchableFields,
 } = require("./packagingFactory.constants");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const pkgFifo = require("../../../shared/packagingFifoCostLayers");
 
 const PackagingFactory = db.packagingFactory;
 const PackagingItem = db.packagingItem;
@@ -168,7 +169,20 @@ const factoryStockWhere = (data) => ({
 const insertIntoDB = async (payload = {}) =>
   db.sequelize.transaction(async (t) => {
     const data = await buildPayload(payload, null, { transaction: t });
-    const record = await PackagingFactory.create(data, { transaction: t });
+
+    // FIFO: consume the oldest Packaging Item Stock cost layers for this move.
+    // The move's cost = the FIFO total (0 only when no cost was ever recorded).
+    const consumed = await pkgFifo.consumeFifo({
+      transaction: t,
+      packagingItemId: data.packagingItemId,
+      quantity: toNumber(data.unitValue),
+    });
+    data.cost = consumed.totalCost;
+
+    const record = await PackagingFactory.create(
+      { ...data, costBreakdown: consumed.costBreakdown },
+      { transaction: t },
+    );
 
     await adjustStockBalance({
       Model: PackagingItemStock,
@@ -177,6 +191,10 @@ const insertIntoDB = async (payload = {}) =>
       ...data,
       delta: -toNumber(data.unitValue),
       transaction: t,
+    });
+    await pkgFifo.syncItemStockCost({
+      transaction: t,
+      packagingItemId: data.packagingItemId,
     });
 
     await adjustStockBalance({
@@ -261,6 +279,12 @@ const deleteIdFromDB = async (id) =>
       transaction: t,
     });
 
+    // FIFO: put the consumed quantities back onto their source layers.
+    await pkgFifo.restoreToLayers({
+      transaction: t,
+      costBreakdown: existing.costBreakdown,
+    });
+
     await adjustStockBalance({
       Model: PackagingItemStock,
       where: { packagingItemId: existing.packagingItemId },
@@ -272,6 +296,10 @@ const deleteIdFromDB = async (id) =>
       delta: oldPayload.unitValue,
       transaction: t,
       createOnPositive: true,
+    });
+    await pkgFifo.syncItemStockCost({
+      transaction: t,
+      packagingItemId: existing.packagingItemId,
     });
 
     return PackagingFactory.destroy({ where: { Id: id }, transaction: t });
@@ -296,6 +324,13 @@ const updateOneFromDB = async (id, payload = {}) => {
       delta: -oldPayload.unitValue,
       transaction: t,
     });
+
+    // FIFO: undo the old move — restore its consumed layers.
+    await pkgFifo.restoreToLayers({
+      transaction: t,
+      costBreakdown: existing.costBreakdown,
+    });
+
     await adjustStockBalance({
       Model: PackagingItemStock,
       where: { packagingItemId: existing.packagingItemId },
@@ -308,8 +343,21 @@ const updateOneFromDB = async (id, payload = {}) => {
       transaction: t,
       createOnPositive: true,
     });
+    await pkgFifo.syncItemStockCost({
+      transaction: t,
+      packagingItemId: existing.packagingItemId,
+    });
 
     const data = await buildPayload(payload, existing, { transaction: t });
+
+    // FIFO: re-consume for the edited move.
+    const consumed = await pkgFifo.consumeFifo({
+      transaction: t,
+      packagingItemId: data.packagingItemId,
+      quantity: toNumber(data.unitValue),
+    });
+    data.cost = consumed.totalCost;
+
     await adjustStockBalance({
       Model: PackagingItemStock,
       where: { packagingItemId: data.packagingItemId },
@@ -317,6 +365,10 @@ const updateOneFromDB = async (id, payload = {}) => {
       ...data,
       delta: -toNumber(data.unitValue),
       transaction: t,
+    });
+    await pkgFifo.syncItemStockCost({
+      transaction: t,
+      packagingItemId: data.packagingItemId,
     });
     await adjustStockBalance({
       Model: PackagingFactoryStock,
@@ -328,10 +380,10 @@ const updateOneFromDB = async (id, payload = {}) => {
       createOnPositive: true,
     });
 
-    const [count] = await PackagingFactory.update(data, {
-      where: { Id: id },
-      transaction: t,
-    });
+    const [count] = await PackagingFactory.update(
+      { ...data, costBreakdown: consumed.costBreakdown },
+      { where: { Id: id }, transaction: t },
+    );
     return count;
   });
 };

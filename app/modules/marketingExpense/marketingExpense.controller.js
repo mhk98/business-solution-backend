@@ -32,7 +32,17 @@ const insertIntoDB = catchAsync(async (req, res) => {
     status,
     bookId,
     userId,
+    dollarSupplierId,
+    usdAmount,
+    usdRate,
   } = req.body;
+
+  const finalDollarSupplierId =
+    dollarSupplierId !== undefined &&
+    dollarSupplierId !== null &&
+    String(dollarSupplierId).trim() !== ""
+      ? Number(dollarSupplierId)
+      : null;
 
   // ✅ file optional safe
   const file = req.file?.path ? req.file.path.replace(/\\/g, "/") : null;
@@ -78,6 +88,15 @@ const insertIntoDB = catchAsync(async (req, res) => {
     file, // null allowed
     category,
     bookId,
+    dollarSupplierId: finalDollarSupplierId,
+    usdAmount:
+      usdAmount !== undefined && usdAmount !== null && String(usdAmount) !== ""
+        ? Number(usdAmount)
+        : null,
+    usdRate:
+      usdRate !== undefined && usdRate !== null && String(usdRate) !== ""
+        ? Number(usdRate)
+        : null,
   };
 
   const users = await User.findAll({

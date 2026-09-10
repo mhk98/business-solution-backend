@@ -8,8 +8,30 @@ const { Op } = require("sequelize");
 const MarketingExpense = db.marketingExpense;
 const Notification = db.notification;
 const User = db.user;
+const DollarSupplierHistory = db.dollarSupplierHistory;
 
 const insertIntoDB = async (data) => {
+  // A USD purchase from a dollar supplier: create the DM Expense row AND mirror
+  // the local amount into DollarSupplierHistory as a due, in one transaction.
+  if (data.dollarSupplierId) {
+    return db.sequelize.transaction(async (transaction) => {
+      const result = await MarketingExpense.create(data, { transaction });
+      await DollarSupplierHistory.create(
+        {
+          dollarSupplierId: data.dollarSupplierId,
+          amount: data.amount,
+          usdAmount: data.usdAmount,
+          usdRate: data.usdRate,
+          status: "Unpaid",
+          date: data.date,
+          note: data.remarks || data.note || null,
+        },
+        { transaction },
+      );
+      return result;
+    });
+  }
+
   const result = await MarketingExpense.create(data);
   return result;
 };

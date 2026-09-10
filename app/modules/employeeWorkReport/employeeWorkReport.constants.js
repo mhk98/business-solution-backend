@@ -39,6 +39,9 @@ const EmployeeWorkReportNumericFields = [
   "totalAssign",
   "totalOrder",
   "totalAmount",
+  "codChangeDiscount",
+  "shippingCharge",
+  "advancePayment",
 ];
 
 module.exports = {

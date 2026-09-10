@@ -9,6 +9,7 @@ const chargeSettingPermission = requireAnyPermission([
   "cod_charge",
   "delivery_advance",
   "delivery_charge",
+  "shipping_charge",
 ]);
 
 router.get(

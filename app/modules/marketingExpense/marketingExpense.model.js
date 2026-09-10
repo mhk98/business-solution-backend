@@ -46,6 +46,21 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      // A DM Expense entry can be a USD purchase from a dollar supplier: the
+      // local amount above = usdAmount * usdRate, and it also mirrors into
+      // DollarSupplierHistory as a due.
+      dollarSupplierId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
+      usdAmount: {
+        type: DataTypes.DECIMAL(15, 2),
+        allowNull: true,
+      },
+      usdRate: {
+        type: DataTypes.DECIMAL(15, 4),
+        allowNull: true,
+      },
       status: {
         type: DataTypes.STRING,
         allowNull: true,

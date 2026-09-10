@@ -202,6 +202,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     loanId,
     bookId,
     supplierId,
+    dollarSupplierId,
     manufacturerId,
     packagingManufacturerId,
     ownerId,
@@ -259,6 +260,23 @@ const insertIntoDB = catchAsync(async (req, res) => {
 
   if (isCashOut && finalSupplierId !== null && Number.isNaN(finalSupplierId)) {
     throw new ApiError(400, "SupplierId must be a valid number");
+  }
+
+  // ✅ dollarSupplierId sanitize only for CashOut
+  const finalDollarSupplierId =
+    isCashOut &&
+    dollarSupplierId !== undefined &&
+    dollarSupplierId !== null &&
+    String(dollarSupplierId).trim() !== ""
+      ? Number(dollarSupplierId)
+      : null;
+
+  if (
+    isCashOut &&
+    finalDollarSupplierId !== null &&
+    Number.isNaN(finalDollarSupplierId)
+  ) {
+    throw new ApiError(400, "DollarSupplierId must be a valid number");
   }
 
   // ✅ manufacturerId sanitize only for CashOut
@@ -360,6 +378,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     categoryId,
     bookId,
     supplierId: finalSupplierId, // ✅ only CashOut হলে value যাবে, নাহলে null
+    dollarSupplierId: finalDollarSupplierId, // ✅ only CashOut হলে value যাবে, নাহলে null
     manufacturerId: finalManufacturerId, // ✅ only CashOut হলে value যাবে, নাহলে null
     packagingManufacturerId: finalPackagingManufacturerId, // ✅ only CashOut হলে value যাবে, নাহলে null
     ownerId: finalOwnerId,
@@ -518,6 +537,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     lender,
     loanId,
     supplierId,
+    dollarSupplierId,
     manufacturerId,
     packagingManufacturerId,
     ownerId,
@@ -633,6 +653,8 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     loanId: shouldTrackLoan ? loanFields.loanId : null,
     bookId: bookId || undefined,
     supplierId: supplierId !== undefined ? supplierId || null : undefined,
+    dollarSupplierId:
+      dollarSupplierId !== undefined ? dollarSupplierId || null : undefined,
     manufacturerId:
       manufacturerId !== undefined ? manufacturerId || null : undefined,
     packagingManufacturerId:

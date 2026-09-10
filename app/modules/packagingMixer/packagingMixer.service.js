@@ -178,7 +178,7 @@ const adjustFactoryStock = async ({
 
   const currentCost = toNumber(stockRow.cost);
   const currentUnitCost = current.unitValue > 0 ? currentCost / current.unitValue : 0;
-  const updated = await stockRow.update(
+  await stockRow.update(
     {
       unitValue: nextQuantity,
       cost: Math.max(0, currentCost + delta * currentUnitCost),
@@ -200,7 +200,10 @@ const adjustFactoryStock = async ({
     balanceBefore,
     balanceAfter: nextQuantity,
   });
-  return updated;
+  // Cost of the packaging material consumed by this line (0 when adding back).
+  const consumedCost =
+    delta < 0 ? Math.round(Math.abs(delta) * currentUnitCost * 100) / 100 : 0;
+  return { consumedCost };
 };
 
 const createWageTransaction = async (data, transaction) => {
@@ -263,20 +266,36 @@ const buildPayload = async (payload, existing = null) => {
 };
 
 const applyRecordEffects = async (data, recordId, transaction) => {
+  // Sum the FIFO-costed packaging material consumed across all lines.
+  let packagingCost = 0;
   for (const item of data.packagingItems || []) {
-    await adjustFactoryStock({
+    const { consumedCost } = await adjustFactoryStock({
       stockId: item.packagingFactoryStockId,
       delta: -toNumber(item.unitValue),
       transaction,
+      sourceId: recordId,
     });
+    packagingCost += toNumber(consumedCost);
   }
+
+  // Finished item cost = packaging material consumed + wage + others.
+  const producedCost = packagingCost + toNumber(data.wageAmount);
+  const producedUnitCost =
+    toNumber(data.unitValue) > 0
+      ? Math.round((producedCost / toNumber(data.unitValue)) * 10000) / 10000
+      : 0;
+
+  await PackagingMixer.update(
+    { unitCost: producedUnitCost },
+    { where: { Id: recordId }, transaction },
+  );
 
   await adjustItemStock({
     itemId: data.itemId,
     name: data.name,
     unit: data.unit,
     unitValue: data.unitValue,
-    cost: data.unitValue * data.unitCost,
+    cost: Math.round(producedCost * 100) / 100,
     delta: data.unitValue,
     transaction,
   });

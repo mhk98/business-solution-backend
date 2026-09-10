@@ -7,6 +7,7 @@ const CashInOut = db.cashInOut;
 const Notification = db.notification;
 const User = db.user;
 const SupplierHistory = db.supplierHistory;
+const DollarSupplierHistory = db.dollarSupplierHistory;
 const Loan = db.loan;
 const Category = db.category;
 const Owner = db.owner;
@@ -232,6 +233,7 @@ const insertIntoDB = async (data) => {
     date,
     bookId,
     supplierId,
+    dollarSupplierId,
     manufacturerId,
     packagingManufacturerId,
     ownerId,
@@ -248,6 +250,10 @@ const insertIntoDB = async (data) => {
     supplierId !== undefined &&
     supplierId !== null &&
     String(supplierId) !== "";
+  const hasDollarSupplierId =
+    dollarSupplierId !== undefined &&
+    dollarSupplierId !== null &&
+    String(dollarSupplierId) !== "";
   const hasManufacturerId =
     manufacturerId !== undefined &&
     manufacturerId !== null &&
@@ -337,6 +343,24 @@ const insertIntoDB = async (data) => {
       console.log("supplierData", supplierData);
 
       await SupplierHistory.create(supplierData, { transaction: t });
+    }
+
+    // Dollar Supplier — CashOut only (controller nulls dollarSupplierId for
+    // CashIn), mirrors the supplier-history flow above.
+    if (hasDollarSupplierId) {
+      await DollarSupplierHistory.create(
+        {
+          dollarSupplierId,
+          bookId,
+          cashInOutId: result.Id,
+          amount,
+          status: "Paid",
+          date,
+          file,
+          note,
+        },
+        { transaction: t },
+      );
     }
 
     if (hasManufacturerId) {
@@ -896,6 +920,7 @@ const updateOneFromDB = async (id, payload) => {
     userId,
     bookId,
     supplierId,
+    dollarSupplierId,
     manufacturerId,
     packagingManufacturerId,
     ownerId,
@@ -909,6 +934,10 @@ const updateOneFromDB = async (id, payload) => {
     supplierId !== undefined &&
     supplierId !== null &&
     String(supplierId) !== "";
+  const hasDollarSupplierId =
+    dollarSupplierId !== undefined &&
+    dollarSupplierId !== null &&
+    String(dollarSupplierId) !== "";
   const hasManufacturerId =
     manufacturerId !== undefined &&
     manufacturerId !== null &&
@@ -981,6 +1010,47 @@ const updateOneFromDB = async (id, payload) => {
       };
 
       await SupplierHistory.create(supplierData, { transaction: t });
+    }
+
+    // Dollar Supplier — keep one history row per cash entry (upsert by
+    // cashInOutId) so editing the Book entry doesn't pile up duplicates.
+    const existingDollarSupplierHistory = await DollarSupplierHistory.findOne({
+      where: { cashInOutId: id },
+      transaction: t,
+      paranoid: false,
+    });
+
+    if (hasDollarSupplierId) {
+      const dollarSupplierData = {
+        dollarSupplierId,
+        bookId,
+        cashInOutId: id,
+        status: "Paid",
+        date,
+        file,
+        note,
+        ...(amount !== undefined && amount !== null && String(amount) !== ""
+          ? { amount }
+          : {}),
+      };
+
+      if (existingDollarSupplierHistory) {
+        if (
+          existingDollarSupplierHistory.deletedAt &&
+          typeof existingDollarSupplierHistory.restore === "function"
+        ) {
+          await existingDollarSupplierHistory.restore({ transaction: t });
+        }
+        await existingDollarSupplierHistory.update(dollarSupplierData, {
+          transaction: t,
+        });
+      } else {
+        await DollarSupplierHistory.create(dollarSupplierData, {
+          transaction: t,
+        });
+      }
+    } else if (existingDollarSupplierHistory) {
+      await existingDollarSupplierHistory.destroy({ transaction: t });
     }
 
     if (hasManufacturerId) {

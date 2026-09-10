@@ -11,6 +11,7 @@ const {
   PackagingItemPurchaseSearchableFields,
 } = require("./packagingItemPurchase.constants");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const pkgFifo = require("../../../shared/packagingFifoCostLayers");
 
 const PackagingItemPurchase = db.packagingItemPurchase;
 const PackagingItemStock = db.packagingItemStock;
@@ -308,6 +309,24 @@ const insertIntoDB = async (payload) => {
         sourceId: purchase.Id,
       });
 
+      // FIFO: open a cost layer for this purchase batch (per base-unit cost).
+      await pkgFifo.openLayer({
+        transaction: t,
+        packagingItemId: item.packagingItemId,
+        unitCost:
+          toNumber(item.unitValue) > 0
+            ? toNumber(item.cost) / toNumber(item.unitValue)
+            : 0,
+        quantity: item.unitValue,
+        receivedDate: date || new Date().toISOString().slice(0, 10),
+        sourceType: "PackagingItemPurchase",
+        sourceMovementId: purchase.Id,
+      });
+      await pkgFifo.syncItemStockCost({
+        transaction: t,
+        packagingItemId: item.packagingItemId,
+      });
+
       purchases.push(purchase);
     }
 
@@ -419,6 +438,17 @@ const deleteIdFromDB = async (id) => {
       transaction: t,
     });
 
+    // FIFO: unwind this purchase's layer contribution (newest first).
+    await pkgFifo.unwindInbound({
+      transaction: t,
+      packagingItemId: existing.packagingItemId,
+      quantity: existingPayload.unitValue,
+    });
+    await pkgFifo.syncItemStockCost({
+      transaction: t,
+      packagingItemId: existing.packagingItemId,
+    });
+
     await updateSupplierHistoryAmount({
       supplierHistoryId: existing.supplierHistoryId,
       amountDelta: deleteAmountDelta,
@@ -507,6 +537,38 @@ const updateOneFromDB = async (id, payload) => {
       transaction: t,
       createOnPositive: true,
     });
+
+    // FIFO: unwind the old layer contribution, open a fresh one for the edit.
+    await pkgFifo.unwindInbound({
+      transaction: t,
+      packagingItemId: existing.packagingItemId,
+      quantity: existingPayload.unitValue,
+    });
+    await pkgFifo.openLayer({
+      transaction: t,
+      packagingItemId: nextPackagingItemId,
+      unitCost:
+        normalizedPayload.unitValue > 0
+          ? toNumber(nextCost) / normalizedPayload.unitValue
+          : 0,
+      quantity: normalizedPayload.unitValue,
+      receivedDate:
+        payload.date ||
+        existing.date ||
+        new Date().toISOString().slice(0, 10),
+      sourceType: "PackagingItemPurchase",
+      sourceMovementId: id,
+    });
+    await pkgFifo.syncItemStockCost({
+      transaction: t,
+      packagingItemId: existing.packagingItemId,
+    });
+    if (Number(nextPackagingItemId) !== Number(existing.packagingItemId)) {
+      await pkgFifo.syncItemStockCost({
+        transaction: t,
+        packagingItemId: nextPackagingItemId,
+      });
+    }
 
     const nextSupplierId =
       payload.supplierId === "" || payload.supplierId == null

@@ -15,6 +15,7 @@ const PROTECTED_MODEL_KEYS = new Set([
   "codChange",
   "deliveryCharge",
   "deliveryAdvance",
+  "shippingCharge",
 ]);
 
 const isModel = (value) =>

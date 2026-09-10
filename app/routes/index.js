@@ -25,6 +25,8 @@ const PayableRoutes = require("../modules/payable/payable.routes");
 const OverviewRoutes = require("../modules/overview/overview.routes");
 const AssetsDamageRoutes = require("../modules/assetsDamage/assetsDamage.routes");
 const SupplierRoutes = require("../modules/supplier/supplier.routes");
+const DollarSupplierRoutes = require("../modules/dollarSupplier/dollarSupplier.routes");
+const DollarSupplierHistoryRoutes = require("../modules/dollarSupplierHistory/dollarSupplierHistory.routes");
 const LoanRoutes = require("../modules/loan/loan.routes");
 const OwnerRoutes = require("../modules/owner/owner.routes");
 const OwnerTransactionRoutes = require("../modules/ownerTransaction/ownerTransaction.routes");
@@ -414,6 +416,14 @@ const moduleRoutes = [
   {
     path: "/supplier",
     route: SupplierRoutes,
+  },
+  {
+    path: "/dollar-supplier",
+    route: DollarSupplierRoutes,
+  },
+  {
+    path: "/dollar-supplier-history",
+    route: DollarSupplierHistoryRoutes,
   },
   {
     path: "/loan",

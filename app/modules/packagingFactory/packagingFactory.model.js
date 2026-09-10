@@ -42,6 +42,12 @@ module.exports = (sequelize, DataTypes) => {
         defaultValue: 0,
         allowNull: false,
       },
+      // FIFO layers this move consumed from Packaging Item Stock:
+      // [{ layerId, qty, unitCost }] — used to restore on edit/delete.
+      costBreakdown: {
+        type: DataTypes.JSON,
+        allowNull: true,
+      },
       date: {
         type: DataTypes.DATEONLY,
         allowNull: true,

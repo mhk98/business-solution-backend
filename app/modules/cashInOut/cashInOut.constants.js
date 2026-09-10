@@ -12,6 +12,7 @@ const CashInOutFilterAbleFields = [
   "refNo",
   "bookId",
   "supplierId",
+  "dollarSupplierId",
   "ownerId",
   "directorId",
 ];

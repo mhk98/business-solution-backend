@@ -34,6 +34,13 @@ const CodCharge = db.codCharge;
 const CodChange = db.codChange;
 const DeliveryCharge = db.deliveryCharge;
 const DeliveryAdvance = db.deliveryAdvance;
+const ShippingCharge = db.shippingCharge;
+
+// Delivery advances synced from CS Work Reports are "table entry only" — they
+// must not move net revenue the way manually recorded advances do.
+const NON_WORK_REPORT_SOURCE = {
+  [Op.or]: [{ source: { [Op.is]: null } }, { source: { [Op.ne]: "cs_work_report" } }],
+};
 const UserLogHistory = db.userLogHistory;
 const StellarAttendanceLog = db.stellarAttendanceLog;
 const EmployeeList = db.employeeList;
@@ -900,6 +907,7 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     totalCodChange,
     totalDeliveryCharge,
     totalDeliveryAdvance,
+    totalShippingCharge,
     lowStockCount,
     pendingPurchaseRequisitionCount,
     pendingPettyCashRequisitionCount,
@@ -961,7 +969,11 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     sumField(CodCharge, "amount", transactionDateWhere),
     sumField(CodChange, "amount", transactionDateWhere),
     sumField(DeliveryCharge, "amount", transactionDateWhere),
-    sumField(DeliveryAdvance, "amount", transactionDateWhere),
+    sumField(DeliveryAdvance, "amount", {
+      ...transactionDateWhere,
+      ...NON_WORK_REPORT_SOURCE,
+    }),
+    sumField(ShippingCharge, "amount", transactionDateWhere),
     countLowStockProducts(snapshotWhere),
     countWhere(PurchaseRequisition, {
       ...transactionDateWhere,
@@ -993,7 +1005,8 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
       n(totalCodCharge) -
       n(totalCodChange) -
       n(totalDeliveryCharge) +
-      n(totalDeliveryAdvance),
+      n(totalDeliveryAdvance) +
+      n(totalShippingCharge),
   );
   const netPurchase = n(inTransitPurchaseAmount - salesReturnPurchaseAmount);
   const grossProfit = n(netRevenue - netPurchase);
@@ -1042,6 +1055,7 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     totalCodChange,
     totalDeliveryCharge,
     totalDeliveryAdvance,
+    totalShippingCharge,
     netSalesBeforeCharges,
     netRevenue,
     netPurchase,

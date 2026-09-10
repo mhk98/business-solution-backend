@@ -8,6 +8,7 @@ const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const { ManufactureSearchableFields } = require("./manufacture.constants");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const itemFifo = require("../../../shared/itemFifoCostLayers");
 const Manufacture = db.manufacture;
 const Notification = db.notification;
 const User = db.user;
@@ -271,6 +272,20 @@ const insertIntoDB = async (payload) => {
         stockType: "ItemStock",
       },
     });
+
+    // FIFO: raw-material item purchases open a cost layer at Item Stock level.
+    if (!productId) {
+      await itemFifo.openLayer({
+        transaction: t,
+        itemId,
+        unitCost: calculatedUnitCost,
+        quantity: totalUnitValue,
+        receivedDate: date || new Date().toISOString().slice(0, 10),
+        sourceType: "ItemPurchase",
+        sourceMovementId: manufactureRecord.Id,
+      });
+      await itemFifo.syncItemStockCost({ transaction: t, itemId });
+    }
 
     return manufactureRecord;
   });
@@ -581,6 +596,18 @@ const deleteIdFromDB = async (id) => {
       },
     });
 
+    if (!existing.productId) {
+      await itemFifo.unwindInbound({
+        transaction: t,
+        itemId: existing.itemId,
+        quantity: oldUnitValue,
+      });
+      await itemFifo.syncItemStockCost({
+        transaction: t,
+        itemId: existing.itemId,
+      });
+    }
+
     return Manufacture.destroy({
       where: { Id: id },
       transaction: t,
@@ -725,6 +752,32 @@ const updateOneFromDB = async (id, payload) => {
         stockType: "ItemStock",
       },
     });
+
+    // FIFO: unwind the old purchase layer, open a fresh one for the edit.
+    if (!oldProductId) {
+      await itemFifo.unwindInbound({
+        transaction: t,
+        itemId: oldItemId,
+        quantity: oldUnitValue,
+      });
+      await itemFifo.syncItemStockCost({ transaction: t, itemId: oldItemId });
+    }
+    if (!nextProductId) {
+      await itemFifo.openLayer({
+        transaction: t,
+        itemId: nextItemId,
+        unitCost:
+          totalUnitValue > 0 ? toNumber(nextTotalCost) / totalUnitValue : 0,
+        quantity: totalUnitValue,
+        receivedDate:
+          String(date || "").slice(0, 10) ||
+          existing.date ||
+          new Date().toISOString().slice(0, 10),
+        sourceType: "ItemPurchase",
+        sourceMovementId: id,
+      });
+      await itemFifo.syncItemStockCost({ transaction: t, itemId: nextItemId });
+    }
 
     const [count] = await Manufacture.update(data, {
       where: { Id: id },

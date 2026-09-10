@@ -11,6 +11,68 @@ const EmployeeWorkReport = db.employeeWorkReport;
 const User = db.user;
 const EmployeeList = db.employeeList;
 
+// The 3 money fields on a work report each mirror into a charge-settings table
+// as a "cs_work_report"-sourced row, keyed by the report id so re-saves upsert.
+const CHARGE_SYNC_TARGETS = [
+  {
+    field: "codChangeDiscount",
+    model: () => db.codChange,
+    note: "CS Work Report — Discount (COD Change)",
+  },
+  {
+    field: "shippingCharge",
+    model: () => db.shippingCharge,
+    note: "CS Work Report — Shipping Charge",
+  },
+  {
+    field: "advancePayment",
+    model: () => db.deliveryAdvance,
+    note: "CS Work Report — Advance Payment",
+  },
+];
+
+const syncWorkReportCharges = async (report) => {
+  for (const { field, model, note } of CHARGE_SYNC_TARGETS) {
+    const Model = model();
+    if (!Model) continue;
+
+    const amount = Number(report[field] || 0);
+    const existing = await Model.findOne({
+      where: { employeeWorkReportId: report.Id },
+      paranoid: false,
+    });
+
+    if (amount > 0) {
+      const data = {
+        date: String(report.reportDate).slice(0, 10),
+        amount: amount.toFixed(2),
+        note,
+        source: "cs_work_report",
+        employeeId: report.employeeId || null,
+        employeeWorkReportId: report.Id,
+        createdByUserId: report.userId || null,
+      };
+
+      if (existing) {
+        if (existing.deletedAt) await existing.restore();
+        await existing.update(data);
+      } else {
+        await Model.create(data);
+      }
+    } else if (existing && !existing.deletedAt) {
+      await existing.destroy();
+    }
+  }
+};
+
+const removeWorkReportCharges = async (reportId) => {
+  for (const { model } of CHARGE_SYNC_TARGETS) {
+    const Model = model();
+    if (!Model) continue;
+    await Model.destroy({ where: { employeeWorkReportId: reportId } });
+  }
+};
+
 const PRIVILEGED_ROLES = new Set(["superAdmin", "admin", "marketer"]);
 const TOTAL_ASSIGN_SOURCE_FIELDS = [
   "failedGiven",
@@ -295,6 +357,8 @@ const createReport = async (payload, actor) => {
     ...data,
   });
 
+  await syncWorkReportCharges(result);
+
   return getDataById(result.Id, actor);
 };
 
@@ -324,6 +388,7 @@ const updateReport = async (id, payload, actor) => {
   }
 
   await existing.update(data);
+  await syncWorkReportCharges(existing);
   return getDataById(id, actor);
 };
 
@@ -337,6 +402,7 @@ const deleteReport = async (id, actor) => {
   }
 
   await existing.destroy();
+  await removeWorkReportCharges(existing.Id);
   return { deleted: true };
 };
 

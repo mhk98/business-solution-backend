@@ -8,6 +8,7 @@ const {
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const itemFifo = require("../../../shared/itemFifoCostLayers");
 const {
   ManufactureProductionSearchableFields,
 } = require("./manufactureProduction.constants");
@@ -280,9 +281,22 @@ const insertIntoDB = async (payload = {}) => {
   return db.sequelize.transaction(async (t) => {
     const data = await buildPayload(payload, null, { transaction: t });
 
-    const productionRecord = await ManufactureProduction.create(data, {
-      transaction: t,
-    });
+    // FIFO: consume the oldest Item Stock layers for this production. The move's
+    // cost = the FIFO total (only when it consumes the flat raw-material pool).
+    let consumed = null;
+    if (!data.productId) {
+      consumed = await itemFifo.consumeFifo({
+        transaction: t,
+        itemId: data.itemId,
+        quantity: toNumber(data.unitValue),
+      });
+      data.cost = consumed.totalCost;
+    }
+
+    const productionRecord = await ManufactureProduction.create(
+      consumed ? { ...data, costBreakdown: consumed.costBreakdown } : data,
+      { transaction: t },
+    );
 
     await adjustStockBalance({
       Model: ItemMaster,
@@ -298,6 +312,9 @@ const insertIntoDB = async (payload = {}) => {
         stockType: "ItemStock",
       },
     });
+    if (!data.productId) {
+      await itemFifo.syncItemStockCost({ transaction: t, itemId: data.itemId });
+    }
 
     await adjustStockBalance({
       Model: ManufacturerStock,
@@ -415,6 +432,14 @@ const deleteIdFromDB = async (id) => {
       },
     });
 
+    if (!data.productId) {
+      await itemFifo.restoreToLayers({
+        transaction: t,
+        costBreakdown: existing.costBreakdown,
+      });
+      await itemFifo.syncItemStockCost({ transaction: t, itemId: data.itemId });
+    }
+
     return ManufactureProduction.destroy({ where: { Id: id }, transaction: t });
   });
 };
@@ -465,6 +490,29 @@ const updateOneFromDB = async (id, payload = {}) => {
       },
     });
 
+    // FIFO: undo the old production's layer consumption.
+    if (!oldData.productId) {
+      await itemFifo.restoreToLayers({
+        transaction: t,
+        costBreakdown: existing.costBreakdown,
+      });
+      await itemFifo.syncItemStockCost({
+        transaction: t,
+        itemId: oldData.itemId,
+      });
+    }
+
+    // FIFO: re-consume for the edited production.
+    let consumed = null;
+    if (!nextData.productId) {
+      consumed = await itemFifo.consumeFifo({
+        transaction: t,
+        itemId: nextData.itemId,
+        quantity: toNumber(nextData.unitValue),
+      });
+      nextData.cost = consumed.totalCost;
+    }
+
     await adjustStockBalance({
       Model: ItemMaster,
       where: buildItemStockWhere(nextData),
@@ -479,6 +527,12 @@ const updateOneFromDB = async (id, payload = {}) => {
         stockType: "ItemStock",
       },
     });
+    if (!nextData.productId) {
+      await itemFifo.syncItemStockCost({
+        transaction: t,
+        itemId: nextData.itemId,
+      });
+    }
 
     await adjustStockBalance({
       Model: ManufacturerStock,
@@ -496,10 +550,10 @@ const updateOneFromDB = async (id, payload = {}) => {
       },
     });
 
-    const [count] = await ManufactureProduction.update(nextData, {
-      where: { Id: id },
-      transaction: t,
-    });
+    const [count] = await ManufactureProduction.update(
+      consumed ? { ...nextData, costBreakdown: consumed.costBreakdown } : nextData,
+      { where: { Id: id }, transaction: t },
+    );
 
     return count;
   });
