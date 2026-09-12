@@ -363,10 +363,11 @@ db.supplierHistory =
     DataTypes,
   );
 
-db.dollarSupplier = require("../app/modules/dollarSupplier/dollarSupplier.model")(
-  db.sequelize,
-  DataTypes,
-);
+db.dollarSupplier =
+  require("../app/modules/dollarSupplier/dollarSupplier.model")(
+    db.sequelize,
+    DataTypes,
+  );
 db.dollarSupplierHistory =
   require("../app/modules/dollarSupplierHistory/dollarSupplierHistory.model")(
     db.sequelize,
@@ -2958,7 +2959,7 @@ const ensureStockMovementCostingColumns = async () => {
 // this instead of catalog price. Nullable + additive.
 const ensureFifoCostColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
-  for (const model of [db.inTransitProduct, db.returnProduct]) {
+  for (const model of [db.inTransitProduct, db.returnProduct, db.posReport]) {
     if (!model) continue;
     const tableName = model.getTableName();
     const def = await queryInterface.describeTable(tableName);
@@ -3184,42 +3185,12 @@ const seedPackagingOpeningLayers = async () => {
 };
 
 // Per-item base-unit cost: weighted-average of that item's purchases, falling
-// back to the flat Item Stock row's current unit cost.
-const buildItemUnitCostResolver = async (baseOf, round4) => {
-  const purchases = await db.manufacture.findAll({
-    attributes: ["itemId", "unit", "unitValue", "cost"],
-    paranoid: false,
-    raw: true,
-  });
-  const agg = {};
-  for (const p of purchases) {
-    const base = baseOf(p.unit, p.unitValue);
-    if (base <= 0) continue;
-    agg[p.itemId] ||= { qty: 0, value: 0 };
-    agg[p.itemId].qty += base;
-    agg[p.itemId].value += Number(p.cost) || 0;
-  }
-
-  const flatStocks = await db.itemMaster.findAll({
-    where: {
-      itemId: { [Op.ne]: null },
-      [Op.or]: [{ productId: null }, { productId: 0 }],
-    },
-    raw: true,
-  });
-  const flatUc = {};
-  for (const s of flatStocks) {
-    const base = baseOf(s.unit, s.unitValue);
-    if (base > 0 && Number(s.cost) > 0) flatUc[s.itemId] = Number(s.cost) / base;
-  }
-
-  return (itemId, fallback = 0) => {
-    const a = agg[itemId];
-    if (a && a.qty > 0) return round4(a.value / a.qty);
-    if (flatUc[itemId] > 0) return round4(flatUc[itemId]);
-    return round4(fallback);
-  };
-};
+// back to the flat Item Stock row's current unit cost. Shared with
+// manufactureStock.service.js so live Factory Stock reads can show the same
+// "last known" cost this backfill uses.
+const {
+  buildItemUnitCostResolver,
+} = require("../shared/itemUnitCostResolver");
 
 // One-time: seed FIFO cost layers for manufacture raw-material items (opening
 // balance = weighted-average unit cost from that item's purchases).
@@ -3231,9 +3202,8 @@ const seedItemOpeningLayers = async () => {
     toBaseStockPayload: toBase,
   } = require("../helpers/unitConversionHelper");
   const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
-  const round4 = (v) => Math.round((Number(v) || 0) * 10000) / 10000;
   const baseOf = (unit, value) => toBase(unit, value).unitValue;
-  const unitCostOf = await buildItemUnitCostResolver(baseOf, round4);
+  const unitCostOf = await buildItemUnitCostResolver();
 
   const stocks = await db.itemMaster.findAll({
     where: {
@@ -3277,9 +3247,8 @@ const backfillFactoryStockCost = async () => {
     toBaseStockPayload: toBase,
   } = require("../helpers/unitConversionHelper");
   const round2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
-  const round4 = (v) => Math.round((Number(v) || 0) * 10000) / 10000;
   const baseOf = (unit, value) => toBase(unit, value).unitValue;
-  const unitCostOf = await buildItemUnitCostResolver(baseOf, round4);
+  const unitCostOf = await buildItemUnitCostResolver();
 
   const rows = await db.manufactureStock.findAll({
     where: { cost: 0, itemId: { [Op.ne]: null } },

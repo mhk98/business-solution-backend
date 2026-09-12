@@ -7,8 +7,23 @@ const db = require("../../../models");
 const {
   ManufactureStockSearchableFields,
 } = require("./manufactureStock.constants");
+const {
+  buildItemUnitCostResolver,
+} = require("../../../shared/itemUnitCostResolver");
 
 const ManufactureStock = db.manufactureStock;
+
+// Weighted-avg purchase cost (falling back to the flat Item Stock unit cost)
+// per itemId, so a Factory Stock row still shows a reference unit cost after
+// its own running `cost` has gone to 0 (quantity fully consumed).
+const attachLastUnitCost = async (rows) => {
+  if (!rows.length) return rows;
+  const unitCostOf = await buildItemUnitCostResolver();
+  return rows.map((row) => ({
+    ...row,
+    lastUnitCost: row.itemId ? unitCostOf(row.itemId, 0) : 0,
+  }));
+};
 
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
@@ -73,7 +88,7 @@ const getAllFromDB = async (filters, options) => {
       totalQuantity: totalQuantity || 0,
       totalBalance: Number(totalBalance || 0),
     },
-    data: data.map(formatStockForDisplay),
+    data: await attachLastUnitCost(data.map(formatStockForDisplay)),
   };
 };
 
@@ -82,7 +97,7 @@ const getDataById = async (id) => {
     where: { productId: id },
   });
 
-  return data.map(formatStockForDisplay);
+  return attachLastUnitCost(data.map(formatStockForDisplay));
 };
 
 const getAllFromDBWithoutQuery = async () => {
@@ -91,7 +106,7 @@ const getAllFromDBWithoutQuery = async () => {
     order: [["createdAt", "DESC"]],
   });
 
-  return data.map(formatStockForDisplay);
+  return attachLastUnitCost(data.map(formatStockForDisplay));
 };
 
 const ManufactureStockService = {

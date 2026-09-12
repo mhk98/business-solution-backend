@@ -12,6 +12,10 @@ const {
   getSupplierDueReport,
 } = require("../supplier/supplier.service");
 const {
+  getDollarSupplierReceivableReport,
+  getDollarSupplierDueReport,
+} = require("../dollarSupplier/dollarSupplier.service");
+const {
   getManufacturerReceivableReport,
   getManufacturerDueReport,
 } = require("../manufacturer/manufacturer.service");
@@ -32,6 +36,22 @@ const {
 const {
   getDirectorInvestmentReport,
 } = require("../director/director.service");
+const {
+  currentAverageCostMap: currentAverageProductCostMap,
+  lastKnownUnitCostMap: lastKnownProductUnitCostMap,
+} = require("../../../shared/fifoCostLayers");
+const {
+  lastKnownUnitCostMap: lastKnownItemUnitCostMap,
+} = require("../../../shared/itemFifoCostLayers");
+const {
+  lastKnownUnitCostMap: lastKnownPackagingUnitCostMap,
+} = require("../../../shared/packagingFifoCostLayers");
+const {
+  buildItemUnitCostResolver,
+} = require("../../../shared/itemUnitCostResolver");
+const {
+  buildPackagingUnitCostResolver,
+} = require("../../../shared/packagingUnitCostResolver");
 
 const ReceivedProduct = db.receivedProduct;
 const PurchaseReturnProduct = db.purchaseReturnProduct;
@@ -48,6 +68,10 @@ const DamageReparingStock = db.damageReparingStock;
 const StockMovement = db.stockMovement;
 const ItemMaster = db.itemMaster;
 const PackagingItemStock = db.packagingItemStock;
+const ManufactureStock = db.manufactureStock;
+const PackagingFactoryStock = db.packagingFactoryStock;
+const CashInOut = db.cashInOut;
+const PettyCash = db.pettyCash;
 
 const n = (v) => Number(v || 0);
 const REPORT_STOCK_FIELDS = [
@@ -549,11 +573,25 @@ const buildFutureDateWhere = (to) => {
 
 const getCatalogPriceMapByKey = async (rows = []) => {
   const map = new Map();
+  const plainRows = rows.map((row) =>
+    typeof row?.get === "function" ? row.get({ plain: true }) : row,
+  );
 
-  rows.forEach((row) => {
-    const plain = typeof row?.get === "function" ? row.get({ plain: true }) : row;
+  // Same "no invented numbers, but don't show ৳0 when real FIFO history
+  // exists" fallback as the main All Books path — this map feeds the legacy
+  // /inventory/reports endpoint, used as a fallback when the primary report
+  // isn't available on the export.
+  const productIds = plainRows.map((row) => row.productId).filter(Boolean);
+  const [avgMap, lastMap] = await Promise.all([
+    currentAverageProductCostMap(productIds),
+    lastKnownProductUnitCostMap(productIds),
+  ]);
+
+  plainRows.forEach((plain) => {
+    const pid = Number(plain.productId);
+    const fifoFallback = avgMap.get(pid) || lastMap.get(pid) || 0;
     const price = {
-      purchase_price: n(plain.purchase_price),
+      purchase_price: n(plain.purchase_price) || fifoFallback,
       sale_price: n(plain.sale_price),
     };
     const key = getRowProductKey(plain);
@@ -1097,12 +1135,30 @@ const computeStockMovementLedgerReport = async ({ from, to, name } = {}) => {
     InventoryMaster.findAll({
       where: nameWhere,
       attributes: ["productId", "purchase_price"],
+      paranoid: false,
       raw: true,
     }),
   ]);
   const purchasePriceByProductId = new Map(
     currentPriceRows.map((row) => [Number(row.productId), n(row.purchase_price)]),
   );
+  // `InventoryMaster.purchase_price` is overwritten with whatever the LATEST
+  // purchase cost was (see receivedProduct.service.js) — it does not reflect
+  // which lots are actually still in stock, so a product with two purchases
+  // at different prices reports the wrong number for whatever's really left.
+  // The true lot-aware price is the weighted average of currently-open FIFO
+  // layers; fall back to the last known layer (fully depleted right now) and
+  // finally to the catalog `purchase_price` (no FIFO history at all).
+  // Sourced from the movement rows themselves (not `currentPriceRows`) so a
+  // product whose InventoryMaster row is soft-deleted still gets priced —
+  // its historical movements and FIFO layers are unaffected by that.
+  const productIds = [
+    ...new Set(rows.map((row) => row.productId).filter(Boolean)),
+  ];
+  const [currentAvgPriceByProductId, lastKnownPriceByProductId] = await Promise.all([
+    currentAverageProductCostMap(productIds),
+    lastKnownProductUnitCostMap(productIds),
+  ]);
 
   const map = new Map();
 
@@ -1119,8 +1175,12 @@ const computeStockMovementLedgerReport = async ({ from, to, name } = {}) => {
 
     const closingQty = n(row.balanceAfter);
     entry[`${stockType}Closing`] = closingQty;
+    const pid = Number(row.productId);
     entry[`${stockType}PurchasePrice`] =
-      purchasePriceByProductId.get(Number(row.productId)) || 0;
+      currentAvgPriceByProductId.get(pid) ||
+      lastKnownPriceByProductId.get(pid) ||
+      purchasePriceByProductId.get(pid) ||
+      0;
 
     if (row.date < from) {
       entry[`${stockType}Opening`] = closingQty;
@@ -1136,14 +1196,16 @@ const computeStockMovementLedgerReport = async ({ from, to, name } = {}) => {
     .map((row) => {
       const result = { productId: row.productId, productsName: row.productsName };
       STOCK_LEDGER_TYPES.forEach((stockType) => {
+        const opening = n(row[`${stockType}Opening`]);
         const closing = n(row[`${stockType}Closing`]);
-        result[`${stockType}Opening`] = n(row[`${stockType}Opening`]);
+        const price = n(row[`${stockType}PurchasePrice`]);
+        result[`${stockType}Opening`] = opening;
         result[`${stockType}In`] = n(row[`${stockType}In`]);
         result[`${stockType}Out`] = n(row[`${stockType}Out`]);
         result[`${stockType}Closing`] = closing;
-        result[`${stockType}PurchasePrice`] = n(row[`${stockType}PurchasePrice`]);
-        result[`${stockType}ClosingPurchaseCost`] =
-          closing * n(row[`${stockType}PurchasePrice`]);
+        result[`${stockType}PurchasePrice`] = price;
+        result[`${stockType}OpeningPurchaseCost`] = opening * price;
+        result[`${stockType}ClosingPurchaseCost`] = closing * price;
       });
       return result;
     })
@@ -1158,8 +1220,28 @@ const computeStockMovementLedgerReport = async ({ from, to, name } = {}) => {
     )
     .sort((a, b) => String(a.productsName).localeCompare(String(b.productsName)));
 
+  const sumStockType = (stockType, field) =>
+    all.reduce((sum, row) => sum + n(row[`${stockType}${field}`]), 0);
+  const openingPurchaseCostByType = {};
+  STOCK_LEDGER_TYPES.forEach((stockType) => {
+    openingPurchaseCostByType[`${stockType}OpeningPurchaseCost`] = sumStockType(
+      stockType,
+      "OpeningPurchaseCost",
+    );
+  });
+  const totalOpeningPurchaseCost = Object.values(
+    openingPurchaseCostByType,
+  ).reduce((sum, value) => sum + value, 0);
+
   return {
-    meta: { from, to, name: name || null, count: all.length },
+    meta: {
+      from,
+      to,
+      name: name || null,
+      count: all.length,
+      ...openingPurchaseCostByType,
+      totalOpeningPurchaseCost,
+    },
     data: all,
   };
 };
@@ -1175,7 +1257,7 @@ const computeStockMovementClosingReport = async ({
   name,
   groupIdField,
   stockTypeMap,
-  priceByGroupId,
+  priceByGroupIdByPrefix,
 }) => {
   if (!to) {
     throw new ApiError(400, "to তারিখ দিতে হবে (YYYY-MM-DD)");
@@ -1221,8 +1303,15 @@ const computeStockMovementClosingReport = async ({
       prefixes.forEach((prefix) => {
         result[`${prefix}Opening`] = n(row[`${prefix}Opening`]);
         result[`${prefix}Closing`] = n(row[`${prefix}Closing`]);
+        // Each pool prices off its OWN stock table — Factory Stock (held at a
+        // manufacturer) is not the same balance as Item Stock (the central raw
+        // pool), even though they share the same itemId, so they can (and often
+        // do) carry different current unit costs.
+        result[`${prefix}PurchasePrice`] =
+          (priceByGroupIdByPrefix[prefix] || new Map()).get(
+            Number(row.groupId),
+          ) || 0;
       });
-      result.purchasePrice = priceByGroupId.get(Number(row.groupId)) || 0;
       return result;
     })
     .filter((row) =>
@@ -1234,9 +1323,16 @@ const computeStockMovementClosingReport = async ({
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
   const purchaseCostByPrefix = {};
+  const openingPurchaseCostByPrefix = {};
   prefixes.forEach((prefix) => {
     purchaseCostByPrefix[`${prefix}PurchaseCost`] = all.reduce(
-      (sum, row) => sum + n(row[`${prefix}Closing`]) * n(row.purchasePrice),
+      (sum, row) =>
+        sum + n(row[`${prefix}Closing`]) * n(row[`${prefix}PurchasePrice`]),
+      0,
+    );
+    openingPurchaseCostByPrefix[`${prefix}OpeningPurchaseCost`] = all.reduce(
+      (sum, row) =>
+        sum + n(row[`${prefix}Opening`]) * n(row[`${prefix}PurchasePrice`]),
       0,
     );
   });
@@ -1244,6 +1340,9 @@ const computeStockMovementClosingReport = async ({
     (sum, value) => sum + value,
     0,
   );
+  const totalOpeningPurchaseCost = Object.values(
+    openingPurchaseCostByPrefix,
+  ).reduce((sum, value) => sum + value, 0);
 
   return {
     meta: {
@@ -1253,30 +1352,54 @@ const computeStockMovementClosingReport = async ({
       count: all.length,
       ...purchaseCostByPrefix,
       totalPurchaseCost,
+      ...openingPurchaseCostByPrefix,
+      totalOpeningPurchaseCost,
     },
     data: all,
   };
 };
 
-const buildUnitPriceMap = (rows, idField) => {
+// `fallbackMap` covers ids whose live cost/unitValue computes to 0 (fully
+// depleted right now) but which still have FIFO layer history — a
+// stale-but-real reference price beats reporting ৳0 for a nonzero closing qty.
+const buildUnitPriceMap = (rows, idField, fallbackMap = new Map()) => {
   const map = new Map();
   rows.forEach((row) => {
     const id = Number(row[idField]);
     if (!id) return;
     const qty = n(row.unitValue);
-    map.set(id, qty ? n(row.cost) / qty : 0);
+    const liveUnitCost = qty ? n(row.cost) / qty : 0;
+    map.set(id, liveUnitCost || fallbackMap.get(id) || 0);
   });
   return map;
 };
 
 // Item Stock (general raw-material pool) + Factory Stock (the same item,
-// held against a specific manufacturer) — both keyed by itemId.
+// held against a specific manufacturer) — both keyed by itemId, but they're
+// separate balances with their own cost, so each gets its own price map.
 const computeItemFactoryStockReport = async ({ from, to, name } = {}) => {
-  const currentRows = await ItemMaster.findAll({
-    where: buildNameWhere(name),
-    attributes: ["itemId", "cost", "unitValue"],
-    raw: true,
-  });
+  const [itemStockRows, factoryStockRows] = await Promise.all([
+    ItemMaster.findAll({
+      where: buildNameWhere(name),
+      attributes: ["itemId", "cost", "unitValue"],
+      paranoid: false,
+      raw: true,
+    }),
+    ManufactureStock.findAll({
+      where: buildNameWhere(name),
+      attributes: ["itemId", "cost", "unitValue"],
+      paranoid: false,
+      raw: true,
+    }),
+  ]);
+  const itemIds = itemStockRows.map((row) => row.itemId);
+  const [itemStockFallback, factoryStockFallback] = await Promise.all([
+    lastKnownItemUnitCostMap(itemIds),
+    // Factory Stock has no FIFO layers of its own (it's a running weighted
+    // average) — fall back to the raw item's purchase history, same as the
+    // Factory Stock list page.
+    buildItemUnitCostResolver(),
+  ]);
 
   return computeStockMovementClosingReport({
     from,
@@ -1284,18 +1407,52 @@ const computeItemFactoryStockReport = async ({ from, to, name } = {}) => {
     name,
     groupIdField: "itemId",
     stockTypeMap: { ItemStock: "itemStock", FactoryStock: "factoryStock" },
-    priceByGroupId: buildUnitPriceMap(currentRows, "itemId"),
+    priceByGroupIdByPrefix: {
+      itemStock: buildUnitPriceMap(itemStockRows, "itemId", itemStockFallback),
+      factoryStock: new Map(
+        factoryStockRows
+          .map((row) => {
+            const id = Number(row.itemId);
+            if (!id) return null;
+            const qty = n(row.unitValue);
+            const liveUnitCost = qty ? n(row.cost) / qty : 0;
+            return [id, liveUnitCost || factoryStockFallback(id, 0)];
+          })
+          .filter(Boolean),
+      ),
+    },
   });
 };
 
 // Packaging Item Stock + Packaging Factory Stock — both keyed by
-// packagingItemId (logged onto StockMovement.itemId).
+// packagingItemId (logged onto StockMovement.itemId), but separate balances
+// with their own cost, so each gets its own price map.
 const computePackagingStockReport = async ({ from, to, name } = {}) => {
-  const currentRows = await PackagingItemStock.findAll({
-    where: buildNameWhere(name),
-    attributes: ["packagingItemId", "cost", "unitValue"],
-    raw: true,
-  });
+  const [packagingItemStockRows, packagingFactoryStockRows] =
+    await Promise.all([
+      PackagingItemStock.findAll({
+        where: buildNameWhere(name),
+        attributes: ["packagingItemId", "cost", "unitValue"],
+        paranoid: false,
+        raw: true,
+      }),
+      PackagingFactoryStock.findAll({
+        where: buildNameWhere(name),
+        attributes: ["packagingItemId", "cost", "unitValue"],
+        paranoid: false,
+        raw: true,
+      }),
+    ]);
+  const [packagingItemStockFallback, packagingFactoryStockFallback] =
+    await Promise.all([
+      lastKnownPackagingUnitCostMap(
+        packagingItemStockRows.map((row) => row.packagingItemId),
+      ),
+      // Packaging Factory Stock has no FIFO layers of its own (running
+      // weighted average) — fall back to the packaging item's purchase
+      // history, same as the Packaging Factory Stock list page.
+      buildPackagingUnitCostResolver(),
+    ]);
 
   return computeStockMovementClosingReport({
     from,
@@ -1306,8 +1463,69 @@ const computePackagingStockReport = async ({ from, to, name } = {}) => {
       PackagingItemStock: "packagingItemStock",
       PackagingFactoryStock: "packagingFactoryStock",
     },
-    priceByGroupId: buildUnitPriceMap(currentRows, "packagingItemId"),
+    priceByGroupIdByPrefix: {
+      packagingItemStock: buildUnitPriceMap(
+        packagingItemStockRows,
+        "packagingItemId",
+        packagingItemStockFallback,
+      ),
+      packagingFactoryStock: new Map(
+        packagingFactoryStockRows
+          .map((row) => {
+            const id = Number(row.packagingItemId);
+            if (!id) return null;
+            const qty = n(row.unitValue);
+            const liveUnitCost = qty ? n(row.cost) / qty : 0;
+            return [id, liveUnitCost || packagingFactoryStockFallback(id, 0)];
+          })
+          .filter(Boolean),
+      ),
+    },
   });
+};
+
+// Cash carried in from before `from` — every CashIn minus every CashOut
+// dated strictly before it, that's actually linked to a real book (bookId
+// not null). Some CashInOut rows (e.g. payroll-generated ones) are created
+// without a bookId and so never show up under any book's own Total
+// CashIn/CashOut widget — excluding them here keeps this figure consistent
+// with what the Book page displays for "everything before this date",
+// rather than silently including money the Book page itself doesn't count.
+const getCashOpeningBalance = async (from) => {
+  if (!CashInOut || !from) return 0;
+  const dateWhere = {
+    date: { [Op.lt]: from },
+    deletedAt: { [Op.is]: null },
+    bookId: { [Op.ne]: null },
+  };
+  const [cashIn, cashOut] = await Promise.all([
+    CashInOut.sum("amount", {
+      where: { ...dateWhere, paymentStatus: "CashIn" },
+    }),
+    CashInOut.sum("amount", {
+      where: { ...dateWhere, paymentStatus: "CashOut" },
+    }),
+  ]);
+  return n(cashIn) - n(cashOut);
+};
+
+// Petty Cash carried in from before `from` — every Petty Cash CashIn minus
+// every CashOut dated strictly before it. Its own "Total CashIn/Total
+// CashOut/Net Balance" widget (pettyCash.service.js) doesn't restrict by
+// bookId (only applies it when a specific book is filtered), so this
+// mirrors that — no bookId condition here either.
+const getPettyCashOpeningBalance = async (from) => {
+  if (!PettyCash || !from) return 0;
+  const dateWhere = { date: { [Op.lt]: from }, deletedAt: { [Op.is]: null } };
+  const [cashIn, cashOut] = await Promise.all([
+    PettyCash.sum("amount", {
+      where: { ...dateWhere, paymentStatus: "CashIn" },
+    }),
+    PettyCash.sum("amount", {
+      where: { ...dateWhere, paymentStatus: "CashOut" },
+    }),
+  ]);
+  return n(cashIn) - n(cashOut);
 };
 
 // Summary wrapper consumed by the Dashboard and the Monthly Reporting Book
@@ -1320,6 +1538,7 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     packagingStock,
     courierProductStock,
     supplierReceivable,
+    dollarSupplierReceivable,
     manufacturerReceivable,
     packagingManufacturerReceivable,
     lenderReceivable,
@@ -1327,15 +1546,19 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     salaryAdvance,
     pendingPayrollSalary,
     supplierDue,
+    dollarSupplierDue,
     manufacturerDue,
     lenderPayable,
     directorInvestment,
+    cashOpeningBalance,
+    pettyCashOpeningBalance,
   ] = await Promise.all([
     computeStockMovementLedgerReport({ from, to }),
     computeItemFactoryStockReport({ from, to }),
     computePackagingStockReport({ from, to }),
     getCourierProductStockReport({ from, to }),
     getSupplierReceivableReport({ from, to }),
+    getDollarSupplierReceivableReport({ from, to }),
     getManufacturerReceivableReport({ from, to }),
     getPackagingManufacturerReceivableReport({ from, to }),
     getLenderReceivableReport({ from, to }),
@@ -1343,9 +1566,12 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     getSalaryAdvanceReport({ from, to }),
     getPendingPayrollSalaryReport({ from, to }),
     getSupplierDueReport({ from, to }),
+    getDollarSupplierDueReport({ from, to }),
     getManufacturerDueReport({ from, to }),
     getLenderPayableReport({ from, to }),
     getDirectorInvestmentReport(),
+    getCashOpeningBalance(from),
+    getPettyCashOpeningBalance(from),
   ]);
   const rows = report.data || [];
 
@@ -1357,6 +1583,8 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
       count: report.meta?.count || rows.length,
       from: report.meta?.from || null,
       to: report.meta?.to || null,
+      cashOpeningBalance,
+      pettyCashOpeningBalance,
       totalStockProduct: sumStockType("stockProduct", "Closing"),
       totalDamageStock: sumStockType("damageStock", "Closing"),
       totalRepairingStock: sumStockType("repairingStock", "Closing"),
@@ -1377,12 +1605,29 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
         sumStockType("stockProduct", "ClosingPurchaseCost") +
         sumStockType("damageStock", "ClosingPurchaseCost") +
         sumStockType("repairingStock", "ClosingPurchaseCost"),
+      stockProductOpeningPurchaseCost: sumStockType(
+        "stockProduct",
+        "OpeningPurchaseCost",
+      ),
+      damageStockOpeningPurchaseCost: sumStockType(
+        "damageStock",
+        "OpeningPurchaseCost",
+      ),
+      repairingStockOpeningPurchaseCost: sumStockType(
+        "repairingStock",
+        "OpeningPurchaseCost",
+      ),
+      totalOpeningPurchaseCost:
+        sumStockType("stockProduct", "OpeningPurchaseCost") +
+        sumStockType("damageStock", "OpeningPurchaseCost") +
+        sumStockType("repairingStock", "OpeningPurchaseCost"),
     },
     data: rows,
     itemFactoryStock,
     packagingStock,
     courierProductStock,
     supplierReceivable,
+    dollarSupplierReceivable,
     manufacturerReceivable,
     packagingManufacturerReceivable,
     lenderReceivable,
@@ -1390,6 +1635,7 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     salaryAdvance,
     pendingPayrollSalary,
     supplierDue,
+    dollarSupplierDue,
     manufacturerDue,
     lenderPayable,
     directorInvestment,

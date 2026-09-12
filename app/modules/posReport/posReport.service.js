@@ -59,12 +59,16 @@ const getItemQuantity = (item = {}) => Number(item?.qty ?? item?.quantity ?? 0) 
 const getItemProductId = (item = {}, inventory = null) =>
   Number(item?.productId || inventory?.productId || 0);
 
+// Returns the summed FIFO cost of "sale" items (the sale's COGS, frozen at
+// sale time) — null for "restore" (nothing to freeze when reversing a sale).
 const applyPosItemMovement = async (
   items,
   transaction,
   direction = "sale",
   date = null,
 ) => {
+  const isSaleDirection = direction === "sale";
+  let totalFifoCost = 0;
   for (const item of normalizeItems(items)) {
     const referenceId = getItemReferenceId(item);
     const quantity = getItemQuantity(item);
@@ -127,6 +131,7 @@ const applyPosItemMovement = async (
       });
       unitCostConsumed = consumed.unitCostConsumed;
       costBreakdown = consumed.costBreakdown;
+      totalFifoCost += Number(consumed.totalCost) || 0;
     } else {
       // POS return / restore — units go back into stock.
       const restored = await fifo.restoreStock({
@@ -156,6 +161,7 @@ const applyPosItemMovement = async (
       costBreakdown,
     });
   }
+  return isSaleDirection ? Math.round(totalFifoCost * 100) / 100 : null;
 };
 
 const removeConfirmOrdersForPosReportItems = async (
@@ -272,7 +278,7 @@ const insertIntoDB = async (payload) => {
   const finalStatus = String(status || "").trim() || "Active";
 
   return await db.sequelize.transaction(async (t) => {
-    await applyPosItemMovement(items, t, "sale", date);
+    const fifoCost = await applyPosItemMovement(items, t, "sale", date);
 
     // ✅ 2) PosReport create
     const result = await PosReport.create(
@@ -291,6 +297,7 @@ const insertIntoDB = async (payload) => {
         status: finalStatus || "---",
         amount: finalPaid,
         items,
+        fifo_cost: fifoCost,
       },
       { transaction: t },
     );
@@ -631,7 +638,12 @@ const updateOneFromDB = async (id, data) => {
     finalStatusForNotification = finalStatus;
 
     await applyPosItemMovement(existing.items, t, "restore", existing.date);
-    await applyPosItemMovement(items, t, "sale", date || existing.date);
+    const fifoCost = await applyPosItemMovement(
+      items,
+      t,
+      "sale",
+      date || existing.date,
+    );
 
     return PosReport.update(
       {
@@ -648,6 +660,7 @@ const updateOneFromDB = async (id, data) => {
         paidAmount,
         subTotal,
         total,
+        fifo_cost: fifoCost,
       },
       {
         where: { Id: id },

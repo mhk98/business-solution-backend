@@ -6,11 +6,27 @@ const {
   DamageReparingStockSearchableFields,
 } = require("./damageReparingStock.constants");
 const parseVariants = require("../../../shared/parseVariants");
+const { lastKnownUnitCostMap } = require("../../../shared/fifoCostLayers");
 
 const DamageReparingStock = db.damageReparingStock;
 const DamageStock = db.damageStock;
 const DamageRepair = db.damageRepair;
 const DamageRepaired = db.damageRepaired;
+
+// `purchase_price` is a running total that legitimately hits 0 once quantity
+// is fully drawn down — this attaches the last known per-unit FIFO cost
+// (never 0 unless the product genuinely has no priced purchase history) so
+// the UI can show a reference price instead of ৳0 for a depleted lot.
+const attachLastUnitCost = async (rows) => {
+  const list = Array.isArray(rows) ? rows : [rows].filter(Boolean);
+  if (!list.length) return rows;
+  const map = await lastKnownUnitCostMap(list.map((r) => r.productId));
+  const withCost = (row) => {
+    const plain = row?.toJSON ? row.toJSON() : row;
+    return { ...plain, lastUnitCost: map.get(Number(plain?.productId)) || 0 };
+  };
+  return Array.isArray(rows) ? rows.map(withCost) : withCost(rows);
+};
 
 const getVariantKey = (variant) =>
   `${String(variant?.size || "").trim()}__${String(variant?.color || "").trim()}`;
@@ -226,7 +242,7 @@ const getAllFromDB = async (filters, options) => {
       page,
       limit,
     },
-    data: dataWithHistoricalVariants,
+    data: await attachLastUnitCost(dataWithHistoricalVariants),
   };
 };
 
@@ -237,7 +253,7 @@ const getDataById = async (id) => {
     },
   });
 
-  return result;
+  return attachLastUnitCost(result);
 };
 
 const deleteIdFromDB = async (id) => {
@@ -276,7 +292,7 @@ const getAllFromDBWithoutQuery = async () => {
     order: [["createdAt", "DESC"]],
   });
 
-  return addHistoricalZeroVariants(result);
+  return attachLastUnitCost(await addHistoricalZeroVariants(result));
 };
 
 const getAllRawFromDBWithoutQuery = async () => {

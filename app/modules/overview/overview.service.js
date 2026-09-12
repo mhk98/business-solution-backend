@@ -30,6 +30,7 @@ const ConfirmOrder = db.confirmOrder;
 const MarketingExpense = db.marketingExpense;
 const IntransitProduct = db.inTransitProduct;
 const ReturnProduct = db.returnProduct;
+const PosReport = db.posReport;
 const CodCharge = db.codCharge;
 const CodChange = db.codChange;
 const DeliveryCharge = db.deliveryCharge;
@@ -881,6 +882,13 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
   const { from, to, filterType } = normalizeDateFilters(filters);
   const transactionDateWhere = buildDateWhere(from, to, "date");
   const snapshotWhere = {};
+  // POS sales only count toward P&L once their FIFO cost is frozen (rows from
+  // before that column existed have no reliable cost to pair with revenue —
+  // counting the sale without its cost would inflate profit).
+  const posCostedDateWhere = {
+    ...transactionDateWhere,
+    fifo_cost: { [Op.ne]: null },
+  };
 
   const [
     totalMetaAmount,
@@ -915,6 +923,8 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     stockLayerValue,
     legacyInTransitPurchaseAmount,
     legacySalesReturnPurchaseAmount,
+    posSalesAmount,
+    posPurchaseAmount,
   ] = await Promise.all([
     sumField(MarketingExpense, "amount", {
       ...transactionDateWhere,
@@ -990,11 +1000,16 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     getStockLayerValue(),
     sumField(IntransitProduct, "purchase_price", transactionDateWhere),
     sumField(ReturnProduct, "purchase_price", transactionDateWhere),
+    sumField(PosReport, "total", posCostedDateWhere),
+    sumField(PosReport, "fifo_cost", posCostedDateWhere),
   ]);
 
   const netCashPosition = n(totalCashInAmount - totalCashOutAmount);
+  // In-store POS sales carry no courier charges (COD/delivery/shipping), so
+  // they're added straight into revenue rather than routed through those
+  // adjustments below.
   const netSalesBeforeCharges = n(
-    inTransitSalesAmount - salesReturnSalesAmount,
+    inTransitSalesAmount - salesReturnSalesAmount + posSalesAmount,
   );
   const othersExpense = Math.max(
     n(totalCashOutAmount) - n(excludedCashOutAmount),
@@ -1008,7 +1023,9 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
       n(totalDeliveryAdvance) +
       n(totalShippingCharge),
   );
-  const netPurchase = n(inTransitPurchaseAmount - salesReturnPurchaseAmount);
+  const netPurchase = n(
+    inTransitPurchaseAmount - salesReturnPurchaseAmount + posPurchaseAmount,
+  );
   const grossProfit = n(netRevenue - netPurchase);
   const netProfitLoss = n(grossProfit - othersExpense);
 

@@ -72,6 +72,14 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.JSON,
         allowNull: true,
       },
+      // Movement-based costing: the FIFO cost of the units this sale consumed
+      // (summed across all line items), frozen at sale time. NULL on rows
+      // from before this column existed — Dashboard P&L only counts rows
+      // where this is populated, never re-derives it from current stock.
+      fifo_cost: {
+        type: DataTypes.DECIMAL(12, 2),
+        allowNull: true,
+      },
       deletedAt: {
         type: DataTypes.DATE,
         allowNull: true, // This will be used for soft delete

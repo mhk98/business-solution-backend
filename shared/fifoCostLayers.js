@@ -103,6 +103,76 @@ const currentAverageCost = async ({ transaction, productId, fallback = 0 }) => {
   return qty > 0 ? round2(value / qty) : round2(fallback);
 };
 
+// Batched sibling of currentAverageCost: true weighted-average cost of each
+// product's still-open layers — i.e. what's actually left in stock right now,
+// blended across whichever lots make it up (not just "last purchase price").
+// Products with no open layers are omitted (caller decides the fallback).
+const currentAverageCostMap = async (productIds) => {
+  const ids = [
+    ...new Set(
+      (productIds || [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  ];
+  if (!ids.length) return new Map();
+
+  const rows = await CostLayer().findAll({
+    attributes: [
+      "productId",
+      [
+        db.Sequelize.fn("SUM", db.Sequelize.literal("remainingQty * unitCost")),
+        "value",
+      ],
+      [db.Sequelize.fn("SUM", db.Sequelize.col("remainingQty")), "qty"],
+    ],
+    where: { productId: { [Op.in]: ids }, remainingQty: { [Op.gt]: 0 } },
+    group: ["productId"],
+    raw: true,
+  });
+
+  const map = new Map();
+  for (const row of rows) {
+    const qty = n(row.qty);
+    if (qty > 0) {
+      map.set(Number(row.productId), round2(n(row.value) / qty));
+    }
+  }
+  return map;
+};
+
+// Last known unit cost per product, from layers regardless of remainingQty
+// (layers are never deleted, only drawn down) — unlike currentAverageCost,
+// this still resolves a price after a product's stock is fully depleted, for
+// display/reporting purposes where a stale-but-real reference price beats 0.
+const lastKnownUnitCostMap = async (productIds) => {
+  const ids = [
+    ...new Set(
+      (productIds || [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  ];
+  if (!ids.length) return new Map();
+
+  const layers = await CostLayer().findAll({
+    where: { productId: { [Op.in]: ids } },
+    order: [
+      ["receivedDate", "DESC"],
+      ["Id", "DESC"],
+    ],
+    raw: true,
+  });
+
+  const map = new Map();
+  for (const layer of layers) {
+    if (!map.has(layer.productId)) {
+      map.set(layer.productId, n(layer.unitCost));
+    }
+  }
+  return map;
+};
+
 // Consume `quantity` units FIFO (oldest receivedDate first).
 // Returns { unitCostConsumed, totalCost, costBreakdown, shortfallQty }.
 // On shortfall (no layers left) the remainder is drawn at `fallbackUnitCost`
@@ -289,13 +359,19 @@ const returnToStock = async ({
       note: "sales return",
     });
   }
+  // `v.purchase_price`, when present, is unreliable — some callers send it as
+  // a per-line total (qty × unit price) rather than per-unit, and there's no
+  // way to tell which from here. The return form's own contract never sends
+  // a per-variant price at all (only size/color/quantity), so the outer
+  // `unitCost` — already resolved to a true per-unit price by the caller —
+  // is the only value applied uniformly across every variant line.
   for (const v of lines) {
     await openLayer({
       transaction,
       productId,
       variantKey: variantKeyOf(v),
       quantity: n(v.quantity),
-      unitCost: n(v.purchase_price) > 0 ? n(v.purchase_price) : n(unitCost),
+      unitCost: n(unitCost),
       receivedDate,
       sourceType: "ReturnProduct",
       sourceMovementId,
@@ -468,6 +544,8 @@ module.exports = {
   returnToStock,
   unwindInbound,
   currentAverageCost,
+  currentAverageCostMap,
+  lastKnownUnitCostMap,
   findCreateMovement,
   assertNotClosedPeriod,
   variantKeyOf,

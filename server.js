@@ -113,7 +113,7 @@ app.use(userLogHistory);
    STATIC FILES
 ======================== */
 
-app.use("/images", express.static("images"));
+app.use("/images", express.static(process.env.UPLOAD_DIR || "images"));
 
 /* ========================
    ROUTES

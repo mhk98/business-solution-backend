@@ -211,6 +211,39 @@ const currentUnitCost = async ({ transaction, packagingItemId, fallback = 0 }) =
   return qty > 0 ? round4(value / qty) : round4(fallback);
 };
 
+// Last known unit cost per packaging item, from layers regardless of
+// remainingQty (layers are never deleted, only drawn down) — unlike
+// currentUnitCost, this still resolves a price after a packaging item's
+// stock is fully depleted, for display/reporting purposes where a
+// stale-but-real reference price beats 0.
+const lastKnownUnitCostMap = async (packagingItemIds) => {
+  const ids = [
+    ...new Set(
+      (packagingItemIds || [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  ];
+  if (!ids.length) return new Map();
+
+  const layers = await Layer().findAll({
+    where: { packagingItemId: { [Op.in]: ids } },
+    order: [
+      ["receivedDate", "DESC"],
+      ["Id", "DESC"],
+    ],
+    raw: true,
+  });
+
+  const map = new Map();
+  for (const layer of layers) {
+    if (!map.has(layer.packagingItemId)) {
+      map.set(layer.packagingItemId, n(layer.unitCost));
+    }
+  }
+  return map;
+};
+
 // Keep PackagingItemStock.cost in step with the layers (honest display).
 const syncItemStockCost = async ({ transaction, packagingItemId }) => {
   const stockRow = await ItemStock().findOne({
@@ -238,5 +271,6 @@ module.exports = {
   unwindInbound,
   layerValue,
   currentUnitCost,
+  lastKnownUnitCostMap,
   syncItemStockCost,
 };

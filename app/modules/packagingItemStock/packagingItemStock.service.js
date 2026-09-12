@@ -7,8 +7,22 @@ const db = require("../../../models");
 const {
   PackagingItemStockSearchableFields,
 } = require("./packagingItemStock.constants");
+const {
+  lastKnownUnitCostMap,
+} = require("../../../shared/packagingFifoCostLayers");
 
 const PackagingItemStock = db.packagingItemStock;
+
+const attachLastUnitCost = async (rows) => {
+  if (!rows.length) return rows;
+  const lastUnitCostMap = await lastKnownUnitCostMap(
+    rows.map((r) => r.packagingItemId),
+  );
+  return rows.map((row) => ({
+    ...row,
+    lastUnitCost: lastUnitCostMap.get(Number(row.packagingItemId)) || 0,
+  }));
+};
 
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
@@ -62,7 +76,7 @@ const getAllFromDB = async (filters, options) => {
 
   return {
     meta: { count, page, limit, totalQuantity: totalQuantity || 0 },
-    data: data.map(formatStockForDisplay),
+    data: await attachLastUnitCost(data.map(formatStockForDisplay)),
   };
 };
 
@@ -70,7 +84,7 @@ const getDataById = async (id) => {
   const data = await PackagingItemStock.findAll({
     where: { packagingItemId: id },
   });
-  return data.map(formatStockForDisplay);
+  return attachLastUnitCost(data.map(formatStockForDisplay));
 };
 
 const getAllFromDBWithoutQuery = async () => {
@@ -78,7 +92,7 @@ const getAllFromDBWithoutQuery = async () => {
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });
-  return data.map(formatStockForDisplay);
+  return attachLastUnitCost(data.map(formatStockForDisplay));
 };
 
 module.exports = {

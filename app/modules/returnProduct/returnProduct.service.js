@@ -165,6 +165,12 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
     { transaction },
   );
   // Sales return: the units re-enter stock at the cost they were sold at.
+  // The return form sends `purchase_price`/`sale_price` as LINE TOTALS
+  // (unit price × quantity), same as receivedProduct's totals — not per-unit
+  // like the received-product form. mode: "total" divides by quantity to
+  // get the real per-unit cost; using "unit" here was stamping the full line
+  // total as if it were per-unit, inflating every restored FIFO layer's cost
+  // by a factor of quantity.
   const priceRow = {
     variants: incomingVariants,
     quantity: returnQty,
@@ -173,10 +179,10 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
       customSalePrice !== null ? customSalePrice : toNumber(item.sale_price),
   };
   const returnUnitSale = resolveUnitPrice(priceRow, "sale_price", {
-    mode: "unit",
+    mode: "total",
   });
   let returnUnitCost = resolveUnitPrice(priceRow, "purchase_price", {
-    mode: "unit",
+    mode: "total",
   });
   // No invented cost — if the return form did not carry a unit cost it stays 0
   // ("cost not recorded"); the user can set it later.
@@ -386,6 +392,8 @@ const insertIntoDB = async (data) => {
       }),
       { where: { Id: inventory.Id }, transaction: t },
     );
+    // Same line-total (not per-unit) shape as the bulk-return path above —
+    // see the comment there.
     const directReturnUnitSale = resolveUnitPrice(
       {
         variants: incomingVariants,
@@ -394,7 +402,7 @@ const insertIntoDB = async (data) => {
           customSalePrice !== null ? customSalePrice : Number(sale_price),
       },
       "sale_price",
-      { mode: "unit" },
+      { mode: "total" },
     );
     let directReturnUnitCost = resolveUnitPrice(
       {
@@ -403,7 +411,7 @@ const insertIntoDB = async (data) => {
         purchase_price: Number(purchase_price),
       },
       "purchase_price",
-      { mode: "unit" },
+      { mode: "total" },
     );
     // No invented cost — 0 stays 0 when the return form has no unit cost.
     const directReturnMovement = await logStockMovement({

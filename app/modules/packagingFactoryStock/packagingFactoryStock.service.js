@@ -7,8 +7,25 @@ const db = require("../../../models");
 const {
   PackagingFactoryStockSearchableFields,
 } = require("./packagingFactoryStock.constants");
+const {
+  buildPackagingUnitCostResolver,
+} = require("../../../shared/packagingUnitCostResolver");
 
 const PackagingFactoryStock = db.packagingFactoryStock;
+
+// Weighted-avg purchase cost (falling back to the flat Packaging Item Stock
+// unit cost) per packagingItemId, so a row still shows a reference unit cost
+// after its own running `cost` has gone to 0 (quantity fully consumed).
+const attachLastUnitCost = async (rows) => {
+  if (!rows.length) return rows;
+  const unitCostOf = await buildPackagingUnitCostResolver();
+  return rows.map((row) => ({
+    ...row,
+    lastUnitCost: row.packagingItemId
+      ? unitCostOf(row.packagingItemId, 0)
+      : 0,
+  }));
+};
 
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
@@ -55,7 +72,7 @@ const getAllFromDB = async (filters, options) => {
 
   return {
     meta: { count, page, limit, totalQuantity: totalQuantity || 0 },
-    data: data.map(formatStockForDisplay),
+    data: await attachLastUnitCost(data.map(formatStockForDisplay)),
   };
 };
 
@@ -64,7 +81,7 @@ const getAllFromDBWithoutQuery = async () => {
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });
-  return data.map(formatStockForDisplay);
+  return attachLastUnitCost(data.map(formatStockForDisplay));
 };
 
 module.exports = {

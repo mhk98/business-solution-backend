@@ -15,12 +15,40 @@ const {
   calculateExpectedInventoryForProduct,
   reconcileInventoryForProduct,
 } = require("../../../shared/inventoryMovementReconciler");
+const {
+  currentAverageCostMap,
+  lastKnownUnitCostMap,
+} = require("../../../shared/fifoCostLayers");
 
 const InventoryMaster = db.inventoryMaster;
 const Product = db.product;
 const Variation = db.variation;
 const Supplier = db.supplier;
 const Warehouse = db.warehouse;
+
+// `purchase_price` only ever reflects the LATEST purchase (see
+// receivedProduct.service.js) — when it's 0 (never priced, or genuinely
+// depleted since last priced), fall back to what's actually in the
+// currently-open FIFO lots, then the last known lot regardless of remaining
+// qty. Never overrides a real (nonzero) purchase_price.
+const attachLastUnitCost = async (rows) => {
+  const list = Array.isArray(rows) ? rows : [rows].filter(Boolean);
+  if (!list.length) return rows;
+  const productIds = list.map((r) => r.productId);
+  const [avgMap, lastMap] = await Promise.all([
+    currentAverageCostMap(productIds),
+    lastKnownUnitCostMap(productIds),
+  ]);
+  const withCost = (row) => {
+    const plain = row?.toJSON ? row.toJSON() : row;
+    const pid = Number(plain?.productId);
+    return {
+      ...plain,
+      lastUnitCost: avgMap.get(pid) || lastMap.get(pid) || 0,
+    };
+  };
+  return Array.isArray(rows) ? rows.map(withCost) : withCost(rows);
+};
 
 const productVariationInclude = {
   model: Product,
@@ -205,7 +233,7 @@ const getAllFromDB = async (filters, options) => {
       page,
       limit,
     },
-    data: data.map(normalizeInventoryQuantityForDisplay),
+    data: await attachLastUnitCost(data.map(normalizeInventoryQuantityForDisplay)),
   };
 };
 
@@ -217,7 +245,7 @@ const getDataById = async (id) => {
     include: [productVariationInclude],
   });
 
-  return normalizeInventoryQuantityForDisplay(result);
+  return attachLastUnitCost(normalizeInventoryQuantityForDisplay(result));
 };
 
 const deleteIdFromDB = async (id) => {
@@ -287,7 +315,7 @@ const getAllFromDBWithoutQuery = async () => {
     order: [["createdAt", "DESC"]],
   });
 
-  return result.map(normalizeInventoryQuantityForDisplay);
+  return attachLastUnitCost(result.map(normalizeInventoryQuantityForDisplay));
 };
 
 const getLowStockProductsFromDB = async () => {

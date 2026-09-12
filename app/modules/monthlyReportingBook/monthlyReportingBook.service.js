@@ -9,6 +9,7 @@ const {
 const CashInOut = db.cashInOut;
 const Category = db.category;
 const Book = db.book;
+const PettyCash = db.pettyCash;
 
 const pad2 = (value) => String(value).padStart(2, "0");
 
@@ -320,10 +321,17 @@ const getBookStatement = async (filters) => {
     [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "total"],
   ];
 
+  // Petty Cash for this book/period — no categoryId requirement (matches
+  // pettyCash.service.js's own Total CashIn/Total CashOut widget, which
+  // never filters by category unless the user explicitly picks one).
+  const pettyCashWhere = { ...assetsDateWhere, bookId: { [Op.eq]: bookId } };
+
   const [
     data,
     totalCreditRaw,
     totalDebitRaw,
+    pettyCashCreditRaw,
+    pettyCashDebitRaw,
     book,
     inventoryStockReport,
     openingRows,
@@ -350,6 +358,16 @@ const getBookStatement = async (filters) => {
     CashInOut.sum("amount", {
       where: { [Op.and]: [...conditions, { paymentStatus: "CashOut" }] },
     }),
+    PettyCash
+      ? PettyCash.sum("amount", {
+          where: { ...pettyCashWhere, paymentStatus: "CashIn" },
+        })
+      : Promise.resolve(0),
+    PettyCash
+      ? PettyCash.sum("amount", {
+          where: { ...pettyCashWhere, paymentStatus: "CashOut" },
+        })
+      : Promise.resolve(0),
     Book.findByPk(bookId, { paranoid: false }),
     getInventoryStockReport({ from: inventoryFrom, to: inventoryTo }),
     start
@@ -419,6 +437,10 @@ const getBookStatement = async (filters) => {
 
   const totalCredit = Number(totalCreditRaw || 0);
   const totalDebit = Number(totalDebitRaw || 0);
+
+  const pettyCashTotalCredit = Number(pettyCashCreditRaw || 0);
+  const pettyCashTotalDebit = Number(pettyCashDebitRaw || 0);
+  const pettyCashNetBalance = pettyCashTotalCredit - pettyCashTotalDebit;
 
   const toNum = (value) => Number(value || 0);
   const buildAssetGroup = (rows, { withDate }) => {
@@ -509,6 +531,10 @@ const getBookStatement = async (filters) => {
       totalCredit,
       totalDebit,
       netBalance: totalCredit - totalDebit,
+      pettyCashTotalCredit,
+      pettyCashTotalDebit,
+      pettyCashNetBalance,
+      netBalanceWithPettyCash: totalCredit - totalDebit + pettyCashNetBalance,
       openingByCategory,
       openingTotalCredit,
       openingTotalDebit,

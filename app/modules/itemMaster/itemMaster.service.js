@@ -7,7 +7,19 @@ const {
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const { ItemMasterSearchableFields } = require("./itemMaster.constants");
+const {
+  lastKnownUnitCostMap,
+} = require("../../../shared/itemFifoCostLayers");
 const ItemMaster = db.itemMaster;
+
+const attachLastUnitCost = async (rows) => {
+  if (!rows.length) return rows;
+  const lastUnitCostMap = await lastKnownUnitCostMap(rows.map((r) => r.itemId));
+  return rows.map((row) => ({
+    ...row,
+    lastUnitCost: lastUnitCostMap.get(Number(row.itemId)) || 0,
+  }));
+};
 
 const normalizeStockPayload = (payload = {}) => {
   if (
@@ -108,7 +120,7 @@ const getAllFromDB = async (filters, options) => {
       page,
       limit,
     },
-    data: data.map(formatStockForDisplay),
+    data: await attachLastUnitCost(data.map(formatStockForDisplay)),
   };
 };
 
@@ -119,7 +131,7 @@ const getDataById = async (id) => {
     },
   });
 
-  return result.map(formatStockForDisplay);
+  return attachLastUnitCost(result.map(formatStockForDisplay));
 };
 
 const deleteIdFromDB = async (id) => {
@@ -148,7 +160,7 @@ const getAllFromDBWithoutQuery = async () => {
     order: [["createdAt", "DESC"]],
   });
 
-  return result.map(formatStockForDisplay);
+  return attachLastUnitCost(result.map(formatStockForDisplay));
 };
 
 const ItemMasterService = {
