@@ -171,8 +171,15 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
   // get the real per-unit cost; using "unit" here was stamping the full line
   // total as if it were per-unit, inflating every restored FIFO layer's cost
   // by a factor of quantity.
+  //
+  // `variants` is deliberately omitted here: normalizeItemVariants() stamps
+  // the SAME line-level total onto every variant sub-object (the return form
+  // has no real per-variant pricing), so resolveUnitPrice()'s variant-average
+  // branch — which assumes each variant already carries its own true
+  // per-unit price — would treat that duplicated total as already-per-unit
+  // and skip the /quantity division entirely, silently re-introducing the
+  // exact same total-not-divided corruption for any multi-variant return.
   const priceRow = {
-    variants: incomingVariants,
     quantity: returnQty,
     purchase_price: toNumber(item.purchase_price),
     sale_price:
@@ -393,10 +400,12 @@ const insertIntoDB = async (data) => {
       { where: { Id: inventory.Id }, transaction: t },
     );
     // Same line-total (not per-unit) shape as the bulk-return path above —
-    // see the comment there.
+    // see the comment there. `variants` omitted for the same reason: this
+    // form has no real per-variant pricing, so every variant sub-object
+    // carries the same line total, which would defeat resolveUnitPrice()'s
+    // /quantity division if passed through.
     const directReturnUnitSale = resolveUnitPrice(
       {
-        variants: incomingVariants,
         quantity: returnQty,
         sale_price:
           customSalePrice !== null ? customSalePrice : Number(sale_price),
@@ -406,7 +415,6 @@ const insertIntoDB = async (data) => {
     );
     let directReturnUnitCost = resolveUnitPrice(
       {
-        variants: incomingVariants,
         quantity: returnQty,
         purchase_price: Number(purchase_price),
       },

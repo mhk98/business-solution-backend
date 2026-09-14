@@ -18,6 +18,7 @@ const {
 const {
   currentAverageCostMap,
   lastKnownUnitCostMap,
+  setOpenLayersUnitCost,
 } = require("../../../shared/fifoCostLayers");
 
 const InventoryMaster = db.inventoryMaster;
@@ -303,7 +304,20 @@ const updatePriceFromDB = async (id, payload = {}) => {
   if (purchase_price !== undefined) updates.purchase_price = purchase_price;
   if (sale_price !== undefined) updates.sale_price = sale_price;
 
-  await record.update(updates);
+  // A purchase-price correction here must also rescale this product's open
+  // FIFO layers — otherwise reports built on the FIFO weighted average (All
+  // Books' এভারেজ পারচেস প্রাইস) keep surfacing whatever wrong unit cost the
+  // stock was originally received at, even after the catalog price is fixed.
+  await db.sequelize.transaction(async (transaction) => {
+    await record.update(updates, { transaction });
+    if (purchase_price !== undefined) {
+      await setOpenLayersUnitCost({
+        transaction,
+        productId: record.productId,
+        unitCost: purchase_price,
+      });
+    }
+  });
 
   return getDataById(id);
 };

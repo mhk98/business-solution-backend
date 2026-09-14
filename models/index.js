@@ -1914,6 +1914,16 @@ const ensureEmployeeColumns = async () => {
     allowNull: false,
     defaultValue: 0,
   });
+  await maybeAddColumn("bonus", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
+  await maybeAddColumn("approval_absent", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
 };
 
 const ensureDailyWorkReportColumns = async () => {
@@ -3933,6 +3943,13 @@ const ensureCashInOutRefNoColumn = async () => {
 
   if (!tableDefinition.fromParty) {
     await queryInterface.addColumn(tableName, "fromParty", {
+      type: DataTypes.STRING,
+      allowNull: true,
+    });
+  }
+
+  if (!tableDefinition.receiverName) {
+    await queryInterface.addColumn(tableName, "receiverName", {
       type: DataTypes.STRING,
       allowNull: true,
     });

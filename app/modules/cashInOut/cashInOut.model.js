@@ -97,6 +97,13 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      // For Cash Out vouchers: who received the money (free text entered
+      // on the Cash Out modal). The voucher's From is always the company
+      // for Cash Out.
+      receiverName: {
+        type: DataTypes.STRING,
+        allowNull: true,
+      },
 
       note: {
         type: DataTypes.STRING,

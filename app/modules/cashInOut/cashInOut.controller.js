@@ -211,6 +211,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     voucherPrefix,
     refNo,
     fromParty,
+    receiverName,
   } = req.body;
 
   const file = req.file?.path ? req.file.path.replace(/\\/g, "/") : null;
@@ -371,6 +372,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     date,
     refNo: normalizeOptionalText(refNo),
     fromParty: isCashOut ? null : normalizeOptionalText(fromParty),
+    receiverName: isCashOut ? normalizeOptionalText(receiverName) : null,
     lender: loanFields.lender,
     loanId: loanFields.loanId,
     file,
@@ -545,6 +547,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     partyType,
     refNo,
     fromParty,
+    receiverName,
   } = req.body;
 
   // ✅ file optional safe (new file না দিলে আগেরটা থাকবে - service এ handle করা ভাল)
@@ -646,6 +649,10 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     refNo: refNo !== undefined ? normalizeOptionalText(refNo) : undefined,
     fromParty:
       fromParty !== undefined ? normalizeOptionalText(fromParty) : undefined,
+    receiverName:
+      receiverName !== undefined
+        ? normalizeOptionalText(receiverName)
+        : undefined,
     date: (date && String(date).slice(0, 10)) || undefined,
     category,
     categoryId,

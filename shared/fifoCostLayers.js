@@ -103,6 +103,33 @@ const currentAverageCost = async ({ transaction, productId, fallback = 0 }) => {
   return qty > 0 ? round2(value / qty) : round2(fallback);
 };
 
+// A manual purchase-price correction on the Stock Product screen (see
+// inventoryMaster.updatePriceFromDB) only ever touched the catalog
+// `InventoryMaster.purchase_price` — it left the flat-pool FIFO layers (the
+// ones actually driving currentAverageCostMap) at whatever unitCost they
+// were received at. Reports built on the FIFO average (All Books' এভারেজ
+// পারচেস প্রাইস, computeStockMovementLedgerReport) kept surfacing the old,
+// wrong figure even after the admin "fixed" the price. This rescales every
+// still-open flat-pool layer (variant-level layers are untouched — a
+// product-level price edit has no per-variant breakdown to apply) to the
+// corrected unit cost so the two screens agree again.
+const setOpenLayersUnitCost = async ({ transaction, productId, unitCost }) => {
+  if (!Number(productId) || !(n(unitCost) >= 0)) return { updated: 0 };
+
+  const [updated] = await CostLayer().update(
+    { unitCost: round2(unitCost) },
+    {
+      where: {
+        productId: Number(productId),
+        variantKey: null,
+        remainingQty: { [Op.gt]: 0 },
+      },
+      transaction,
+    },
+  );
+  return { updated };
+};
+
 // Batched sibling of currentAverageCost: true weighted-average cost of each
 // product's still-open layers — i.e. what's actually left in stock right now,
 // blended across whichever lots make it up (not just "last purchase price").
@@ -546,6 +573,7 @@ module.exports = {
   currentAverageCost,
   currentAverageCostMap,
   lastKnownUnitCostMap,
+  setOpenLayersUnitCost,
   findCreateMovement,
   assertNotClosedPeriod,
   variantKeyOf,

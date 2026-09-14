@@ -65,6 +65,12 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
         defaultValue: 0,
       },
+      // Amount added straight into net_salary, same as festival_bonus.
+      bonus: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
+      },
       holiday_payment: {
         type: DataTypes.INTEGER(10),
         allowNull: false,
@@ -101,6 +107,13 @@ module.exports = (sequelize, DataTypes) => {
       unapproval_absent: {
         type: DataTypes.INTEGER(10),
         allowNull: false,
+      },
+      // Days deducted from Basic Salary only (unlike the other absence
+      // fields above, which deduct via the configurable per-day fine rates).
+      approval_absent: {
+        type: DataTypes.INTEGER(10),
+        allowNull: false,
+        defaultValue: 0,
       },
       net_salary: {
         type: DataTypes.INTEGER(10),
