@@ -3,7 +3,7 @@ const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
 
 const Loan = db.loan;
-const CashInOut = db.cashInOut;
+const LenderHistory = db.lenderHistory;
 
 const normalizeAmount = (value) => Number(value || 0);
 
@@ -29,7 +29,7 @@ const addBalancesToLoans = async (loans, filters = {}) => {
 
   if (dateCondition) where.date = dateCondition;
 
-  const rows = await CashInOut.findAll({
+  const rows = await LenderHistory.findAll({
     attributes: [
       "loanId",
       [
@@ -177,7 +177,7 @@ const getAllFromDBWithoutQuery = async () => {
 // `openingBalance` / `endingBalance` are the same as of `< from` and `<= to`.
 const getLenderReceivableReport = async ({ from, to } = {}) => {
   const receivableByLoan = async (dateWhere) => {
-    const rows = await CashInOut.findAll({
+    const rows = await LenderHistory.findAll({
       attributes: [
         "loanId",
         [
@@ -278,7 +278,7 @@ const getLenderReceivableReport = async ({ from, to } = {}) => {
 // `< from` and `<= to` so the PDF can show the period movement.
 const getLenderPayableReport = async ({ from, to } = {}) => {
   const dueByLoan = async (dateWhere) => {
-    const rows = await CashInOut.findAll({
+    const rows = await LenderHistory.findAll({
       attributes: [
         "loanId",
         [

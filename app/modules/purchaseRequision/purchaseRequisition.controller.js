@@ -1,3 +1,4 @@
+const { getUploadedFilePath } = require("../../config/uploads");
 const catchAsync = require("../../../shared/catchAsync");
 const sendResponse = require("../../../shared/sendResponse");
 const pick = require("../../../shared/pick");
@@ -7,7 +8,7 @@ const {
 } = require("./purchaseRequisition.constants");
 
 const insertIntoDB = catchAsync(async (req, res) => {
-  const file = req.file ? req.file.path.replace(/\\/g, "/") : undefined;
+  const file = req.file ? getUploadedFilePath(req.file) : undefined;
 
   const data = {
     ...req.body,
@@ -53,7 +54,7 @@ const getDataById = catchAsync(async (req, res) => {
 
 const updateOneFromDB = catchAsync(async (req, res) => {
   const { id } = req.params;
-  const file = req.file ? req.file.path.replace(/\\/g, "/") : undefined;
+  const file = req.file ? getUploadedFilePath(req.file) : undefined;
   const data = {
     ...req.body,
     file,

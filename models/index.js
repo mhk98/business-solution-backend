@@ -341,6 +341,10 @@ db.supplier = require("../app/modules/supplier/supplier.model")(
 );
 
 db.loan = require("../app/modules/loan/loan.model")(db.sequelize, DataTypes);
+db.lenderHistory = require("../app/modules/lenderHistory/lenderHistory.model")(
+  db.sequelize,
+  DataTypes,
+);
 db.owner = require("../app/modules/owner/owner.model")(db.sequelize, DataTypes);
 db.ownerTransaction =
   require("../app/modules/ownerTransaction/ownerTransaction.model")(
@@ -1498,6 +1502,11 @@ db.cashInOut.belongsTo(db.director, {
 
 db.loan.hasMany(db.cashInOut, { foreignKey: "loanId" });
 db.cashInOut.belongsTo(db.loan, { foreignKey: "loanId", as: "loan" });
+
+db.loan.hasMany(db.lenderHistory, { foreignKey: "loanId" });
+db.lenderHistory.belongsTo(db.loan, { foreignKey: "loanId", as: "loan" });
+db.book.hasMany(db.lenderHistory, { foreignKey: "bookId" });
+db.lenderHistory.belongsTo(db.book, { foreignKey: "bookId", as: "book" });
 
 db.marketingBook.hasMany(db.marketingExpense, { foreignKey: "bookId" });
 db.marketingExpense.belongsTo(db.marketingBook, { foreignKey: "bookId" });

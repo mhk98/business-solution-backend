@@ -17,6 +17,8 @@ const {
   stopStellarAttendanceSync,
 } = require("./app/jobs/stellarAttendanceSync.job");
 
+const { uploadDir } = require("./app/config/uploads");
+
 const app = express();
 const server = http.createServer(app);
 initializeChatSocket(server);
@@ -113,7 +115,7 @@ app.use(userLogHistory);
    STATIC FILES
 ======================== */
 
-app.use("/images", express.static(process.env.UPLOAD_DIR || "images"));
+app.use("/images", express.static(uploadDir));
 
 /* ========================
    ROUTES

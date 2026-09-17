@@ -9,6 +9,7 @@ const User = db.user;
 const SupplierHistory = db.supplierHistory;
 const DollarSupplierHistory = db.dollarSupplierHistory;
 const Loan = db.loan;
+const LenderHistory = db.lenderHistory;
 const Category = db.category;
 const Owner = db.owner;
 const Director = db.director;
@@ -144,22 +145,11 @@ const resolveCategoryFields = async (data, transaction) => {
   return { categoryId: created.Id, category: created.name };
 };
 
-const buildLoanWhere = (filters = {}, extraConditions = []) => {
+// Filters for LenderHistory — a table that only ever holds loan-related
+// rows, unlike CashInOut, so there's no category column to match against.
+const buildLenderHistoryWhere = (filters = {}) => {
   const { searchTerm, startDate, endDate, lender, loanId } = filters;
-  const conditions = [
-    {
-      [Op.or]: [
-        db.Sequelize.where(
-          db.Sequelize.fn("LOWER", db.Sequelize.col("category")),
-          {
-            [Op.eq]: "loan",
-          },
-        ),
-        { loanId: { [Op.ne]: null } },
-      ],
-    },
-    ...extraConditions,
-  ];
+  const conditions = [{ loanId: { [Op.ne]: null } }];
 
   if (loanId) {
     conditions.push({ loanId: { [Op.eq]: loanId } });
@@ -262,6 +252,10 @@ const insertIntoDB = async (data) => {
     packagingManufacturerId !== undefined &&
     packagingManufacturerId !== null &&
     String(packagingManufacturerId) !== "";
+  const hasLoanId =
+    data.loanId !== undefined &&
+    data.loanId !== null &&
+    String(data.loanId) !== "";
   const finalOwnerId = normalizeOptionalId(ownerId);
   const finalDirectorId = normalizeOptionalId(directorId);
   const finalBookId = normalizeOptionalId(bookId);
@@ -357,6 +351,27 @@ const insertIntoDB = async (data) => {
           status: "Paid",
           date,
           file,
+          note,
+        },
+        { transaction: t },
+      );
+    }
+
+    // Lender — bidirectional (CashIn = loan taken, CashOut = repayment),
+    // unlike the CashOut-only Dollar Supplier mirror above. History lives in
+    // its own table now instead of being computed live off CashInOut.
+    if (hasLoanId) {
+      await LenderHistory.create(
+        {
+          loanId: data.loanId,
+          lender: data.lender || null,
+          bookId,
+          cashInOutId: result.Id,
+          amount,
+          paymentMode: data.paymentMode || null,
+          paymentStatus,
+          date: date || normalizedDate,
+          remarks: remarks || note || "",
           note,
         },
         { transaction: t },
@@ -780,9 +795,9 @@ const getAllFromDB = async (filters, options) => {
 
 const getLoanSummaries = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
-  const where = buildLoanWhere(filters);
+  const where = buildLenderHistoryWhere(filters);
 
-  const data = await CashInOut.findAll({
+  const data = await LenderHistory.findAll({
     attributes: [
       "loanId",
       "lender",
@@ -799,12 +814,12 @@ const getLoanSummaries = async (filters, options) => {
   });
 
   const [count, totals] = await Promise.all([
-    CashInOut.count({
+    LenderHistory.count({
       where,
       distinct: true,
       col: "lender",
     }),
-    CashInOut.findOne({
+    LenderHistory.findOne({
       attributes: loanSumAttributes,
       where,
       raw: true,
@@ -843,13 +858,13 @@ const getLoanHistory = async (loanIdentifier, filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
   const identifier = String(loanIdentifier || "").trim();
   const isNumericId = identifier && /^\d+$/.test(identifier);
-  const where = buildLoanWhere({
+  const where = buildLenderHistoryWhere({
     ...filters,
     ...(isNumericId ? { loanId: Number(identifier) } : { lender: identifier }),
   });
 
   const [data, count, totals] = await Promise.all([
-    CashInOut.findAll({
+    LenderHistory.findAll({
       where,
       include: [{ model: Loan, as: "loan", required: false }],
       offset: skip,
@@ -860,8 +875,8 @@ const getLoanHistory = async (loanIdentifier, filters, options) => {
           ? [[options.sortBy, options.sortOrder.toUpperCase()]]
           : [["date", "DESC"]],
     }),
-    CashInOut.count({ where }),
-    CashInOut.findOne({
+    LenderHistory.count({ where }),
+    LenderHistory.findOne({
       attributes: loanSumAttributes,
       where,
       raw: true,
@@ -909,6 +924,8 @@ const deleteIdFromDB = async (id) => {
     },
   });
 
+  await LenderHistory.destroy({ where: { cashInOutId: id } });
+
   return result;
 };
 
@@ -946,6 +963,10 @@ const updateOneFromDB = async (id, payload) => {
     packagingManufacturerId !== undefined &&
     packagingManufacturerId !== null &&
     String(packagingManufacturerId) !== "";
+  const hasLoanId =
+    payload.loanId !== undefined &&
+    payload.loanId !== null &&
+    String(payload.loanId) !== "";
   const finalOwnerId = normalizeOptionalId(ownerId);
   const finalDirectorId = normalizeOptionalId(directorId);
   const finalBookId = normalizeOptionalId(bookId);
@@ -1051,6 +1072,48 @@ const updateOneFromDB = async (id, payload) => {
       }
     } else if (existingDollarSupplierHistory) {
       await existingDollarSupplierHistory.destroy({ transaction: t });
+    }
+
+    // Lender — keep one history row per cash entry (upsert by cashInOutId),
+    // same pattern as Dollar Supplier above, but bidirectional so the mirror
+    // must carry paymentStatus/paymentMode instead of a fixed "Paid" status.
+    const existingLenderHistory = await LenderHistory.findOne({
+      where: { cashInOutId: id },
+      transaction: t,
+      paranoid: false,
+    });
+
+    if (hasLoanId) {
+      const lenderHistoryData = {
+        loanId: payload.loanId,
+        lender: payload.lender || null,
+        bookId,
+        cashInOutId: id,
+        paymentMode: payload.paymentMode || null,
+        paymentStatus,
+        date,
+        remarks: remarks || note || "",
+        note,
+        ...(amount !== undefined && amount !== null && String(amount) !== ""
+          ? { amount }
+          : {}),
+      };
+
+      if (existingLenderHistory) {
+        if (
+          existingLenderHistory.deletedAt &&
+          typeof existingLenderHistory.restore === "function"
+        ) {
+          await existingLenderHistory.restore({ transaction: t });
+        }
+        await existingLenderHistory.update(lenderHistoryData, {
+          transaction: t,
+        });
+      } else {
+        await LenderHistory.create(lenderHistoryData, { transaction: t });
+      }
+    } else if (existingLenderHistory) {
+      await existingLenderHistory.destroy({ transaction: t });
     }
 
     if (hasManufacturerId) {

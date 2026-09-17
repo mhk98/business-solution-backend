@@ -1,3 +1,4 @@
+const { getUploadedFilePath } = require("../../config/uploads");
 const catchAsync = require("../../../shared/catchAsync");
 const sendResponse = require("../../../shared/sendResponse");
 const pick = require("../../../shared/pick");
@@ -12,7 +13,7 @@ const getUserDisplayName = (user = {}) => {
 };
 
 const insertIntoDB = catchAsync(async (req, res) => {
-  const file = req.file ? req.file.path.replace(/\\/g, "/") : undefined;
+  const file = req.file ? getUploadedFilePath(req.file) : undefined;
   const result = await ItemRequisitionService.insertIntoDB({
     ...req.body,
     procurement: getUserDisplayName(req.user),
@@ -54,7 +55,7 @@ const getDataById = catchAsync(async (req, res) => {
 });
 
 const updateOneFromDB = catchAsync(async (req, res) => {
-  const file = req.file ? req.file.path.replace(/\\/g, "/") : undefined;
+  const file = req.file ? getUploadedFilePath(req.file) : undefined;
   const { procurement: _procurement, ...body } = req.body;
   const result = await ItemRequisitionService.updateOneFromDB(req.params.id, {
     ...body,

@@ -36,6 +36,12 @@ router.get(
   MarketingExpenseController.getAllFromDBWithoutQuery,
 );
 router.get(
+  "/totals-by-book",
+  auth(),
+  requireAnyPermission(["marketing", "dm_expense"]),
+  MarketingExpenseController.getTotalsByBookIds,
+);
+router.get(
   "/:id",
   auth(),
   requireAnyPermission(["marketing", "dm_expense"]),

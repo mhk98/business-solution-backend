@@ -22,7 +22,13 @@ const getAllFromDB = async (filters, options) => {
 
   Object.entries(otherFilters).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") {
-      andConditions.push({ [key]: { [Op.eq]: value } });
+      if (key === "stockType" && String(value).includes(",")) {
+        andConditions.push({
+          stockType: { [Op.in]: String(value).split(",").filter(Boolean) },
+        });
+      } else {
+        andConditions.push({ [key]: { [Op.eq]: value } });
+      }
     }
   });
 

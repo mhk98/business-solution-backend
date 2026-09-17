@@ -191,7 +191,7 @@ const uploadProof = catchAsync(async (req, res) => {
     message: "Proof uploaded successfully!!",
     data: {
       fileName: req.file.filename,
-      url: `/${process.env.APP_BASE_URL}/images/${req.file.filename}`,
+      url: `/images/${req.file.filename}`,
     },
   });
 });

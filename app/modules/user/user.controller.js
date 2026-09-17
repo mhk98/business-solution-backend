@@ -1,3 +1,4 @@
+const { getUploadedFilePath } = require("../../config/uploads");
 const catchAsync = require("../../../shared/catchAsync");
 const pick = require("../../../shared/pick");
 const sendResponse = require("../../../shared/sendResponse");
@@ -8,7 +9,7 @@ const bcrypt = require("bcryptjs");
 const { createUserLogHistory } = require("../../utils/userLogHistory");
 
 const getUploadedDocumentPath = (files, fieldName) =>
-  files?.[fieldName]?.[0]?.path;
+  getUploadedFilePath(files?.[fieldName]?.[0]);
 
 const login = catchAsync(async (req, res) => {
   try {

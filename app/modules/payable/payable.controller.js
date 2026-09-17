@@ -1,3 +1,4 @@
+const { getUploadedFilePath } = require("../../config/uploads");
 const catchAsync = require("../../../shared/catchAsync");
 const sendResponse = require("../../../shared/sendResponse");
 const pick = require("../../../shared/pick");
@@ -15,7 +16,7 @@ const Notification = db.notification;
 const insertIntoDB = catchAsync(async (req, res) => {
   const { name, amount, remarks, note, status, date } = req.body;
 
-  const file = req.file ? req.file.path.replace(/\\/g, "/") : undefined;
+  const file = req.file ? getUploadedFilePath(req.file) : undefined;
 
   // Status is set by applyApprovalWorkflow middleware.
   const finalStatus = String(status || "").trim() || "Active";
@@ -96,7 +97,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
   const { id } = req.params;
   const { name, amount, remarks, note, status, date } = req.body;
 
-  const file = req.file ? req.file.path.replace(/\\/g, "/") : undefined;
+  const file = req.file ? getUploadedFilePath(req.file) : undefined;
 
   // ✅ আগে পুরোনো ডাটা আনো (note পরিবর্তন ধরার জন্য)
   const existing = await Payable.findOne({

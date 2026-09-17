@@ -1,3 +1,4 @@
+const { getUploadedFilePath } = require("../../config/uploads");
 const catchAsync = require("../../../shared/catchAsync");
 const sendResponse = require("../../../shared/sendResponse");
 const pick = require("../../../shared/pick");
@@ -214,7 +215,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     receiverName,
   } = req.body;
 
-  const file = req.file?.path ? req.file.path.replace(/\\/g, "/") : null;
+  const file = req.file?.path ? getUploadedFilePath(req.file) : null;
 
   const isBank = paymentMode === "Bank";
   const isCashOut = paymentStatus === "CashOut";
@@ -551,7 +552,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
   } = req.body;
 
   // ✅ file optional safe (new file না দিলে আগেরটা থাকবে - service এ handle করা ভাল)
-  const file = req.file?.path ? req.file.path.replace(/\\/g, "/") : undefined;
+  const file = req.file?.path ? getUploadedFilePath(req.file) : undefined;
 
   const isBank = paymentMode === "Bank";
 

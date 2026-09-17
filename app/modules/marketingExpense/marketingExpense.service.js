@@ -208,6 +208,44 @@ const getAllFromDB = async (filters, options) => {
   };
 };
 
+const getTotalsByBookIds = async (bookIds) => {
+  if (!bookIds.length) return {};
+
+  const rows = await MarketingExpense.findAll({
+    attributes: [
+      "bookId",
+      "paymentStatus",
+      [db.sequelize.fn("SUM", db.sequelize.col("amount")), "total"],
+    ],
+    where: {
+      bookId: { [Op.in]: bookIds },
+      deletedAt: { [Op.is]: null },
+    },
+    group: ["bookId", "paymentStatus"],
+    raw: true,
+  });
+
+  const totals = {};
+  bookIds.forEach((id) => {
+    totals[id] = { cashIn: 0, cashOut: 0, netBalance: 0 };
+  });
+
+  rows.forEach((row) => {
+    const amount = Number(row.total || 0);
+    const entry = totals[row.bookId] || {
+      cashIn: 0,
+      cashOut: 0,
+      netBalance: 0,
+    };
+    if (row.paymentStatus === "CashIn") entry.cashIn = amount;
+    if (row.paymentStatus === "CashOut") entry.cashOut = amount;
+    entry.netBalance = entry.cashIn - entry.cashOut;
+    totals[row.bookId] = entry;
+  });
+
+  return totals;
+};
+
 const getDataById = async (id) => {
   const result = await MarketingExpense.findAll({
     where: {
@@ -282,6 +320,7 @@ const MarketingExpenseService = {
   updateOneFromDB,
   getDataById,
   getAllFromDBWithoutQuery,
+  getTotalsByBookIds,
 };
 
 module.exports = MarketingExpenseService;

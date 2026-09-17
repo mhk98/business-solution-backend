@@ -1,3 +1,4 @@
+const { getUploadedFilePath } = require("../../config/uploads");
 const catchAsync = require("../../../shared/catchAsync");
 const sendResponse = require("../../../shared/sendResponse");
 const pick = require("../../../shared/pick");
@@ -45,7 +46,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
       : null;
 
   // ✅ file optional safe
-  const file = req.file?.path ? req.file.path.replace(/\\/g, "/") : null;
+  const file = req.file?.path ? getUploadedFilePath(req.file) : null;
 
   const isBank = paymentMode === "Bank";
 
@@ -217,7 +218,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
   } = req.body;
 
   // ✅ file optional safe (new file না দিলে আগেরটা থাকবে - service এ handle করা ভাল)
-  const file = req.file?.path ? req.file.path.replace(/\\/g, "/") : undefined;
+  const file = req.file?.path ? getUploadedFilePath(req.file) : undefined;
 
   const isBank = paymentMode === "Bank";
 
@@ -363,6 +364,22 @@ const getAllFromDBWithoutQuery = catchAsync(async (req, res) => {
   });
 });
 
+const getTotalsByBookIds = catchAsync(async (req, res) => {
+  const bookIds = String(req.query.bookIds || "")
+    .split(",")
+    .map((id) => Number(id.trim()))
+    .filter((id) => Number.isInteger(id) && id > 0);
+
+  const result = await MarketingExpenseService.getTotalsByBookIds(bookIds);
+
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "MarketingExpense totals by book fetched!!",
+    data: result,
+  });
+});
+
 const getOverviewSummaryFromDB = catchAsync(async (req, res) => {
   const filters = pick(req.query, MarketingExpenseOverviewFilterAbleFileds);
 
@@ -384,6 +401,7 @@ const MarketingExpenseController = {
   deleteIdFromDB,
   getAllFromDBWithoutQuery,
   getOverviewSummaryFromDB,
+  getTotalsByBookIds,
 };
 
 module.exports = MarketingExpenseController;

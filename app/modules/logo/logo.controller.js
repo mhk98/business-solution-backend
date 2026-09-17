@@ -1,10 +1,11 @@
+const { getUploadedFilePath } = require("../../config/uploads");
 const catchAsync = require("../../../shared/catchAsync");
 const sendResponse = require("../../../shared/sendResponse");
 const LogoService = require("./logo.service");
 
 const insertIntoDB = catchAsync(async (req, res) => {
   const data = {
-    file: req.file === undefined ? undefined : req.file.path,
+    file: req.file === undefined ? undefined : getUploadedFilePath(req.file),
   };
 
   const result = await LogoService.insertIntoDB(data);
@@ -40,7 +41,7 @@ const getDataById = catchAsync(async (req, res) => {
 const updateOneFromDB = catchAsync(async (req, res) => {
   const { id } = req.params;
   const data = {
-    file: req.file === undefined ? undefined : req.file.path,
+    file: req.file === undefined ? undefined : getUploadedFilePath(req.file),
   };
   const result = await LogoService.updateOneFromDB(id, data);
   sendResponse(res, {

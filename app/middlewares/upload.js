@@ -3,11 +3,9 @@ const path = require("path");
 const fs = require("fs");
 const { v4: uuidv4 } = require("uuid");
 
-// Must match the static route in server.js (`/images` → UPLOAD_DIR) — a
-// relative default here is lost on redeploy (fresh checkout, no old files),
-// so production should set UPLOAD_DIR to a path outside the deploy directory.
-const UPLOAD_DIR = process.env.UPLOAD_DIR || "images";
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+const { uploadDir } = require("../config/uploads");
+fs.mkdirSync(uploadDir, { recursive: true });
+fs.accessSync(uploadDir, fs.constants.R_OK | fs.constants.W_OK);
 
 // Allowed MIME types — zip removed (security risk)
 const ALLOWED_MIME_TYPES = new Set([
@@ -30,7 +28,7 @@ const ALLOWED_EXTENSIONS = new Set([
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, UPLOAD_DIR);
+    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
     // UUID filename — prevents path traversal and originalname injection

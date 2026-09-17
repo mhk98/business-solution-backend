@@ -1,3 +1,4 @@
+const { getUploadedFilePath } = require("../../config/uploads");
 const catchAsync = require("../../../shared/catchAsync");
 const sendResponse = require("../../../shared/sendResponse");
 const pick = require("../../../shared/pick");
@@ -62,7 +63,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     bookId,
   } = req.body;
   // const file = req.file.path.replace(/\\/g, "/");
-  const file = req.file ? req.file.path.replace(/\\/g, "/") : undefined;
+  const file = req.file ? getUploadedFilePath(req.file) : undefined;
 
   const shouldCreateRequisition = isRequisitionMode(mode || req.query?.mode);
 
@@ -172,7 +173,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     mode,
   } = req.body;
   // const file = req.file.path.replace(/\\/g, "/");
-  const file = req.file ? req.file.path.replace(/\\/g, "/") : undefined;
+  const file = req.file ? getUploadedFilePath(req.file) : undefined;
 
   const shouldUpdateRequisition = isRequisitionMode(mode || req.query?.mode);
   const Model = shouldUpdateRequisition ? PettyCashRequisition : PettyCash;
