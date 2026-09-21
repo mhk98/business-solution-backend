@@ -147,15 +147,12 @@ const getAllFromDBWithoutQuery = async () => {
   return attachBalance(rows);
 };
 
-// Outstanding-due list consumed by the shared "All Books" / Monthly Reporting
-// Book statement PDF and the Dashboard's Print/Download Book action (see
-// inventoryOverview.service.js's getInventoryStockReport). `due` is the
-// current (unfiltered) outstanding — the "বাকি" column. `openingBalance` /
-// `endingBalance` scope the same entry's due to `date < from` and `date <= to`
-// so the PDF can show the period movement (paidAmount is undated, so those are
-// an approximation on the entry's own date).
+// Report entries through the selected end date, including carried-in dues.
+// Payments only have a cumulative paidAmount, not dated history: historical
+// balances use the latest paidAmount and cannot reconstruct past repayments.
 const getSalesDueReport = async ({ from, to } = {}) => {
   const rows = await SalesDue.findAll({
+    where: to ? { date: { [Op.lte]: to } } : {},
     order: [["date", "ASC"], ["createdAt", "ASC"]],
   });
 

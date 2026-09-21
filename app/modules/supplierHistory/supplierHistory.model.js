@@ -19,6 +19,15 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      // Links this ledger row back to the Item Purchase (Manufacture) record
+      // it was created from, so editing that purchase's quantity/cost can
+      // find and adjust the matching due/paid amount here instead of
+      // leaving it stale. Null for rows created any other way (manual
+      // supplier payments, etc.) or from before this column existed.
+      manufactureId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       status: {
         type: DataTypes.ENUM("Paid", "Unpaid"),
         allowNull: true,

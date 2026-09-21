@@ -149,6 +149,31 @@ const getOutputQuantity = (combo, variants) => {
   return toNumber(combo);
 };
 
+// A comparable fingerprint of "what this mixer produces" — the output
+// product plus its combo quantity or per-variant quantities. Two mixer
+// states with the same signature move the same stock, so an update between
+// them (e.g. only purchase_price/sale_price/note changed) never needs to
+// touch InventoryMaster's quantity at all.
+const buildOutputSignature = (productId, variants, comboFallback) => {
+  const normalizedVariants = normalizeOutputVariants(variants);
+  const pid = Number(productId) || 0;
+
+  if (normalizedVariants.length) {
+    const sortedVariants = normalizedVariants
+      .map((variant) => ({
+        size: variant.size,
+        color: variant.color,
+        quantity: variant.quantity,
+      }))
+      .sort((a, b) =>
+        `${a.size}__${a.color}`.localeCompare(`${b.size}__${b.color}`),
+      );
+    return JSON.stringify({ pid, variants: sortedVariants });
+  }
+
+  return JSON.stringify({ pid, combo: toNumber(comboFallback) });
+};
+
 const getOutputPriceSummary = (variants, purchasePrice = 0, salePrice = 0) => {
   const normalizedVariants = normalizeOutputVariants(variants);
 
@@ -571,12 +596,22 @@ const reconcileManufactureStock = async (
       );
     }
 
+    // `cost` must shrink/grow with quantity, same as
+    // manufactureProduction.service.js's adjustStockBalance — otherwise a
+    // row consumed down toward zero keeps its old (larger) total cost,
+    // making cost/unitValue balloon into an absurd unit price the moment
+    // the stock is nearly depleted.
+    const currentCost = toNumber(stockRow.cost);
+    const currentUnitCost = availableStock > 0 ? currentCost / availableStock : 0;
+    const nextCost = Math.max(0, currentCost + delta * currentUnitCost);
+
     const updatedStockRow = await stockRow.update(
       {
         unit: currentStockPayload.isConvertedUnit
           ? currentStockPayload.unit
           : stockRow.unit,
         unitValue: nextStock,
+        cost: nextCost,
       },
       { transaction },
     );
@@ -660,6 +695,39 @@ const syncProductStockId = async (productData, stockId, transaction) => {
     { where: { Id: productData.Id }, transaction },
   );
   productData.stockId = stockId;
+};
+
+// Used when a mixer edit changes nothing about what it produces (same
+// output product, same combo/variant quantities) — e.g. only
+// purchase_price/sale_price/note/status changed. Updates InventoryMaster's
+// price fields in place, without the remove-then-reapply quantity dance
+// (`removeMixerOutputFromInventory` + `addMixerOutputToInventory`), which
+// would otherwise spuriously fail if this product's stock has since been
+// drawn down (by sales, etc.) below this mixer's own output quantity.
+const syncMixerOutputPricesOnly = async (
+  productData,
+  purchasePrice,
+  salePrice,
+  transaction,
+) => {
+  const productId = Number(productData?.Id || 0);
+  if (!productId) return;
+
+  const inv = await InventoryMaster.findOne({
+    where: { productId },
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+  if (!inv) return;
+
+  await inv.update(
+    {
+      purchase_price: toNumber(purchasePrice),
+      sale_price: toNumber(salePrice),
+    },
+    { transaction },
+  );
+  await syncProductStockId(productData, inv.Id, transaction);
 };
 
 const buildMixerReceivedProductPayload = ({
@@ -1028,7 +1096,12 @@ const reconcilePackagingStock = async (
     await logStockMovement({
       transaction,
       ...movementContext,
-      stockType: movementContext?.stockType || "PackagingStock",
+      // This reconciles ItemMaster rows (packaging materials tracked as
+      // plain catalog items), same as reconcileItemMasterStock above — the
+      // fallback must match that stockType ("ItemStock"), not a
+      // "PackagingStock" label nothing else in the codebase reads, or these
+      // movements become invisible to every আইটেম স্টক report/reconcile.
+      stockType: movementContext?.stockType || "ItemStock",
       stockRow: updatedStockRow,
       itemId: stockRow.itemId,
       productId: stockRow.productId || null,
@@ -1216,7 +1289,7 @@ const insertIntoDB = async (payload) => {
       sourceType: "Mixer",
       sourceId: result.Id,
       operation: "CREATE",
-      stockType: "PackagingStock",
+      stockType: "ItemStock",
     });
     await addMixerOutputToInventory(
       productData,
@@ -1347,7 +1420,7 @@ const deleteIdFromDB = async (id) => {
       sourceType: "Mixer",
       sourceId: existing.Id,
       operation: "DELETE",
-      stockType: "PackagingStock",
+      stockType: "ItemStock",
     });
     await reconcileMixerWageTransaction(
       {
@@ -1530,36 +1603,59 @@ const updateOneFromDB = async (id, payload) => {
         sourceType: "Mixer",
         sourceId: lockedMixer.Id,
         operation: "UPDATE",
-        stockType: "PackagingStock",
+        stockType: "ItemStock",
       },
     );
-    await removeMixerOutputFromInventory(previousContext, t, {
-      sourceType: "Mixer",
-      sourceId: lockedMixer.Id,
-      operation: "UPDATE_REVERSE",
-      stockType: "ProductStock",
-    });
-    await deleteMixerReceivedProduct(lockedMixer.Id, t);
     const nextProductData = productData || {
       Id: Number(nextProductId),
       name: lockedMixer.name,
       sku: "",
       weight: 0,
     };
-    await addMixerOutputToInventory(
-      nextProductData,
-      nextCombo,
-      nextVariants,
-      nextOutputPrices.purchase_price,
-      nextOutputPrices.sale_price,
-      t,
-      {
+    const outputUnchanged =
+      buildOutputSignature(
+        previousContext.productId,
+        previousContext.variants,
+        previousContext.combo,
+      ) === buildOutputSignature(nextProductId, nextVariants, nextCombo);
+
+    if (outputUnchanged) {
+      // Nothing about what this mixer produces changed (same product, same
+      // combo/variant quantities) — only price/note/status-type fields did.
+      // Skip the remove-then-reapply quantity dance entirely: it would
+      // otherwise fail with "Inventory cannot be negative" whenever this
+      // product's stock has since been drawn down (by sales, etc.) below
+      // this mixer's own output quantity, even though no quantity here is
+      // actually changing.
+      await syncMixerOutputPricesOnly(
+        nextProductData,
+        nextOutputPrices.purchase_price,
+        nextOutputPrices.sale_price,
+        t,
+      );
+    } else {
+      await removeMixerOutputFromInventory(previousContext, t, {
         sourceType: "Mixer",
         sourceId: lockedMixer.Id,
-        operation: "UPDATE_APPLY",
+        operation: "UPDATE_REVERSE",
         stockType: "ProductStock",
-      },
-    );
+      });
+      await addMixerOutputToInventory(
+        nextProductData,
+        nextCombo,
+        nextVariants,
+        nextOutputPrices.purchase_price,
+        nextOutputPrices.sale_price,
+        t,
+        {
+          sourceType: "Mixer",
+          sourceId: lockedMixer.Id,
+          operation: "UPDATE_APPLY",
+          stockType: "ProductStock",
+        },
+      );
+    }
+    await deleteMixerReceivedProduct(lockedMixer.Id, t);
     await syncMixerReceivedProduct({
       mixerId: lockedMixer.Id,
       productData: nextProductData,

@@ -74,14 +74,17 @@ const ItemRoutes = require("../modules/item/item.routes");
 const PackagingItemRoutes = require("../modules/packagingItem/packagingItem.routes");
 const PackagingItemPurchaseRoutes = require("../modules/packagingItemPurchase/packagingItemPurchase.routes");
 const PackagingItemStockRoutes = require("../modules/packagingItemStock/packagingItemStock.routes");
+const PackagingItemStockAdjustmentRoutes = require("../modules/packagingItemStockAdjustment/packagingItemStockAdjustment.routes");
 const PackagingManufacturerRoutes = require("../modules/packagingManufacturer/packagingManufacturer.routes");
 const PackagingFactoryRoutes = require("../modules/packagingFactory/packagingFactory.routes");
 const PackagingFactoryStockRoutes = require("../modules/packagingFactoryStock/packagingFactoryStock.routes");
+const PackagingFactoryStockAdjustmentRoutes = require("../modules/packagingFactoryStockAdjustment/packagingFactoryStockAdjustment.routes");
 const PackagingMixerRoutes = require("../modules/packagingMixer/packagingMixer.routes");
 const ItemMasterRoutes = require("../modules/itemMaster/itemMaster.routes");
 const LedgerRoutes = require("../modules/ledger/ledger.routes");
 const LedgerHistoryRoutes = require("../modules/ledgerHistory/ledgerHistory.routes");
 const StockAdjustmentRoutes = require("../modules/stockAdjustment/stockAdjustment.routes");
+const FactoryStockAdjustmentRoutes = require("../modules/factoryStockAdjustment/factoryStockAdjustment.routes");
 const StockMovementRoutes = require("../modules/stockMovement/stockMovement.routes");
 const VariationRoutes = require("../modules/variation/variation.routes");
 const DamageReparingStockRoutes = require("../modules/damageReparingStock/damageReparingStock.routes");
@@ -202,6 +205,10 @@ const moduleRoutes = [
     route: PackagingItemStockRoutes,
   },
   {
+    path: "/packaging-item-stock-adjustment",
+    route: PackagingItemStockAdjustmentRoutes,
+  },
+  {
     path: "/packaging-manufacturer",
     route: PackagingManufacturerRoutes,
   },
@@ -212,6 +219,10 @@ const moduleRoutes = [
   {
     path: "/packaging-factory-stock",
     route: PackagingFactoryStockRoutes,
+  },
+  {
+    path: "/packaging-factory-stock-adjustment",
+    route: PackagingFactoryStockAdjustmentRoutes,
   },
   {
     path: "/packaging-mixer",
@@ -256,6 +267,10 @@ const moduleRoutes = [
   {
     path: "/stock-adjustment",
     route: StockAdjustmentRoutes,
+  },
+  {
+    path: "/factory-stock-adjustment",
+    route: FactoryStockAdjustmentRoutes,
   },
   {
     path: "/stock-movements",

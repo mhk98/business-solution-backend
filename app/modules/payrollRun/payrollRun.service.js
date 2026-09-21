@@ -243,8 +243,41 @@ const getPendingPayrollSalaryReport = async ({ from, to } = {}) => {
     .filter((row) => row.salary > 0);
   const totalSalary = data.reduce((sum, row) => sum + row.salary, 0);
 
+  // Historical salary payment status is not stored; use currently pending
+  // salaries dated strictly before the report start for the opening balance.
+  const totalOpeningBalance = Employee && from
+    ? Number(await Employee.sum("net_salary", {
+        where: {
+          status: { [Op.in]: ["Pending", "pending"] },
+          date: { [Op.lt]: from },
+          net_salary: { [Op.gt]: 0 },
+        },
+        paranoid: true,
+      }) || 0)
+    : 0;
+
+  // Same as totalOpeningBalance but through `to` — the "as of end of period"
+  // balance, used opposite the opening figure by the All Books ending totals.
+  const totalEndingBalance = Employee && to
+    ? Number(await Employee.sum("net_salary", {
+        where: {
+          status: { [Op.in]: ["Pending", "pending"] },
+          date: { [Op.lte]: to },
+          net_salary: { [Op.gt]: 0 },
+        },
+        paranoid: true,
+      }) || 0)
+    : 0;
+
   return {
-    meta: { count: data.length, from, to, totalSalary },
+    meta: {
+      count: data.length,
+      from,
+      to,
+      totalSalary,
+      totalOpeningBalance,
+      totalEndingBalance,
+    },
     data,
   };
 };

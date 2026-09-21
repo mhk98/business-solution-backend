@@ -173,7 +173,7 @@ const getAllFromDBWithoutQuery = async () => {
 
 // Lenders the company has overpaid — i.e. lenders who still owe the company
 // money back (repaid more than was borrowed). For the shared "All Books" /
-// dashboard statement report. `advance` is the current (unfiltered) figure;
+// dashboard statement report. `advance` is the closing (through the selected end date) figure;
 // `openingBalance` / `endingBalance` are the same as of `< from` and `<= to`.
 const getLenderReceivableReport = async ({ from, to } = {}) => {
   const receivableByLoan = async (dateWhere) => {
@@ -215,8 +215,7 @@ const getLenderReceivableReport = async ({ from, to } = {}) => {
     return map;
   };
 
-  const [currentMap, openingMap, endingMap] = await Promise.all([
-    receivableByLoan({}),
+  const [openingMap, endingMap] = await Promise.all([
     from
       ? receivableByLoan({ date: { [Op.lt]: from } })
       : Promise.resolve(new Map()),
@@ -225,7 +224,6 @@ const getLenderReceivableReport = async ({ from, to } = {}) => {
 
   const loanIds = [
     ...new Set([
-      ...currentMap.keys(),
       ...openingMap.keys(),
       ...endingMap.keys(),
     ]),
@@ -243,12 +241,12 @@ const getLenderReceivableReport = async ({ from, to } = {}) => {
     .map((loanId) => ({
       loanId,
       name: nameById.get(loanId) || null,
-      advance: currentMap.get(loanId) || 0,
+      advance: endingMap.get(loanId) || 0,
       openingBalance: openingMap.get(loanId) || 0,
       endingBalance: endingMap.get(loanId) || 0,
     }))
     // Skip deleted/unknown lenders — only live lenders the company has overpaid
-    // (now or during the period) belong here.
+    // (at closing or during the period) belong here.
     .filter(
       (row) =>
         row.name &&
@@ -273,8 +271,8 @@ const getLenderReceivableReport = async ({ from, to } = {}) => {
 
 // Positive "কত পাবে" in the Lender table means the company still owes money
 // to that lender (netBalance = totalLoanTaken - totalLoanPaid). Shown in the
-// book report as "কোম্পানির কাছে পাবে (লেন্ডার)". `due` is the current
-// (unfiltered) figure; `openingBalance` / `endingBalance` are the same as of
+// book report as "কোম্পানির কাছে পাবে (লেন্ডার)". `due` is the closing
+// (through the selected end date) figure; `openingBalance` / `endingBalance` are the same as of
 // `< from` and `<= to` so the PDF can show the period movement.
 const getLenderPayableReport = async ({ from, to } = {}) => {
   const dueByLoan = async (dateWhere) => {
@@ -316,15 +314,13 @@ const getLenderPayableReport = async ({ from, to } = {}) => {
     return map;
   };
 
-  const [currentMap, openingMap, endingMap] = await Promise.all([
-    dueByLoan({}),
+  const [openingMap, endingMap] = await Promise.all([
     from ? dueByLoan({ date: { [Op.lt]: from } }) : Promise.resolve(new Map()),
     to ? dueByLoan({ date: { [Op.lte]: to } }) : dueByLoan({}),
   ]);
 
   const loanIds = [
     ...new Set([
-      ...currentMap.keys(),
       ...openingMap.keys(),
       ...endingMap.keys(),
     ]),
@@ -342,12 +338,12 @@ const getLenderPayableReport = async ({ from, to } = {}) => {
     .map((loanId) => ({
       loanId,
       name: nameById.get(loanId) || null,
-      due: currentMap.get(loanId) || 0,
+      due: endingMap.get(loanId) || 0,
       openingBalance: openingMap.get(loanId) || 0,
       endingBalance: endingMap.get(loanId) || 0,
     }))
     // Skip deleted/unknown lenders — only live lenders with an outstanding due
-    // (now or during the period) belong here.
+    // (at closing or during the period) belong here.
     .filter(
       (row) =>
         row.name &&

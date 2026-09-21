@@ -104,8 +104,8 @@ const addBalancesToSuppliers = async (suppliers, dateWhere = {}) => {
 
 // Suppliers the company has overpaid — i.e. suppliers who still owe the company
 // goods/refund (mirrors addBalancesToSuppliers' netBalance logic). For the
-// shared "All Books" / dashboard statement report. `advance` is the current
-// (unfiltered) overpayment; `openingBalance` / `endingBalance` are the same
+// shared "All Books" / dashboard statement report. `advance` is the closing
+// (through the selected end date) overpayment; `openingBalance` / `endingBalance` are the same
 // figure as of `< from` and `<= to` so the PDF can show the period movement.
 const getSupplierReceivableReport = async ({ from, to } = {}) => {
   const advanceBySupplier = async (dateWhere) => {
@@ -147,8 +147,7 @@ const getSupplierReceivableReport = async ({ from, to } = {}) => {
     return map;
   };
 
-  const [currentMap, openingMap, endingMap] = await Promise.all([
-    advanceBySupplier({}),
+  const [openingMap, endingMap] = await Promise.all([
     from
       ? advanceBySupplier({ date: { [Op.lt]: from } })
       : Promise.resolve(new Map()),
@@ -157,7 +156,6 @@ const getSupplierReceivableReport = async ({ from, to } = {}) => {
 
   const supplierIds = [
     ...new Set([
-      ...currentMap.keys(),
       ...openingMap.keys(),
       ...endingMap.keys(),
     ]),
@@ -175,12 +173,12 @@ const getSupplierReceivableReport = async ({ from, to } = {}) => {
     .map((supplierId) => ({
       supplierId,
       name: nameById.get(supplierId) || null,
-      advance: currentMap.get(supplierId) || 0,
+      advance: endingMap.get(supplierId) || 0,
       openingBalance: openingMap.get(supplierId) || 0,
       endingBalance: endingMap.get(supplierId) || 0,
     }))
     // Skip deleted/unknown suppliers — this report only lists live suppliers
-    // the company has actually overpaid (now or during the period).
+    // the company has actually overpaid (at closing or during the period).
     .filter(
       (row) =>
         row.name &&
@@ -204,7 +202,7 @@ const getSupplierReceivableReport = async ({ from, to } = {}) => {
 };
 
 // Suppliers the company still owes (gross due beyond what's been paid) — the
-// mirror of getSupplierReceivableReport. `due` is the current (unfiltered)
+// mirror of getSupplierReceivableReport. `due` is the closing (through the selected end date)
 // figure; `openingBalance` / `endingBalance` are the same as of `< from` and
 // `<= to` so the PDF can show the period movement.
 const getSupplierDueReport = async ({ from, to } = {}) => {
@@ -247,8 +245,7 @@ const getSupplierDueReport = async ({ from, to } = {}) => {
     return map;
   };
 
-  const [currentMap, openingMap, endingMap] = await Promise.all([
-    dueBySupplier({}),
+  const [openingMap, endingMap] = await Promise.all([
     from
       ? dueBySupplier({ date: { [Op.lt]: from } })
       : Promise.resolve(new Map()),
@@ -257,7 +254,6 @@ const getSupplierDueReport = async ({ from, to } = {}) => {
 
   const supplierIds = [
     ...new Set([
-      ...currentMap.keys(),
       ...openingMap.keys(),
       ...endingMap.keys(),
     ]),
@@ -275,12 +271,12 @@ const getSupplierDueReport = async ({ from, to } = {}) => {
     .map((supplierId) => ({
       supplierId,
       name: nameById.get(supplierId) || null,
-      due: currentMap.get(supplierId) || 0,
+      due: endingMap.get(supplierId) || 0,
       openingBalance: openingMap.get(supplierId) || 0,
       endingBalance: endingMap.get(supplierId) || 0,
     }))
     // Skip deleted/unknown suppliers — only live suppliers with an outstanding
-    // due (now or during the period) belong in this report.
+    // due (at closing or during the period) belong in this report.
     .filter(
       (row) =>
         row.name &&

@@ -9,18 +9,22 @@ const {
 } = require("./packagingItemStock.constants");
 const {
   lastKnownUnitCostMap,
+  lastReceivedDateMap,
 } = require("../../../shared/packagingFifoCostLayers");
 
 const PackagingItemStock = db.packagingItemStock;
 
 const attachLastUnitCost = async (rows) => {
   if (!rows.length) return rows;
-  const lastUnitCostMap = await lastKnownUnitCostMap(
-    rows.map((r) => r.packagingItemId),
-  );
+  const [lastUnitCostMap, receivedDateMap] = await Promise.all([
+    lastKnownUnitCostMap(rows.map((r) => r.packagingItemId)),
+    lastReceivedDateMap(rows.map((r) => r.packagingItemId)),
+  ]);
   return rows.map((row) => ({
     ...row,
     lastUnitCost: lastUnitCostMap.get(Number(row.packagingItemId)) || 0,
+    lastReceivedDate:
+      receivedDateMap.get(Number(row.packagingItemId)) || null,
   }));
 };
 

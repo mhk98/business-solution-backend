@@ -355,13 +355,75 @@ const insertIntoDB = async (payload = {}) =>
     return record;
   });
 
+// A comparable fingerprint of "what this record consumes/produces" — the
+// output item, its manufacturer, the produced quantity, and the exact
+// packaging lines (each stock row + quantity) consumed for it. Same
+// signature before/after an edit means no stock actually needs to move.
+const buildPackagingMixerSignature = (data) => {
+  const items = normalizePackagingItems(data.packagingItems || [])
+    .map((item) => ({
+      id: Number(item.packagingFactoryStockId),
+      unitValue: toNumber(item.unitValue),
+    }))
+    .sort((a, b) => a.id - b.id);
+
+  return JSON.stringify({
+    itemId: Number(data.itemId) || 0,
+    manufacturerId: Number(data.manufacturerId) || 0,
+    unitValue: toNumber(data.unitValue),
+    items,
+  });
+};
+
 const updateOneFromDB = async (id, payload = {}) =>
   db.sequelize.transaction(async (t) => {
     const existing = await PackagingMixer.findOne({ where: { Id: id }, transaction: t, lock: t.LOCK.UPDATE });
     if (!existing) return 0;
-    await reverseRecordEffects(existing, t);
     const data = await buildPayload(payload, existing);
-    await applyRecordEffects(data, id, t);
+
+    const isSameTarget =
+      buildPackagingMixerSignature(existing) === buildPackagingMixerSignature(data);
+
+    if (isSameTarget) {
+      // Only wage/othersCost/note/date/status-type fields changed — nothing
+      // about what this record consumes or produces did. Recompute unitCost
+      // from the SAME packaging-material cost this record already locked in
+      // (nothing is being re-consumed) plus the new wage, and post just the
+      // wage DELTA to the ledger — instead of the full reverse-then-reapply
+      // above, which would otherwise fail the instant this item or
+      // packaging stock has since moved (consumed by another mixer, sold,
+      // etc.), even though no quantity here is actually changing.
+      const previousPackagingCost =
+        toNumber(existing.unitCost) * toNumber(existing.unitValue) -
+        toNumber(existing.wageAmount);
+      const producedCost = previousPackagingCost + toNumber(data.wageAmount);
+      data.unitCost =
+        toNumber(data.unitValue) > 0
+          ? Math.round((producedCost / toNumber(data.unitValue)) * 10000) / 10000
+          : 0;
+
+      const wageDelta = toNumber(data.wageAmount) - toNumber(existing.wageAmount);
+      if (wageDelta && data.manufacturerId) {
+        await PackagingManufacturerTransaction.create(
+          {
+            manufacturerId: data.manufacturerId,
+            manufacturerName: data.manufacturerName,
+            mixerId: id,
+            type: "PACKAGING_MIXER_WAGE_ADJUST",
+            description: `Packaging mixer wage adjustment - ${data.name}`,
+            debit: wageDelta > 0 ? wageDelta : 0,
+            credit: wageDelta < 0 ? -wageDelta : 0,
+            date: data.date,
+            note: data.note,
+          },
+          { transaction: t },
+        );
+      }
+    } else {
+      await reverseRecordEffects(existing, t);
+      await applyRecordEffects(data, id, t);
+    }
+
     const [count] = await PackagingMixer.update(data, { where: { Id: id }, transaction: t });
     return count;
   });

@@ -115,7 +115,10 @@ const getAllFromDBWithoutQuery = async () => {
 // the two combined.
 const getCourierProductStockReport = async ({ from, to } = {}) => {
   const { fn, col } = db.Sequelize;
-  const periodWhere = from && to ? { date: { [Op.between]: [from, to] } } : {};
+  const dateRange = {};
+  if (from) dateRange[Op.gte] = from;
+  if (to) dateRange[Op.lte] = to;
+  const periodWhere = from || to ? { date: dateRange } : {};
 
   const sumByStatus = (where) =>
     CourierProductStock.findAll({

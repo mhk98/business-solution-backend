@@ -12,16 +12,38 @@ const toNumber = (value) => {
   return Number.isFinite(num) ? num : 0;
 };
 
+// Same validation/shape as supplier.service.js's getHistoryDateWhere — a
+// plain `date` range filter for ManufacturerTransaction rows.
+const getTransactionDateWhere = ({ startDate, endDate } = {}) => {
+  for (const value of [startDate, endDate]) {
+    if (!value) continue;
+    const parsed = new Date(value);
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+        Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+      throw new ApiError(400, "Dates must be valid YYYY-MM-DD values");
+    }
+  }
+  if (startDate && endDate && startDate > endDate) {
+    throw new ApiError(400, "Start date must be on or before end date");
+  }
+  if (!startDate && !endDate) return {};
+  return { date: {
+    ...(startDate ? { [Op.gte]: startDate } : {}),
+    ...(endDate ? { [Op.lte]: endDate } : {}),
+  } };
+};
+
 // A manufacturer's balance is one running number: total paid (credit) minus
 // total wage owed (debit). A positive net balance is an advance (they've been
 // overpaid); a negative one is due. Paid stays a separate lifetime total for
-// display — it doesn't take part in the netting.
-const getManufacturerAmountMap = async (manufacturerIds = []) => {
+// display — it doesn't take part in the netting. `dateWhere` scopes this to
+// a date range (e.g. the list page's date filter) instead of all-time.
+const getManufacturerAmountMap = async (manufacturerIds = [], dateWhere = {}) => {
   const ids = manufacturerIds.map(Number).filter(Boolean);
   if (!ids.length) return new Map();
 
   const transactionRows = await ManufacturerTransaction.findAll({
-    where: { manufacturerId: { [Op.in]: ids } },
+    where: { manufacturerId: { [Op.in]: ids }, ...dateWhere },
     attributes: [
       "manufacturerId",
       [db.sequelize.fn("SUM", db.sequelize.col("debit")), "totalDebit"],
@@ -52,8 +74,11 @@ const getManufacturerAmountMap = async (manufacturerIds = []) => {
   );
 };
 
-const attachUnpaidAmounts = async (rows = []) => {
-  const amountMap = await getManufacturerAmountMap(rows.map((row) => row.Id));
+const attachUnpaidAmounts = async (rows = [], dateWhere = {}) => {
+  const amountMap = await getManufacturerAmountMap(
+    rows.map((row) => row.Id),
+    dateWhere,
+  );
 
   return rows.map((row) => {
     const summary = amountMap.get(Number(row.Id)) || {};
@@ -82,7 +107,8 @@ const insertIntoDB = async (data) => {
 
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
-  const { searchTerm, ...filterData } = filters;
+  const { searchTerm, startDate, endDate, ...filterData } = filters;
+  const dateWhere = getTransactionDateWhere({ startDate, endDate });
   const andConditions = [];
 
   if (searchTerm) {
@@ -117,7 +143,7 @@ const getAllFromDB = async (filters, options) => {
   });
 
   const count = await Manufacturer.count({ where: whereConditions });
-  const data = await attachUnpaidAmounts(dataRows);
+  const data = await attachUnpaidAmounts(dataRows, dateWhere);
 
   return {
     meta: { count, page, limit },
@@ -153,12 +179,13 @@ const updateOneFromDB = async (id, payload) => {
   );
 };
 
-const getAllFromDBWithoutQuery = async () => {
+const getAllFromDBWithoutQuery = async (filters = {}) => {
+  const dateWhere = getTransactionDateWhere(filters);
   const rows = await Manufacturer.findAll({
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });
-  return attachUnpaidAmounts(rows);
+  return attachUnpaidAmounts(rows, dateWhere);
 };
 
 const getTransactionHistory = async (id, options = {}) => {
@@ -208,7 +235,7 @@ const getTransactionHistory = async (id, options = {}) => {
 
 // Manufacturers the company has overpaid — i.e. manufacturers who still owe
 // the company wage work/refund. For the shared "All Books" / dashboard
-// statement report. `advance` is the current (unfiltered) overpayment;
+// statement report. `advance` is the closing (through the selected end date) overpayment;
 // `openingBalance` / `endingBalance` are the same figure as of `< from` and
 // `<= to` so the PDF can show the period movement. Mirrors
 // supplier.service.js's getSupplierReceivableReport.
@@ -236,8 +263,7 @@ const getManufacturerReceivableReport = async ({ from, to } = {}) => {
     return map;
   };
 
-  const [currentMap, openingMap, endingMap] = await Promise.all([
-    advanceByManufacturer({}),
+  const [openingMap, endingMap] = await Promise.all([
     from
       ? advanceByManufacturer({ date: { [Op.lt]: from } })
       : Promise.resolve(new Map()),
@@ -248,7 +274,6 @@ const getManufacturerReceivableReport = async ({ from, to } = {}) => {
 
   const manufacturerIds = [
     ...new Set([
-      ...currentMap.keys(),
       ...openingMap.keys(),
       ...endingMap.keys(),
     ]),
@@ -266,12 +291,12 @@ const getManufacturerReceivableReport = async ({ from, to } = {}) => {
     .map((manufacturerId) => ({
       manufacturerId,
       name: nameById.get(manufacturerId) || null,
-      advance: currentMap.get(manufacturerId) || 0,
+      advance: endingMap.get(manufacturerId) || 0,
       openingBalance: openingMap.get(manufacturerId) || 0,
       endingBalance: endingMap.get(manufacturerId) || 0,
     }))
     // Skip deleted/unknown manufacturers — only live ones the company has
-    // overpaid (now or during the period) belong here.
+    // overpaid (at closing or during the period) belong here.
     .filter(
       (row) =>
         row.name &&
@@ -295,7 +320,7 @@ const getManufacturerReceivableReport = async ({ from, to } = {}) => {
 };
 
 // Manufacturers the company still owes — the mirror of
-// getManufacturerReceivableReport. `due` is the current (unfiltered) figure;
+// getManufacturerReceivableReport. `due` is the closing (through the selected end date) figure;
 // `openingBalance` / `endingBalance` are the same as of `< from` and `<= to`.
 const getManufacturerDueReport = async ({ from, to } = {}) => {
   const dueByManufacturer = async (dateWhere) => {
@@ -321,8 +346,7 @@ const getManufacturerDueReport = async ({ from, to } = {}) => {
     return map;
   };
 
-  const [currentMap, openingMap, endingMap] = await Promise.all([
-    dueByManufacturer({}),
+  const [openingMap, endingMap] = await Promise.all([
     from
       ? dueByManufacturer({ date: { [Op.lt]: from } })
       : Promise.resolve(new Map()),
@@ -331,7 +355,6 @@ const getManufacturerDueReport = async ({ from, to } = {}) => {
 
   const manufacturerIds = [
     ...new Set([
-      ...currentMap.keys(),
       ...openingMap.keys(),
       ...endingMap.keys(),
     ]),
@@ -349,12 +372,12 @@ const getManufacturerDueReport = async ({ from, to } = {}) => {
     .map((manufacturerId) => ({
       manufacturerId,
       name: nameById.get(manufacturerId) || null,
-      due: currentMap.get(manufacturerId) || 0,
+      due: endingMap.get(manufacturerId) || 0,
       openingBalance: openingMap.get(manufacturerId) || 0,
       endingBalance: endingMap.get(manufacturerId) || 0,
     }))
     // Skip deleted/unknown manufacturers — only live ones with an outstanding
-    // due (now or during the period) belong here.
+    // due (at closing or during the period) belong here.
     .filter(
       (row) =>
         row.name &&

@@ -1,3 +1,4 @@
+const { getFundTransferPaymentModeRows } = require("../../../shared/fundTransferPaymentModes");
 const { Op } = require("sequelize");
 const ApiError = require("../../../error/ApiError");
 const paginationHelpers = require("../../../helpers/paginationHelper");
@@ -284,6 +285,18 @@ const getBookStatement = async (filters) => {
     (hasExplicitRange ? resolvedRange.start : null) || ALL_TIME_FROM;
   const inventoryTo = resolvedRange.end || toDateOnly(new Date());
 
+  // getInventoryStockReport is a ~20-query global report (FIFO stock
+  // costing, every receivable/due section, assets, …) that doesn't depend
+  // on bookId at all — the "All Books" PDF export only needs it once, not
+  // once per book. It calls this endpoint once per book in parallel, so
+  // without this flag the same expensive report re-runs N times
+  // concurrently. Callers that already have it (or don't need it) pass
+  // includeInventoryStockReport=false; it defaults to true so a single-book
+  // statement keeps working unchanged.
+  const includeInventoryStockReport =
+    filters.includeInventoryStockReport !== "false" &&
+    filters.includeInventoryStockReport !== false;
+
   const conditions = buildBaseConditions(filters, { start, end });
   const where = { [Op.and]: conditions };
 
@@ -369,7 +382,9 @@ const getBookStatement = async (filters) => {
         })
       : Promise.resolve(0),
     Book.findByPk(bookId, { paranoid: false }),
-    getInventoryStockReport({ from: inventoryFrom, to: inventoryTo }),
+    includeInventoryStockReport
+      ? getInventoryStockReport({ from: inventoryFrom, to: inventoryTo })
+      : Promise.resolve(null),
     start
       ? CashInOut.findAll({
           where: { [Op.and]: openingConditions },
@@ -490,6 +505,17 @@ const getBookStatement = async (filters) => {
       paymentModeMap[mode][key] += signed;
     });
   };
+  const transferDate = {};
+  if (start) transferDate[Op.gte] = start;
+  if (end) transferDate[Op.lte] = end;
+  const [transferOpeningRows, transferPeriodRows, transferCurrentRows] = await Promise.all([
+    start ? getFundTransferPaymentModeRows({ bookId, date: { [Op.lt]: start } }) : [],
+    getFundTransferPaymentModeRows({ bookId, ...(start || end ? { date: transferDate } : {}) }),
+    getFundTransferPaymentModeRows({ bookId }),
+  ]);
+  applyPaymentModeRows(transferOpeningRows, "opening");
+  applyPaymentModeRows(transferPeriodRows, "period");
+  applyPaymentModeRows(transferCurrentRows, "current");
   applyPaymentModeRows(paymentModeOpeningRows, "opening");
   applyPaymentModeRows(paymentModePeriodRows, "period");
   applyPaymentModeRows(paymentModeCurrentRows, "current");

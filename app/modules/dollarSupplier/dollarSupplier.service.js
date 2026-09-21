@@ -187,7 +187,7 @@ const getAllFromDBWithoutQuery = async (filters = {}) => {
 // Dollar suppliers the company has overpaid (advance beyond what's owed) —
 // exact mirror of supplier.service.js's getSupplierReceivableReport, so the
 // All Books report can show a matching "কোম্পানি পাবে (ডলার সাপ্লাইয়ার)"
-// section. `advance` is the current (unfiltered) figure; `openingBalance` /
+// section. `advance` is the closing (through the selected end date) figure; `openingBalance` /
 // `endingBalance` are the same as of `< from` / `<= to` for the period move.
 const getDollarSupplierReceivableReport = async ({ from, to } = {}) => {
   const advanceByDollarSupplier = async (dateWhere) => {
@@ -229,8 +229,7 @@ const getDollarSupplierReceivableReport = async ({ from, to } = {}) => {
     return map;
   };
 
-  const [currentMap, openingMap, endingMap] = await Promise.all([
-    advanceByDollarSupplier({}),
+  const [openingMap, endingMap] = await Promise.all([
     from
       ? advanceByDollarSupplier({ date: { [Op.lt]: from } })
       : Promise.resolve(new Map()),
@@ -241,7 +240,6 @@ const getDollarSupplierReceivableReport = async ({ from, to } = {}) => {
 
   const dollarSupplierIds = [
     ...new Set([
-      ...currentMap.keys(),
       ...openingMap.keys(),
       ...endingMap.keys(),
     ]),
@@ -259,7 +257,7 @@ const getDollarSupplierReceivableReport = async ({ from, to } = {}) => {
     .map((dollarSupplierId) => ({
       dollarSupplierId,
       name: nameById.get(dollarSupplierId) || null,
-      advance: currentMap.get(dollarSupplierId) || 0,
+      advance: endingMap.get(dollarSupplierId) || 0,
       openingBalance: openingMap.get(dollarSupplierId) || 0,
       endingBalance: endingMap.get(dollarSupplierId) || 0,
     }))
@@ -287,8 +285,8 @@ const getDollarSupplierReceivableReport = async ({ from, to } = {}) => {
 
 // Dollar suppliers the company still owes (gross due beyond what's been
 // paid) — the mirror of getDollarSupplierReceivableReport, matching
-// supplier.service.js's getSupplierDueReport. `due` is the current
-// (unfiltered) figure; `openingBalance` / `endingBalance` are the same as of
+// supplier.service.js's getSupplierDueReport. `due` is the closing
+// (through the selected end date) figure; `openingBalance` / `endingBalance` are the same as of
 // `< from` / `<= to` so the PDF can show the period movement.
 const getDollarSupplierDueReport = async ({ from, to } = {}) => {
   const dueByDollarSupplier = async (dateWhere) => {
@@ -330,8 +328,7 @@ const getDollarSupplierDueReport = async ({ from, to } = {}) => {
     return map;
   };
 
-  const [currentMap, openingMap, endingMap] = await Promise.all([
-    dueByDollarSupplier({}),
+  const [openingMap, endingMap] = await Promise.all([
     from
       ? dueByDollarSupplier({ date: { [Op.lt]: from } })
       : Promise.resolve(new Map()),
@@ -340,7 +337,6 @@ const getDollarSupplierDueReport = async ({ from, to } = {}) => {
 
   const dollarSupplierIds = [
     ...new Set([
-      ...currentMap.keys(),
       ...openingMap.keys(),
       ...endingMap.keys(),
     ]),
@@ -358,7 +354,7 @@ const getDollarSupplierDueReport = async ({ from, to } = {}) => {
     .map((dollarSupplierId) => ({
       dollarSupplierId,
       name: nameById.get(dollarSupplierId) || null,
-      due: currentMap.get(dollarSupplierId) || 0,
+      due: endingMap.get(dollarSupplierId) || 0,
       openingBalance: openingMap.get(dollarSupplierId) || 0,
       endingBalance: endingMap.get(dollarSupplierId) || 0,
     }))

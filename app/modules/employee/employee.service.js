@@ -388,7 +388,8 @@ const updateOneFromDB = async (id, payload) => {
 
   let finalStatus = existing.status || "Pending";
 
-  const isPrivileged = actorRole === "superAdmin" || actorRole === "admin";
+  const isPrivileged =
+    actorRole === "superAdmin" || actorRole === "admin" || actorRole === "hr";
 
   if (isPrivileged) {
     // ✅ superAdmin/admin: যা পাঠাবে সেটাই

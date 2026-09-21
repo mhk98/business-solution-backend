@@ -15,6 +15,7 @@ const User = db.user;
 const Item = db.item;
 const Supplier = db.supplier;
 const ItemMaster = db.itemMaster;
+const SupplierHistory = db.supplierHistory;
 const { Op, Sequelize } = require("sequelize");
 
 const parseVariantPayload = (value) => {
@@ -197,6 +198,93 @@ const adjustStockBalance = async ({
   return updatedStockRow;
 };
 
+// Same-item edit path: instead of fully reversing the old purchase's stock
+// contribution and reapplying the new one (adjustStockBalance's normal
+// two-step, needed when the item/product/variant is actually changing to a
+// different stock row), apply the NET change in one step. The two-step
+// approach rejects the edit the instant the old quantity alone doesn't fit
+// in currently-available stock (e.g. some of it has since been sold or sent
+// to a mixer) — even when the edit itself doesn't need that headroom, e.g.
+// only Unit Cost, Supplier, Date or Status changed. This also removes
+// exactly what this purchase originally contributed to the stock's cost
+// (oldCost) and adds exactly what it should now contribute (nextTotalCost),
+// which is more precise than adjustStockBalance's weighted-average estimate
+// for a stock row that's since been mixed with other purchases.
+const adjustStockBalanceForSameTarget = async ({
+  Model,
+  stockLabel,
+  itemId,
+  productId,
+  name,
+  variant,
+  variantKey,
+  unit,
+  quantityDelta,
+  costDelta,
+  transaction,
+  movementContext,
+}) => {
+  if (!quantityDelta && !costDelta) return null;
+
+  const stockRow = await Model.findOne({
+    where: buildStockWhere({ itemId, productId, variantKey }),
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+    order: [["createdAt", "ASC"]],
+  });
+
+  if (!stockRow) {
+    throw new ApiError(404, `${stockLabel} not found for selected item`);
+  }
+
+  const currentStockPayload = toBaseStockPayload(
+    stockRow.unit,
+    stockRow.unitValue,
+  );
+  const nextQuantity = currentStockPayload.unitValue + quantityDelta;
+
+  if (nextQuantity < 0) {
+    throw new ApiError(400, `${stockLabel} cannot be negative`);
+  }
+
+  const nextCost = Math.max(0, toNumber(stockRow.cost) + costDelta);
+  const nextUnit = currentStockPayload.isConvertedUnit
+    ? currentStockPayload.unit
+    : unit;
+
+  const updatedStockRow = await stockRow.update(
+    {
+      itemId,
+      productId: productId || stockRow.productId || null,
+      name,
+      variant,
+      variantKey: variantKey || null,
+      unit: nextUnit,
+      unitValue: nextQuantity,
+      cost: nextCost,
+    },
+    { transaction },
+  );
+
+  await logStockMovement({
+    transaction,
+    ...movementContext,
+    stockType: movementContext?.stockType || stockLabel,
+    stockRow: updatedStockRow,
+    itemId,
+    productId: productId || stockRow.productId || null,
+    name,
+    variant,
+    variantKey: variantKey || null,
+    unit: nextUnit,
+    quantityChange: quantityDelta,
+    balanceBefore: currentStockPayload.unitValue,
+    balanceAfter: nextQuantity,
+  });
+
+  return updatedStockRow;
+};
+
 const insertIntoDB = async (payload) => {
   const {
     itemId,
@@ -285,6 +373,23 @@ const insertIntoDB = async (payload) => {
         sourceMovementId: manufactureRecord.Id,
       });
       await itemFifo.syncItemStockCost({ transaction: t, itemId });
+    }
+
+    // Linked SupplierHistory row so this purchase's due/paid tracking can be
+    // found and kept in sync later (see updateOneFromDB) — one row per
+    // purchase line, not batched, so an edit to one item never has to guess
+    // which shared row to adjust.
+    if (supplierId && totalCost > 0) {
+      await SupplierHistory.create(
+        {
+          supplierId,
+          manufactureId: manufactureRecord.Id,
+          amount: totalCost,
+          status: "Unpaid",
+          date: date || new Date().toISOString().slice(0, 10),
+        },
+        { transaction: t },
+      );
     }
 
     return manufactureRecord;
@@ -652,6 +757,7 @@ const updateOneFromDB = async (id, payload) => {
       "status",
       "variant",
       "variantKey",
+      "supplierId",
     ],
   });
 
@@ -687,6 +793,8 @@ const updateOneFromDB = async (id, payload) => {
       ? existing.variantKey
       : variantKey || buildVariantKey(nextVariant);
   const nextName = name === "" || name == null ? nextItem.name : name;
+  const nextSupplierId =
+    supplierId === "" || supplierId == null ? existing.supplierId : supplierId;
 
   const data = {
     itemId: nextItemId,
@@ -697,7 +805,7 @@ const updateOneFromDB = async (id, payload) => {
     unit: normalizedPayload.unit,
     unitValue: totalUnitValue,
     cost: nextTotalCost,
-    supplierId,
+    supplierId: nextSupplierId,
     // unitCost: totalUnitValue > 0 ? nextTotalCost / totalUnitValue : undefined,
     note: finalStatus === "Approved" ? null : newNote || null,
     status: finalStatus,
@@ -715,43 +823,77 @@ const updateOneFromDB = async (id, payload) => {
   const oldCost = toNumber(existing.cost);
   const oldVariant = parseVariantPayload(existing.variant);
 
-  const updatedCount = await db.sequelize.transaction(async (t) => {
-    await adjustStockBalance({
-      Model: ItemMaster,
-      stockLabel: "Item stock",
-      itemId: oldItemId,
-      productId: oldProductId,
-      name: existing.name,
-      variant: oldVariant,
-      variantKey: oldVariantKey,
-      unit: existingBasePayload.unit,
-      unitValue: oldUnitValue,
-      cost: oldCost,
-      delta: -oldUnitValue,
-      transaction: t,
-    });
+  // Only a genuine item/product/variant change needs the full reverse (old
+  // row) + reapply (new row) treatment — two different stock rows are
+  // involved, and correctly rejecting it when the old row can't give back
+  // its full original quantity (already sold/consumed elsewhere) is real.
+  // When it's the same row, that same reverse-then-reapply would reject the
+  // edit over stock already consumed even when the edit doesn't touch
+  // quantity at all — apply the net change in one step instead.
+  const isSameStockTarget =
+    String(oldItemId) === String(nextItemId) &&
+    String(oldProductId || "") === String(nextProductId || "") &&
+    String(oldVariantKey || "") === String(nextVariantKey || "");
 
-    await adjustStockBalance({
-      Model: ItemMaster,
-      stockLabel: "Item stock",
-      itemId: nextItemId,
-      productId: nextProductId,
-      name: nextName,
-      variant: nextVariant,
-      variantKey: nextVariantKey,
-      unit: normalizedPayload.unit,
-      unitValue: totalUnitValue,
-      cost: nextTotalCost,
-      delta: totalUnitValue,
-      transaction: t,
-      createOnPositive: true,
-      movementContext: {
-        sourceType: "ItemPurchase",
-        sourceId: id,
-        operation: "UPDATE_APPLY",
-        stockType: "ItemStock",
-      },
-    });
+  const updatedCount = await db.sequelize.transaction(async (t) => {
+    if (isSameStockTarget) {
+      await adjustStockBalanceForSameTarget({
+        Model: ItemMaster,
+        stockLabel: "Item stock",
+        itemId: nextItemId,
+        productId: nextProductId,
+        name: nextName,
+        variant: nextVariant,
+        variantKey: nextVariantKey,
+        unit: normalizedPayload.unit,
+        quantityDelta: totalUnitValue - oldUnitValue,
+        costDelta: nextTotalCost - oldCost,
+        transaction: t,
+        movementContext: {
+          sourceType: "ItemPurchase",
+          sourceId: id,
+          operation: "UPDATE_APPLY",
+          stockType: "ItemStock",
+        },
+      });
+    } else {
+      await adjustStockBalance({
+        Model: ItemMaster,
+        stockLabel: "Item stock",
+        itemId: oldItemId,
+        productId: oldProductId,
+        name: existing.name,
+        variant: oldVariant,
+        variantKey: oldVariantKey,
+        unit: existingBasePayload.unit,
+        unitValue: oldUnitValue,
+        cost: oldCost,
+        delta: -oldUnitValue,
+        transaction: t,
+      });
+
+      await adjustStockBalance({
+        Model: ItemMaster,
+        stockLabel: "Item stock",
+        itemId: nextItemId,
+        productId: nextProductId,
+        name: nextName,
+        variant: nextVariant,
+        variantKey: nextVariantKey,
+        unit: normalizedPayload.unit,
+        unitValue: totalUnitValue,
+        cost: nextTotalCost,
+        delta: totalUnitValue,
+        transaction: t,
+        createOnPositive: true,
+        movementContext: {
+          sourceType: "ItemPurchase",
+          sourceId: id,
+          operation: "UPDATE_APPLY",
+          stockType: "ItemStock",
+        },
+      });
+    }
 
     // FIFO: unwind the old purchase layer, open a fresh one for the edit.
     if (!oldProductId) {
@@ -783,6 +925,36 @@ const updateOneFromDB = async (id, payload) => {
       where: { Id: id },
       transaction: t,
     });
+
+    // Keep this purchase's linked due/paid ledger row in step with the
+    // edit. Only touched while it's still Unpaid — once a supplier has
+    // actually been paid against it, that row is a payment record, not a
+    // reflection of the purchase's current cost, so a later edit here
+    // shouldn't silently rewrite it. Deliberately NOT created here when
+    // missing: a purchase from before this link existed already has its
+    // original (orphaned, un-linked) SupplierHistory row from creation —
+    // creating a second one on its first post-upgrade edit would double
+    // that purchase's due instead of fixing it. Only purchases created
+    // after this change (which always get linked at insert) benefit here;
+    // older ones need a one-off manual reconciliation, not a silent auto-fix.
+    if (nextSupplierId) {
+      const existingHistory = await SupplierHistory.findOne({
+        where: { manufactureId: id },
+        transaction: t,
+        lock: t.LOCK.UPDATE,
+      });
+
+      if (existingHistory && existingHistory.status === "Unpaid") {
+        await existingHistory.update(
+          {
+            supplierId: nextSupplierId,
+            amount: nextTotalCost,
+            date: data.date || existingHistory.date,
+          },
+          { transaction: t },
+        );
+      }
+    }
 
     return count;
   });

@@ -519,55 +519,68 @@ const updateOneFromDB = async (id, payload) => {
 
   return db.sequelize.transaction(async (t) => {
     const existingPayload = toBaseStockPayload(existing.unit, existing.unitValue);
-    await adjustStockBalance({
-      packagingItemId: existing.packagingItemId,
-      name: existing.name,
-      unit: existingPayload.unit,
-      cost: existing.cost,
-      delta: -existingPayload.unitValue,
-      transaction: t,
-    });
+    // Same item, same received quantity — only cost/supplier/date/note-type
+    // fields changed. Skip the unwind-old-layer / reverse-then-reapply
+    // stock dance entirely: it would otherwise fail (or needlessly churn a
+    // fresh FIFO layer) the instant this packaging item's stock has since
+    // been drawn down (consumed by a Packaging Factory move) below this
+    // purchase's own received quantity — even when no quantity here is
+    // actually changing.
+    const isSameStockTarget =
+      String(existing.packagingItemId) === String(nextPackagingItemId) &&
+      toNumber(existingPayload.unitValue) === toNumber(normalizedPayload.unitValue);
 
-    await adjustStockBalance({
-      packagingItemId: nextPackagingItemId,
-      name: packagingItem.name,
-      unit: normalizedPayload.unit,
-      cost: nextCost,
-      delta: normalizedPayload.unitValue,
-      transaction: t,
-      createOnPositive: true,
-    });
+    if (!isSameStockTarget) {
+      await adjustStockBalance({
+        packagingItemId: existing.packagingItemId,
+        name: existing.name,
+        unit: existingPayload.unit,
+        cost: existing.cost,
+        delta: -existingPayload.unitValue,
+        transaction: t,
+      });
 
-    // FIFO: unwind the old layer contribution, open a fresh one for the edit.
-    await pkgFifo.unwindInbound({
-      transaction: t,
-      packagingItemId: existing.packagingItemId,
-      quantity: existingPayload.unitValue,
-    });
-    await pkgFifo.openLayer({
-      transaction: t,
-      packagingItemId: nextPackagingItemId,
-      unitCost:
-        normalizedPayload.unitValue > 0
-          ? toNumber(nextCost) / normalizedPayload.unitValue
-          : 0,
-      quantity: normalizedPayload.unitValue,
-      receivedDate:
-        payload.date ||
-        existing.date ||
-        new Date().toISOString().slice(0, 10),
-      sourceType: "PackagingItemPurchase",
-      sourceMovementId: id,
-    });
-    await pkgFifo.syncItemStockCost({
-      transaction: t,
-      packagingItemId: existing.packagingItemId,
-    });
-    if (Number(nextPackagingItemId) !== Number(existing.packagingItemId)) {
-      await pkgFifo.syncItemStockCost({
+      await adjustStockBalance({
+        packagingItemId: nextPackagingItemId,
+        name: packagingItem.name,
+        unit: normalizedPayload.unit,
+        cost: nextCost,
+        delta: normalizedPayload.unitValue,
+        transaction: t,
+        createOnPositive: true,
+      });
+
+      // FIFO: unwind the old layer contribution, open a fresh one for the edit.
+      await pkgFifo.unwindInbound({
+        transaction: t,
+        packagingItemId: existing.packagingItemId,
+        quantity: existingPayload.unitValue,
+      });
+      await pkgFifo.openLayer({
         transaction: t,
         packagingItemId: nextPackagingItemId,
+        unitCost:
+          normalizedPayload.unitValue > 0
+            ? toNumber(nextCost) / normalizedPayload.unitValue
+            : 0,
+        quantity: normalizedPayload.unitValue,
+        receivedDate:
+          payload.date ||
+          existing.date ||
+          new Date().toISOString().slice(0, 10),
+        sourceType: "PackagingItemPurchase",
+        sourceMovementId: id,
       });
+      await pkgFifo.syncItemStockCost({
+        transaction: t,
+        packagingItemId: existing.packagingItemId,
+      });
+      if (Number(nextPackagingItemId) !== Number(existing.packagingItemId)) {
+        await pkgFifo.syncItemStockCost({
+          transaction: t,
+          packagingItemId: nextPackagingItemId,
+        });
+      }
     }
 
     const nextSupplierId =

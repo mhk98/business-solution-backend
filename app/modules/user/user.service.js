@@ -140,7 +140,7 @@ const register = async (userData) => {
   return result;
 };
 
-const getAllUserFromDB = async (filters, options) => {
+const getAllUserFromDB = async (filters, options, actor) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
 
   const { searchTerm, ...filterData } = filters;
@@ -169,9 +169,14 @@ const getAllUserFromDB = async (filters, options) => {
     deletedAt: { [Op.is]: null }, // Only include records with deletedAt as null (not deleted)
   });
 
-  andConditions.push({
-    role: { [Op.ne]: ENUM_USER_ROLE.SUPER_ADMIN },
-  });
+  // Only a superAdmin viewer gets to see superAdmin rows — everyone else
+  // (including plain Admin, who can otherwise edit any profile) never sees
+  // them in this list.
+  if (actor?.role !== ENUM_USER_ROLE.SUPER_ADMIN) {
+    andConditions.push({
+      role: { [Op.ne]: ENUM_USER_ROLE.SUPER_ADMIN },
+    });
+  }
 
   const whereConditions =
     andConditions.length > 0 ? { [Op.and]: andConditions } : {};
@@ -214,7 +219,19 @@ const getUserById = async (id, actor) => {
   return result;
 };
 
-const deleteUserFromDB = async (id) => {
+const deleteUserFromDB = async (id, actor) => {
+  const target = await User.findOne({ where: { Id: id } });
+  if (!target) {
+    throw new ApiError(404, "User not found");
+  }
+
+  if (
+    target.role === ENUM_USER_ROLE.SUPER_ADMIN &&
+    Number(actor?.Id) !== Number(target.Id)
+  ) {
+    throw new ApiError(403, "Super admin accounts cannot be deleted.");
+  }
+
   const result = await User.destroy({
     where: {
       Id: id,
@@ -231,6 +248,13 @@ const updateUserFromDB = async (id, payload, actor) => {
 
   if (!existing) {
     throw new ApiError(404, "User not found");
+  }
+
+  if (
+    existing.role === ENUM_USER_ROLE.SUPER_ADMIN &&
+    Number(actor?.Id) !== Number(existing.Id)
+  ) {
+    throw new ApiError(403, "Access denied.");
   }
 
   const normalizedPayload = { ...payload };

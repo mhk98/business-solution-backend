@@ -448,6 +448,44 @@ const insertIntoDB = async (data) => {
   });
 };
 
+// Fund transfers affect mode balances but are not income or expense entries.
+const getBookTransferTotals = async (filters = {}) => {
+  const excludedFields = [
+    "category", "categoryId", "lender", "loanId", "refNo", "supplierId",
+    "dollarSupplierId", "ownerId", "directorId",
+  ];
+  const empty = { cashIn: 0, cashOut: 0 };
+  if (excludedFields.some((key) => filters[key] !== undefined && filters[key] !== null && filters[key] !== "")) return empty;
+  const conditions = [{ status: "Active" }];
+  if (filters.bookId) conditions.push({ bookId: filters.bookId });
+  const date = {};
+  if (filters.startDate) date[Op.gte] = toDateOnly(filters.startDate);
+  if (filters.endDate) date[Op.lte] = toDateOnly(filters.endDate);
+  if (Reflect.ownKeys(date).length) conditions.push({ date });
+  if (filters.voucherNo && String(filters.voucherNo).trim()) {
+    conditions.push({ voucherNo: { [Op.like]: `%${String(filters.voucherNo).trim()}%` } });
+  }
+  const sumLeg = async (direction, paymentStatus) => {
+    if (filters.paymentStatus && filters.paymentStatus !== paymentStatus) return 0;
+    const legConditions = [...conditions];
+    if (filters.paymentMode) legConditions.push({ [`${direction}PaymentMode`]: filters.paymentMode });
+    if (filters.searchTerm && String(filters.searchTerm).trim()) {
+      const pattern = `%${String(filters.searchTerm).trim()}%`;
+      legConditions.push({ [Op.or]: [
+        ...["status", "remarks", "voucherNo", `${direction}PaymentMode`, `${direction}BankAccount`]
+          .map((field) => ({ [field]: { [Op.like]: pattern } })),
+        db.Sequelize.where(db.Sequelize.cast(db.Sequelize.col("amount"), "CHAR"), { [Op.like]: pattern }),
+        db.Sequelize.where(db.Sequelize.literal(`'${paymentStatus}'`), { [Op.like]: pattern }),
+      ] });
+    }
+    return Number(await db.fundTransfer.sum("amount", {
+      where: { [Op.and]: legConditions }, paranoid: true,
+    }) || 0);
+  };
+  const [cashIn, cashOut] = await Promise.all([sumLeg("to", "CashIn"), sumLeg("from", "CashOut")]);
+  return { cashIn, cashOut };
+};
+
 // const getAllFromDB = async (filters, options) => {
 //   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
 
@@ -770,14 +808,15 @@ const getAllFromDB = async (filters, options) => {
         : [["date", "DESC"]],
   });
 
-  const [count, totalCashIn, totalCashOut] = await Promise.all([
+  const [count, totalCashIn, totalCashOut, transferTotals] = await Promise.all([
     CashInOut.count({ where: listWhere }),
     CashInOut.sum("amount", { where: cashInWhere }),
     CashInOut.sum("amount", { where: cashOutWhere }),
+    getBookTransferTotals(filters),
   ]);
 
-  const cashIn = Number(totalCashIn || 0);
-  const cashOut = Number(totalCashOut || 0);
+  const cashIn = Number(totalCashIn || 0) + transferTotals.cashIn;
+  const cashOut = Number(totalCashOut || 0) + transferTotals.cashOut;
   const netBalance = cashIn - cashOut;
 
   return {
@@ -786,6 +825,8 @@ const getAllFromDB = async (filters, options) => {
       totalCashIn: cashIn,
       totalCashOut: cashOut,
       netBalance,
+      transferCashIn: transferTotals.cashIn,
+      transferCashOut: transferTotals.cashOut,
       page,
       limit,
     },

@@ -14,17 +14,41 @@ const toNumber = (value) => {
   return Number.isFinite(num) ? num : 0;
 };
 
+// Same validation/shape as supplier.service.js's getHistoryDateWhere and
+// manufacturer.service.js's getTransactionDateWhere — a plain `date` range
+// filter for PackagingManufacturerTransaction rows.
+const getTransactionDateWhere = ({ startDate, endDate } = {}) => {
+  for (const value of [startDate, endDate]) {
+    if (!value) continue;
+    const parsed = new Date(value);
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+        Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+      throw new ApiError(400, "Dates must be valid YYYY-MM-DD values");
+    }
+  }
+  if (startDate && endDate && startDate > endDate) {
+    throw new ApiError(400, "Start date must be on or before end date");
+  }
+  if (!startDate && !endDate) return {};
+  return { date: {
+    ...(startDate ? { [Op.gte]: startDate } : {}),
+    ...(endDate ? { [Op.lte]: endDate } : {}),
+  } };
+};
+
 // A packaging manufacturer's balance is one running number: total paid
 // (credit) minus total wage owed (debit). A positive net balance is an
 // advance (they've been overpaid); a negative one is due. Paid stays a
 // separate lifetime total for display — it doesn't take part in the netting.
-// Mirrors manufacturer.service.js's getManufacturerAmountMap.
-const getManufacturerAmountMap = async (manufacturerIds = []) => {
+// Mirrors manufacturer.service.js's getManufacturerAmountMap. `dateWhere`
+// scopes this to a date range (e.g. the list page's date filter) instead of
+// all-time.
+const getManufacturerAmountMap = async (manufacturerIds = [], dateWhere = {}) => {
   const ids = manufacturerIds.map(Number).filter(Boolean);
   if (!ids.length) return new Map();
 
   const rows = await PackagingManufacturerTransaction.findAll({
-    where: { manufacturerId: { [Op.in]: ids } },
+    where: { manufacturerId: { [Op.in]: ids }, ...dateWhere },
     attributes: [
       "manufacturerId",
       [db.sequelize.fn("SUM", db.sequelize.col("debit")), "totalDebit"],
@@ -55,8 +79,11 @@ const getManufacturerAmountMap = async (manufacturerIds = []) => {
   );
 };
 
-const attachUnpaidAmounts = async (rows = []) => {
-  const amountMap = await getManufacturerAmountMap(rows.map((row) => row.Id));
+const attachUnpaidAmounts = async (rows = [], dateWhere = {}) => {
+  const amountMap = await getManufacturerAmountMap(
+    rows.map((row) => row.Id),
+    dateWhere,
+  );
   return rows.map((row) => {
     const summary = amountMap.get(Number(row.Id)) || {};
     const paidAmount = summary.paidAmount || 0;
@@ -83,7 +110,8 @@ const insertIntoDB = async (data) =>
 
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
-  const { searchTerm, ...filterData } = filters;
+  const { searchTerm, startDate, endDate, ...filterData } = filters;
+  const dateWhere = getTransactionDateWhere({ startDate, endDate });
   const andConditions = [];
 
   if (searchTerm) {
@@ -114,7 +142,7 @@ const getAllFromDB = async (filters, options) => {
     }),
     PackagingManufacturer.count({ where: whereConditions }),
   ]);
-  const data = await attachUnpaidAmounts(dataRows);
+  const data = await attachUnpaidAmounts(dataRows, dateWhere);
 
   return { meta: { count, page, limit }, data };
 };
@@ -139,11 +167,14 @@ const updateOneFromDB = async (id, payload) =>
     { where: { Id: id } },
   );
 
-const getAllFromDBWithoutQuery = async () =>
-  attachUnpaidAmounts(await PackagingManufacturer.findAll({
+const getAllFromDBWithoutQuery = async (filters = {}) => {
+  const dateWhere = getTransactionDateWhere(filters);
+  const rows = await PackagingManufacturer.findAll({
     paranoid: true,
     order: [["createdAt", "DESC"]],
-  }));
+  });
+  return attachUnpaidAmounts(rows, dateWhere);
+};
 
 const payManufacturerAmount = async (id, payload = {}) => {
   const manufacturer = await PackagingManufacturer.findOne({ where: { Id: id } });
@@ -167,7 +198,7 @@ const payManufacturerAmount = async (id, payload = {}) => {
 
 // Packaging manufacturers the company has overpaid — i.e. ones who still owe
 // the company wage work/refund. For the shared "All Books" / dashboard
-// statement report. `advance` is the current (unfiltered) overpayment;
+// statement report. `advance` is the closing (through the selected end date) overpayment;
 // `openingBalance` / `endingBalance` are the same figure as of `< from` and
 // `<= to`. Mirrors manufacturer.service.js's getManufacturerReceivableReport.
 const getPackagingManufacturerReceivableReport = async ({ from, to } = {}) => {
@@ -194,8 +225,7 @@ const getPackagingManufacturerReceivableReport = async ({ from, to } = {}) => {
     return map;
   };
 
-  const [currentMap, openingMap, endingMap] = await Promise.all([
-    advanceByManufacturer({}),
+  const [openingMap, endingMap] = await Promise.all([
     from
       ? advanceByManufacturer({ date: { [Op.lt]: from } })
       : Promise.resolve(new Map()),
@@ -206,7 +236,6 @@ const getPackagingManufacturerReceivableReport = async ({ from, to } = {}) => {
 
   const manufacturerIds = [
     ...new Set([
-      ...currentMap.keys(),
       ...openingMap.keys(),
       ...endingMap.keys(),
     ]),
@@ -224,12 +253,12 @@ const getPackagingManufacturerReceivableReport = async ({ from, to } = {}) => {
     .map((manufacturerId) => ({
       manufacturerId,
       name: nameById.get(manufacturerId) || null,
-      advance: currentMap.get(manufacturerId) || 0,
+      advance: endingMap.get(manufacturerId) || 0,
       openingBalance: openingMap.get(manufacturerId) || 0,
       endingBalance: endingMap.get(manufacturerId) || 0,
     }))
     // Skip deleted/unknown manufacturers — only live ones the company has
-    // overpaid (now or during the period) belong here.
+    // overpaid (at closing or during the period) belong here.
     .filter(
       (row) =>
         row.name &&
@@ -252,6 +281,89 @@ const getPackagingManufacturerReceivableReport = async ({ from, to } = {}) => {
   };
 };
 
+// Packaging manufacturers the company still owes — the mirror of
+// getPackagingManufacturerReceivableReport. `due` is the closing (through the
+// selected end date) figure; `openingBalance` / `endingBalance` are the same
+// as of `< from` and `<= to`. Mirrors manufacturer.service.js's
+// getManufacturerDueReport.
+const getPackagingManufacturerDueReport = async ({ from, to } = {}) => {
+  const dueByManufacturer = async (dateWhere) => {
+    const rows = await PackagingManufacturerTransaction.findAll({
+      attributes: [
+        "manufacturerId",
+        [db.sequelize.fn("SUM", db.sequelize.col("debit")), "totalDebit"],
+        [db.sequelize.fn("SUM", db.sequelize.col("credit")), "totalCredit"],
+      ],
+      where: dateWhere,
+      group: ["manufacturerId"],
+      raw: true,
+    });
+    const map = new Map();
+    rows.forEach((row) => {
+      if (!row.manufacturerId) return;
+      const due = Math.max(
+        toNumber(row.totalDebit) - toNumber(row.totalCredit),
+        0,
+      );
+      map.set(row.manufacturerId, due);
+    });
+    return map;
+  };
+
+  const [openingMap, endingMap] = await Promise.all([
+    from
+      ? dueByManufacturer({ date: { [Op.lt]: from } })
+      : Promise.resolve(new Map()),
+    to ? dueByManufacturer({ date: { [Op.lte]: to } }) : dueByManufacturer({}),
+  ]);
+
+  const manufacturerIds = [
+    ...new Set([
+      ...openingMap.keys(),
+      ...endingMap.keys(),
+    ]),
+  ];
+  const manufacturers = manufacturerIds.length
+    ? await PackagingManufacturer.findAll({
+        where: { Id: { [Op.in]: manufacturerIds } },
+        attributes: ["Id", "name"],
+        raw: true,
+      })
+    : [];
+  const nameById = new Map(manufacturers.map((m) => [m.Id, m.name]));
+
+  const data = manufacturerIds
+    .map((manufacturerId) => ({
+      manufacturerId,
+      name: nameById.get(manufacturerId) || null,
+      due: endingMap.get(manufacturerId) || 0,
+      openingBalance: openingMap.get(manufacturerId) || 0,
+      endingBalance: endingMap.get(manufacturerId) || 0,
+    }))
+    // Skip deleted/unknown manufacturers — only live ones with an outstanding
+    // due (at closing or during the period) belong here.
+    .filter(
+      (row) =>
+        row.name &&
+        (row.due > 0 || row.openingBalance > 0 || row.endingBalance > 0),
+    )
+    .sort((a, b) => b.due - a.due);
+
+  const sum = (key) => data.reduce((acc, row) => acc + row[key], 0);
+
+  return {
+    meta: {
+      from: from || null,
+      to: to || null,
+      count: data.length,
+      totalDue: sum("due"),
+      totalOpeningBalance: sum("openingBalance"),
+      totalEndingBalance: sum("endingBalance"),
+    },
+    data,
+  };
+};
+
 module.exports = {
   getAllFromDB,
   insertIntoDB,
@@ -261,4 +373,5 @@ module.exports = {
   getAllFromDBWithoutQuery,
   payManufacturerAmount,
   getPackagingManufacturerReceivableReport,
+  getPackagingManufacturerDueReport,
 };

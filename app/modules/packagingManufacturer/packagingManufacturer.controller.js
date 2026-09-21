@@ -34,7 +34,9 @@ const deleteIdFromDB = catchAsync(async (req, res) => {
 });
 
 const getAllFromDBWithoutQuery = catchAsync(async (req, res) => {
-  const result = await PackagingManufacturerService.getAllFromDBWithoutQuery();
+  const result = await PackagingManufacturerService.getAllFromDBWithoutQuery(
+    pick(req.query, ["startDate", "endDate"]),
+  );
   sendResponse(res, { statusCode: 200, success: true, message: "Packaging manufacturer fetch!!", data: result });
 });
 

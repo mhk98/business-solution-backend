@@ -444,6 +444,35 @@ const deleteIdFromDB = async (id) => {
   });
 };
 
+// Same-target edit path (item/product/manufacturer/variant AND quantity all
+// unchanged — only cost/note/date/status differ): apply just the cost delta
+// to the FactoryStock row in place, with no quantity check at all, instead
+// of the full reverse-then-reapply below. That two-step approach rejects
+// the edit the instant the OLD production amount alone doesn't fit back
+// into currently-available FactoryStock (e.g. some of it has since been
+// consumed by a Mixer or sold) — even when the edit doesn't touch quantity,
+// e.g. only Note, Date or Status changed.
+const adjustFactoryStockCostForSameTarget = async ({
+  where,
+  costDelta,
+  transaction,
+}) => {
+  if (!costDelta) return null;
+
+  const stockRow = await ManufacturerStock.findOne({
+    where,
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+    order: [["createdAt", "ASC"]],
+  });
+  if (!stockRow) return null;
+
+  return stockRow.update(
+    { cost: Math.max(0, toNumber(stockRow.cost) + costDelta) },
+    { transaction },
+  );
+};
+
 const updateOneFromDB = async (id, payload = {}) => {
   return db.sequelize.transaction(async (t) => {
     const existing = await ManufactureProduction.findOne({
@@ -459,96 +488,112 @@ const updateOneFromDB = async (id, payload = {}) => {
       await buildPayload(payload, oldData, { transaction: t }),
     );
 
-    await adjustStockBalance({
-      Model: ManufacturerStock,
-      where: buildManufacturerStockWhere(oldData),
-      stockLabel: "Manufacturer stock",
-      ...oldData,
-      delta: -toNumber(oldData.unitValue),
-      transaction: t,
-      movementContext: {
-        sourceType: "Factory",
-        sourceId: id,
-        operation: "UPDATE_REVERSE",
-        stockType: "FactoryStock",
-      },
-    });
+    const isSameTarget =
+      String(oldData.itemId) === String(nextData.itemId) &&
+      String(oldData.productId || "") === String(nextData.productId || "") &&
+      String(oldData.manufacturerId) === String(nextData.manufacturerId) &&
+      String(oldData.variantKey || "") === String(nextData.variantKey || "") &&
+      toNumber(oldData.unitValue) === toNumber(nextData.unitValue);
 
-    await adjustStockBalance({
-      Model: ItemMaster,
-      where: buildItemStockWhere(oldData),
-      stockLabel: "Item stock",
-      ...oldData,
-      delta: toNumber(oldData.unitValue),
-      transaction: t,
-      createOnPositive: true,
-      movementContext: {
-        sourceType: "Factory",
-        sourceId: id,
-        operation: "UPDATE_REVERSE",
-        stockType: "ItemStock",
-      },
-    });
-
-    // FIFO: undo the old production's layer consumption.
-    if (!oldData.productId) {
-      await itemFifo.restoreToLayers({
-        transaction: t,
-        costBreakdown: existing.costBreakdown,
-      });
-      await itemFifo.syncItemStockCost({
-        transaction: t,
-        itemId: oldData.itemId,
-      });
-    }
-
-    // FIFO: re-consume for the edited production.
     let consumed = null;
-    if (!nextData.productId) {
-      consumed = await itemFifo.consumeFifo({
-        transaction: t,
-        itemId: nextData.itemId,
-        quantity: toNumber(nextData.unitValue),
-      });
-      nextData.cost = consumed.totalCost;
-    }
 
-    await adjustStockBalance({
-      Model: ItemMaster,
-      where: buildItemStockWhere(nextData),
-      stockLabel: "Item stock",
-      ...nextData,
-      delta: -toNumber(nextData.unitValue),
-      transaction: t,
-      movementContext: {
-        sourceType: "Factory",
-        sourceId: id,
-        operation: "UPDATE_APPLY",
-        stockType: "ItemStock",
-      },
-    });
-    if (!nextData.productId) {
-      await itemFifo.syncItemStockCost({
+    if (isSameTarget) {
+      await adjustFactoryStockCostForSameTarget({
+        where: buildManufacturerStockWhere(nextData),
+        costDelta: toNumber(nextData.cost) - toNumber(oldData.cost),
         transaction: t,
-        itemId: nextData.itemId,
+      });
+    } else {
+      await adjustStockBalance({
+        Model: ManufacturerStock,
+        where: buildManufacturerStockWhere(oldData),
+        stockLabel: "Manufacturer stock",
+        ...oldData,
+        delta: -toNumber(oldData.unitValue),
+        transaction: t,
+        movementContext: {
+          sourceType: "Factory",
+          sourceId: id,
+          operation: "UPDATE_REVERSE",
+          stockType: "FactoryStock",
+        },
+      });
+
+      await adjustStockBalance({
+        Model: ItemMaster,
+        where: buildItemStockWhere(oldData),
+        stockLabel: "Item stock",
+        ...oldData,
+        delta: toNumber(oldData.unitValue),
+        transaction: t,
+        createOnPositive: true,
+        movementContext: {
+          sourceType: "Factory",
+          sourceId: id,
+          operation: "UPDATE_REVERSE",
+          stockType: "ItemStock",
+        },
+      });
+
+      // FIFO: undo the old production's layer consumption.
+      if (!oldData.productId) {
+        await itemFifo.restoreToLayers({
+          transaction: t,
+          costBreakdown: existing.costBreakdown,
+        });
+        await itemFifo.syncItemStockCost({
+          transaction: t,
+          itemId: oldData.itemId,
+        });
+      }
+
+      // FIFO: re-consume for the edited production.
+      if (!nextData.productId) {
+        consumed = await itemFifo.consumeFifo({
+          transaction: t,
+          itemId: nextData.itemId,
+          quantity: toNumber(nextData.unitValue),
+        });
+        nextData.cost = consumed.totalCost;
+      }
+
+      await adjustStockBalance({
+        Model: ItemMaster,
+        where: buildItemStockWhere(nextData),
+        stockLabel: "Item stock",
+        ...nextData,
+        delta: -toNumber(nextData.unitValue),
+        transaction: t,
+        movementContext: {
+          sourceType: "Factory",
+          sourceId: id,
+          operation: "UPDATE_APPLY",
+          stockType: "ItemStock",
+        },
+      });
+      if (!nextData.productId) {
+        await itemFifo.syncItemStockCost({
+          transaction: t,
+          itemId: nextData.itemId,
+        });
+      }
+
+      await adjustStockBalance({
+        Model: ManufacturerStock,
+        where: buildManufacturerStockWhere(nextData),
+        stockLabel: "Manufacturer stock",
+        ...nextData,
+        delta: toNumber(nextData.unitValue),
+        transaction: t,
+        createOnPositive: true,
+        movementContext: {
+          sourceType: "Factory",
+          sourceId: id,
+          operation: "UPDATE_APPLY",
+          stockType: "FactoryStock",
+        },
       });
     }
-
-    await adjustStockBalance({
-      Model: ManufacturerStock,
-      where: buildManufacturerStockWhere(nextData),
-      stockLabel: "Manufacturer stock",
-      ...nextData,
-      delta: toNumber(nextData.unitValue),
-      transaction: t,
-      createOnPositive: true,
-      movementContext: {
-        sourceType: "Factory",
-        sourceId: id,
-        operation: "UPDATE_APPLY",
-        stockType: "FactoryStock",
-      },
-    });
 
     const [count] = await ManufactureProduction.update(
       consumed ? { ...nextData, costBreakdown: consumed.costBreakdown } : nextData,

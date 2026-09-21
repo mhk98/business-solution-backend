@@ -244,6 +244,38 @@ const lastKnownUnitCostMap = async (packagingItemIds) => {
   return map;
 };
 
+// Most recent inbound receipt date per packaging item, from layers
+// regardless of remainingQty — same "layers are never deleted" reasoning as
+// lastKnownUnitCostMap, for display/reporting where a stale-but-real date
+// beats nothing.
+const lastReceivedDateMap = async (packagingItemIds) => {
+  const ids = [
+    ...new Set(
+      (packagingItemIds || [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0),
+    ),
+  ];
+  if (!ids.length) return new Map();
+
+  const layers = await Layer().findAll({
+    where: { packagingItemId: { [Op.in]: ids } },
+    order: [
+      ["receivedDate", "DESC"],
+      ["Id", "DESC"],
+    ],
+    raw: true,
+  });
+
+  const map = new Map();
+  for (const layer of layers) {
+    if (!map.has(layer.packagingItemId)) {
+      map.set(layer.packagingItemId, layer.receivedDate);
+    }
+  }
+  return map;
+};
+
 // Keep PackagingItemStock.cost in step with the layers (honest display).
 const syncItemStockCost = async ({ transaction, packagingItemId }) => {
   const stockRow = await ItemStock().findOne({
@@ -272,5 +304,6 @@ module.exports = {
   layerValue,
   currentUnitCost,
   lastKnownUnitCostMap,
+  lastReceivedDateMap,
   syncItemStockCost,
 };

@@ -48,6 +48,11 @@ db.packagingItemStock =
     db.sequelize,
     DataTypes,
   );
+db.packagingItemStockAdjustment =
+  require("../app/modules/packagingItemStockAdjustment/packagingItemStockAdjustment.model")(
+    db.sequelize,
+    DataTypes,
+  );
 db.packagingManufacturer =
   require("../app/modules/packagingManufacturer/packagingManufacturer.model")(
     db.sequelize,
@@ -55,6 +60,11 @@ db.packagingManufacturer =
   );
 db.packagingFactory =
   require("../app/modules/packagingFactory/packagingFactory.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.packagingFactoryStockAdjustment =
+  require("../app/modules/packagingFactoryStockAdjustment/packagingFactoryStockAdjustment.model")(
     db.sequelize,
     DataTypes,
   );
@@ -102,6 +112,11 @@ db.manufacturerTransaction =
   );
 db.stockAdjustment =
   require("../app/modules/stockAdjustment/stockAdjustment.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.factoryStockAdjustment =
+  require("../app/modules/factoryStockAdjustment/factoryStockAdjustment.model")(
     db.sequelize,
     DataTypes,
   );
@@ -666,6 +681,15 @@ db.supplierHistory.belongsTo(db.supplier, {
 db.book.hasMany(db.supplierHistory, { foreignKey: "bookId" });
 db.supplierHistory.belongsTo(db.book, { foreignKey: "bookId", as: "book" });
 
+db.manufacture.hasOne(db.supplierHistory, {
+  foreignKey: "manufactureId",
+  as: "supplierHistory",
+});
+db.supplierHistory.belongsTo(db.manufacture, {
+  foreignKey: "manufactureId",
+  as: "manufacture",
+});
+
 db.dollarSupplier.hasMany(db.dollarSupplierHistory, {
   foreignKey: "dollarSupplierId",
 });
@@ -734,6 +758,23 @@ db.stockAdjustment.belongsTo(db.item, { foreignKey: "itemId" });
 db.product.hasMany(db.stockAdjustment, { foreignKey: "productId" });
 db.stockAdjustment.belongsTo(db.product, { foreignKey: "productId" });
 
+db.manufactureStock.hasMany(db.factoryStockAdjustment, {
+  foreignKey: "manufactureStockId",
+});
+db.factoryStockAdjustment.belongsTo(db.manufactureStock, {
+  foreignKey: "manufactureStockId",
+});
+db.item.hasMany(db.factoryStockAdjustment, { foreignKey: "itemId" });
+db.factoryStockAdjustment.belongsTo(db.item, { foreignKey: "itemId" });
+db.product.hasMany(db.factoryStockAdjustment, { foreignKey: "productId" });
+db.factoryStockAdjustment.belongsTo(db.product, { foreignKey: "productId" });
+db.manufacturer.hasMany(db.factoryStockAdjustment, {
+  foreignKey: "manufacturerId",
+});
+db.factoryStockAdjustment.belongsTo(db.manufacturer, {
+  foreignKey: "manufacturerId",
+});
+
 // db.item.hasMany(db.mixer, { foreignKey: "itemId" });
 // db.mixer.belongsTo(db.item, { foreignKey: "itemId", as: "item" });
 
@@ -787,6 +828,32 @@ db.packagingManufacturer.hasMany(db.packagingFactoryStock, {
 db.packagingFactoryStock.belongsTo(db.packagingManufacturer, {
   foreignKey: "manufacturerId",
   as: "packagingManufacturer",
+});
+
+db.packagingItem.hasMany(db.packagingItemStockAdjustment, {
+  foreignKey: "packagingItemId",
+});
+db.packagingItemStockAdjustment.belongsTo(db.packagingItem, {
+  foreignKey: "packagingItemId",
+});
+
+db.packagingFactoryStock.hasMany(db.packagingFactoryStockAdjustment, {
+  foreignKey: "packagingFactoryStockId",
+});
+db.packagingFactoryStockAdjustment.belongsTo(db.packagingFactoryStock, {
+  foreignKey: "packagingFactoryStockId",
+});
+db.packagingItem.hasMany(db.packagingFactoryStockAdjustment, {
+  foreignKey: "packagingItemId",
+});
+db.packagingFactoryStockAdjustment.belongsTo(db.packagingItem, {
+  foreignKey: "packagingItemId",
+});
+db.packagingManufacturer.hasMany(db.packagingFactoryStockAdjustment, {
+  foreignKey: "manufacturerId",
+});
+db.packagingFactoryStockAdjustment.belongsTo(db.packagingManufacturer, {
+  foreignKey: "manufacturerId",
 });
 db.packagingManufacturer.hasMany(db.packagingManufacturerTransaction, {
   foreignKey: "manufacturerId",
@@ -3972,6 +4039,22 @@ const ensureCashInOutRefNoColumn = async () => {
   }
 };
 
+// SupplierHistory gained a manufactureId link back to the Item Purchase
+// record it was created from, so editing that purchase can find and adjust
+// the matching due/paid row instead of leaving it stale.
+const ensureSupplierHistoryManufactureColumn = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.supplierHistory.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+
+  if (!tableDefinition.manufactureId) {
+    await queryInterface.addColumn(tableName, "manufactureId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+};
+
 // DollarSupplierHistory gained USD breakdown columns (purchases entered in USD).
 const ensureDollarSupplierHistoryColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
@@ -4022,6 +4105,7 @@ db.sequelize
   .sync({ force: false })
   .then(async () => {
     await ensureCashInOutRefNoColumn();
+    await ensureSupplierHistoryManufactureColumn();
     await ensureDollarSupplierHistoryColumns();
     await ensureMarketingExpenseColumns();
     await ensureHolidayRangeColumns();

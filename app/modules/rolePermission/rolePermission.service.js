@@ -162,98 +162,6 @@ const validateMenuPermissions = (menuPermissions) => {
   return uniq(normalizedPermissions);
 };
 
-const includeNewSettingsChildren = (role, permissions = []) => {
-  if (isSuperAdminRole(role)) {
-    return getDefaultPermissionsForRole(role);
-  }
-
-  const permissionSet = new Set(normalizeMenuPermissions(permissions));
-  const defaults = DEFAULT_ROLE_MENU_PERMISSIONS[role] || [];
-
-  if (
-    permissionSet.has("settings") &&
-    defaults.includes("notice") &&
-    !permissionSet.has("notice")
-  ) {
-    permissionSet.add("notice");
-  }
-
-  if (defaults.includes("tasks") && !permissionSet.has("tasks")) {
-    permissionSet.add("tasks");
-  }
-
-  if (defaults.includes("loan") && !permissionSet.has("loan")) {
-    permissionSet.add("loan");
-  }
-
-  if (defaults.includes("owner") && !permissionSet.has("owner")) {
-    permissionSet.add("owner");
-  }
-
-  if (
-    defaults.includes("owner_transaction") &&
-    !permissionSet.has("owner_transaction")
-  ) {
-    permissionSet.add("owner_transaction");
-  }
-
-  if (
-    defaults.includes("director_profit_share") &&
-    !permissionSet.has("director_profit_share")
-  ) {
-    permissionSet.add("director_profit_share");
-  }
-
-  if (
-    defaults.includes("director_profit_share_transaction") &&
-    !permissionSet.has("director_profit_share_transaction")
-  ) {
-    permissionSet.add("director_profit_share_transaction");
-  }
-
-  [
-    "cod_change",
-    "cod_charge",
-    "delivery_advance",
-    "delivery_charge",
-    "shipping_charge",
-    "api_gateway",
-    "sms_gateway",
-    "email_notification_gateway",
-    "role_permissions",
-    "email_notification_permissions",
-    "sms_notification_permissions",
-    "master_permission",
-    "ads_campaign_kpi",
-    "auto_profit_loss",
-    "packaging",
-    "packaging_item",
-    "packaging_item_stock",
-    "packaging_item_purchase",
-    "packaging_manufacturer",
-    "packaging_factory",
-    "packaging_factory_stock",
-    "packaging_mixer",
-    "stock_alert",
-    "stock_movement",
-    "dollar_supplier",
-    "cs_work_reports",
-    "logistic_work_reports",
-    "employee_profile",
-    "employee_kpi",
-  ].forEach((permission) => {
-    if (defaults.includes(permission) && !permissionSet.has(permission)) {
-      permissionSet.add(permission);
-    }
-  });
-
-  if (permissionSet.has("logistic_work_reports")) {
-    permissionSet.add("logistic_update");
-  }
-
-  return Array.from(permissionSet);
-};
-
 const getDefaultPermissionsForRole = (role) => {
   const normalizedRole = validateRole(role);
   const permissions = new Set(DEFAULT_ROLE_MENU_PERMISSIONS[normalizedRole] || []);
@@ -283,7 +191,7 @@ const getEffectiveMenuPermissions = async (role) => {
   }
 
   return validateMenuPermissions(
-    includeNewSettingsChildren(normalizedRole, record.menuPermissions || []),
+    record.menuPermissions || [],
   );
 };
 

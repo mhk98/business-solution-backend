@@ -1,3 +1,4 @@
+const { getFundTransferPaymentModeRows } = require("../../../shared/fundTransferPaymentModes");
 const { Op } = require("sequelize");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
@@ -21,6 +22,7 @@ const {
 } = require("../manufacturer/manufacturer.service");
 const {
   getPackagingManufacturerReceivableReport,
+  getPackagingManufacturerDueReport,
 } = require("../packagingManufacturer/packagingManufacturer.service");
 const {
   getLenderReceivableReport,
@@ -1484,20 +1486,20 @@ const computePackagingStockReport = async ({ from, to, name } = {}) => {
   });
 };
 
-// Cash carried in from before `from` — every CashIn minus every CashOut
-// dated strictly before it, that's actually linked to a real book (bookId
-// not null). Some CashInOut rows (e.g. payroll-generated ones) are created
-// without a bookId and so never show up under any book's own Total
-// CashIn/CashOut widget — excluding them here keeps this figure consistent
-// with what the Book page displays for "everything before this date",
+// Every CashIn minus every CashOut up to a date boundary, restricted to rows
+// actually linked to a real book (bookId not null). Some CashInOut rows
+// (e.g. payroll-generated ones) are created without a bookId and so never
+// show up under any book's own Total CashIn/Total CashOut widget — excluding
+// them here keeps this figure consistent with what the Book page displays,
 // rather than silently including money the Book page itself doesn't count.
-const getCashOpeningBalance = async (from) => {
-  if (!CashInOut || !from) return 0;
-  const dateWhere = {
-    date: { [Op.lt]: from },
-    deletedAt: { [Op.is]: null },
-    bookId: { [Op.ne]: null },
-  };
+const buildCashDateWhere = (op, value) => ({
+  date: { [op]: value },
+  deletedAt: { [Op.is]: null },
+  bookId: { [Op.ne]: null },
+});
+
+const getCashBalance = async (dateWhere) => {
+  if (!CashInOut) return 0;
   const [cashIn, cashOut] = await Promise.all([
     CashInOut.sum("amount", {
       where: { ...dateWhere, paymentStatus: "CashIn" },
@@ -1509,14 +1511,71 @@ const getCashOpeningBalance = async (from) => {
   return n(cashIn) - n(cashOut);
 };
 
+// Same figure as getCashBalance, split by payment mode (Cash / Bank / bKash /
+// …) — company-wide (every book), not scoped to one book like
+// monthlyReportingBook.service.js's own per-book paymentModeSummary.
+// Restricted to paymentStatus CashIn/CashOut like getCashBalance's own sums —
+// CashInOut also carries non-cash-movement rows (loan/supplier
+// Due/Advance/Paid) that must not be netted in here. Rows with no
+// paymentMode tagged are dropped rather than bucketed under a placeholder —
+// they aren't a real payment mode to show as one.
+const getCashBalanceByPaymentMode = async (dateWhere) => {
+  if (!CashInOut) return [];
+  const [cashRows, transferRows] = await Promise.all([CashInOut.findAll({
+    where: { ...dateWhere, paymentStatus: { [Op.in]: ["CashIn", "CashOut"] } },
+    attributes: [
+      "paymentMode",
+      "paymentStatus",
+      [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "total"],
+    ],
+    group: ["paymentMode", "paymentStatus"],
+    paranoid: true,
+    raw: true,
+  }), getFundTransferPaymentModeRows(dateWhere)]);
+  const rows = [...cashRows, ...transferRows];
+
+  const modeMap = {};
+  rows.forEach((row) => {
+    const mode = row.paymentMode && String(row.paymentMode).trim();
+    if (!mode) return;
+    const signed =
+      String(row.paymentStatus || "").toLowerCase() === "cashin"
+        ? n(row.total)
+        : -n(row.total);
+    modeMap[mode] = (modeMap[mode] || 0) + signed;
+  });
+
+  return Object.entries(modeMap).map(([mode, amount]) => ({ mode, amount }));
+};
+
+// Cash carried in from before `from` (the report's opening/carry-forward
+// cutoff) and the mirroring "as of `to`" ending balance (the report's
+// closing position) — same query, just the date boundary and comparison
+// operator differ.
+const getCashOpeningBalance = (from) =>
+  from ? getCashBalance(buildCashDateWhere(Op.lt, from)) : Promise.resolve(0);
+
+const getCashOpeningBalanceByPaymentMode = (from) =>
+  from
+    ? getCashBalanceByPaymentMode(buildCashDateWhere(Op.lt, from))
+    : Promise.resolve([]);
+
+const getCashEndingBalance = (to) =>
+  to ? getCashBalance(buildCashDateWhere(Op.lte, to)) : Promise.resolve(0);
+
+const getCashEndingBalanceByPaymentMode = (to) =>
+  to
+    ? getCashBalanceByPaymentMode(buildCashDateWhere(Op.lte, to))
+    : Promise.resolve([]);
+
 // Petty Cash carried in from before `from` — every Petty Cash CashIn minus
 // every CashOut dated strictly before it. Its own "Total CashIn/Total
 // CashOut/Net Balance" widget (pettyCash.service.js) doesn't restrict by
 // bookId (only applies it when a specific book is filtered), so this
 // mirrors that — no bookId condition here either.
-const getPettyCashOpeningBalance = async (from) => {
-  if (!PettyCash || !from) return 0;
-  const dateWhere = { date: { [Op.lt]: from }, deletedAt: { [Op.is]: null } };
+const getPettyCashBalance = async (date, operator) => {
+  if (!PettyCash || !date) return 0;
+  const dateWhere = { date: { [operator]: date }, deletedAt: { [Op.is]: null } };
   const [cashIn, cashOut] = await Promise.all([
     PettyCash.sum("amount", {
       where: { ...dateWhere, paymentStatus: "CashIn" },
@@ -1527,6 +1586,9 @@ const getPettyCashOpeningBalance = async (from) => {
   ]);
   return n(cashIn) - n(cashOut);
 };
+
+const getPettyCashOpeningBalance = (from) => getPettyCashBalance(from, Op.lt);
+const getPettyCashEndingBalance = (to) => getPettyCashBalance(to, Op.lte);
 
 // Summary wrapper consumed by the Dashboard and the Monthly Reporting Book
 // PDF — one place for both, replacing the two near-identical copies that
@@ -1548,10 +1610,15 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     supplierDue,
     dollarSupplierDue,
     manufacturerDue,
+    packagingManufacturerDue,
     lenderPayable,
     directorInvestment,
     cashOpeningBalance,
+    cashOpeningBalanceByPaymentMode,
+    cashEndingBalance,
+    cashEndingBalanceByPaymentMode,
     pettyCashOpeningBalance,
+    pettyCashEndingBalance,
   ] = await Promise.all([
     computeStockMovementLedgerReport({ from, to }),
     computeItemFactoryStockReport({ from, to }),
@@ -1568,10 +1635,15 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     getSupplierDueReport({ from, to }),
     getDollarSupplierDueReport({ from, to }),
     getManufacturerDueReport({ from, to }),
+    getPackagingManufacturerDueReport({ from, to }),
     getLenderPayableReport({ from, to }),
     getDirectorInvestmentReport(),
     getCashOpeningBalance(from),
+    getCashOpeningBalanceByPaymentMode(from),
+    getCashEndingBalance(to),
+    getCashEndingBalanceByPaymentMode(to),
     getPettyCashOpeningBalance(from),
+    getPettyCashEndingBalance(to),
   ]);
   const rows = report.data || [];
 
@@ -1584,7 +1656,27 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
       from: report.meta?.from || null,
       to: report.meta?.to || null,
       cashOpeningBalance,
+      cashOpeningBalanceByPaymentMode,
+      cashEndingBalance,
+      cashEndingBalanceByPaymentMode,
       pettyCashOpeningBalance,
+      pettyCashEndingBalance,
+      receivableOpeningBalance: [
+        salesDue, salaryAdvance, supplierReceivable, dollarSupplierReceivable,
+        manufacturerReceivable, packagingManufacturerReceivable, lenderReceivable,
+      ].reduce((sum, entry) => sum + n(entry?.meta?.totalOpeningBalance), 0),
+      payableOpeningBalance: [
+        pendingPayrollSalary, manufacturerDue, packagingManufacturerDue,
+        supplierDue, dollarSupplierDue, lenderPayable,
+      ].reduce((sum, entry) => sum + n(entry?.meta?.totalOpeningBalance), 0),
+      receivableEndingBalance: [
+        salesDue, salaryAdvance, supplierReceivable, dollarSupplierReceivable,
+        manufacturerReceivable, packagingManufacturerReceivable, lenderReceivable,
+      ].reduce((sum, entry) => sum + n(entry?.meta?.totalEndingBalance), 0),
+      payableEndingBalance: [
+        pendingPayrollSalary, manufacturerDue, packagingManufacturerDue,
+        supplierDue, dollarSupplierDue, lenderPayable,
+      ].reduce((sum, entry) => sum + n(entry?.meta?.totalEndingBalance), 0),
       totalStockProduct: sumStockType("stockProduct", "Closing"),
       totalDamageStock: sumStockType("damageStock", "Closing"),
       totalRepairingStock: sumStockType("repairingStock", "Closing"),
@@ -1637,6 +1729,7 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     supplierDue,
     dollarSupplierDue,
     manufacturerDue,
+    packagingManufacturerDue,
     lenderPayable,
     directorInvestment,
   };

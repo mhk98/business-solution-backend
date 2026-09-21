@@ -107,7 +107,7 @@ const getAllUserFromDB = catchAsync(async (req, res) => {
 
   const options = pick(req.query, ["limit", "page", "sortBy", "sortOrder"]);
 
-  const result = await UserService.getAllUserFromDB(filters, options);
+  const result = await UserService.getAllUserFromDB(filters, options, req.user);
   sendResponse(res, {
     statusCode: 200,
     success: true,
@@ -185,7 +185,7 @@ const updateUserFromDB = catchAsync(async (req, res) => {
 });
 
 const deleteUserFromDB = catchAsync(async (req, res) => {
-  const result = await UserService.deleteUserFromDB(req.params.id);
+  const result = await UserService.deleteUserFromDB(req.params.id, req.user);
   sendResponse(res, {
     statusCode: 200,
     success: true,

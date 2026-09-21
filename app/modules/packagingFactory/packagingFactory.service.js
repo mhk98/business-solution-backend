@@ -305,11 +305,57 @@ const deleteIdFromDB = async (id) =>
     return PackagingFactory.destroy({ where: { Id: id }, transaction: t });
   });
 
+// Same-target edit path (packagingItemId/manufacturerId/quantity all
+// unchanged — only cost/date/note/status differ): adjust the
+// PackagingFactoryStock row's cost in place instead of the full
+// reverse-then-reapply below. That two-step approach (and its FIFO
+// restore+re-consume) rejects the edit the instant the OLD move's quantity
+// alone doesn't fit back into currently-available PackagingFactoryStock
+// (e.g. some of it has since been consumed by a Packaging Mixer) — even
+// when the edit doesn't touch quantity at all, e.g. only Note or Date.
+const adjustFactoryStockCostForSameTarget = async ({ where, costDelta, transaction }) => {
+  if (!costDelta) return null;
+
+  const stockRow = await PackagingFactoryStock.findOne({
+    where,
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+    order: [["createdAt", "ASC"]],
+  });
+  if (!stockRow) return null;
+
+  return stockRow.update(
+    { cost: Math.max(0, toNumber(stockRow.cost) + costDelta) },
+    { transaction },
+  );
+};
+
 const updateOneFromDB = async (id, payload = {}) => {
   const existing = await PackagingFactory.findOne({ where: { Id: id } });
   if (!existing) return 0;
 
   return db.sequelize.transaction(async (t) => {
+    const data = await buildPayload(payload, existing, { transaction: t });
+
+    const isSameTarget =
+      String(existing.packagingItemId) === String(data.packagingItemId) &&
+      String(existing.manufacturerId) === String(data.manufacturerId) &&
+      toNumber(existing.unitValue) === toNumber(data.unitValue);
+
+    if (isSameTarget) {
+      await adjustFactoryStockCostForSameTarget({
+        where: factoryStockWhere(data),
+        costDelta: toNumber(data.cost) - toNumber(existing.cost),
+        transaction: t,
+      });
+
+      const [count] = await PackagingFactory.update(data, {
+        where: { Id: id },
+        transaction: t,
+      });
+      return count;
+    }
+
     const oldPayload = toBaseStockPayload(existing.unit, existing.unitValue);
     await adjustStockBalance({
       Model: PackagingFactoryStock,
@@ -347,8 +393,6 @@ const updateOneFromDB = async (id, payload = {}) => {
       transaction: t,
       packagingItemId: existing.packagingItemId,
     });
-
-    const data = await buildPayload(payload, existing, { transaction: t });
 
     // FIFO: re-consume for the edited move.
     const consumed = await pkgFifo.consumeFifo({

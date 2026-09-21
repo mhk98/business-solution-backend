@@ -24,6 +24,7 @@ const MonthlyReportingBookStatementFilterAbleFields = [
   "startDate",
   "endDate",
   "bookId",
+  "includeInventoryStockReport",
 ];
 
 module.exports = {

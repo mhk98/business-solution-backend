@@ -39,14 +39,14 @@ const isMasterEmail = async (email) => {
 };
 
 const assertMasterUser = async (user) => {
-  const allowed = await isMasterEmail(user?.Email || user?.email);
+  const allowed = user?.role === "superAdmin" || await isMasterEmail(user?.Email || user?.email);
   if (!allowed) {
     throw new ApiError(403, "Only master permission users can manage this.");
   }
 };
 
 const getSelfPermission = async (user) => {
-  const canManageMasterPermission = await isMasterEmail(user?.Email || user?.email);
+  const canManageMasterPermission = user?.role === "superAdmin" || await isMasterEmail(user?.Email || user?.email);
   return { canManageMasterPermission };
 };
 
