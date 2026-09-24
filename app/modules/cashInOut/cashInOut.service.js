@@ -327,14 +327,12 @@ const insertIntoDB = async (data) => {
       const supplierData = {
         supplierId,
         bookId,
+        cashInOutId: result.Id,
         amount,
         status: "Paid",
         date,
         file,
-        note,
       };
-
-      console.log("supplierData", supplierData);
 
       await SupplierHistory.create(supplierData, { transaction: t });
     }
@@ -384,6 +382,7 @@ const insertIntoDB = async (data) => {
           manufacturerId,
           manufacturerName: manufacturer.name,
           mixerId: null,
+          cashInOutId: result.Id,
           type: "PAYMENT",
           description: "Manufacturer payment (Book)",
           debit: 0,
@@ -401,6 +400,7 @@ const insertIntoDB = async (data) => {
           manufacturerId: packagingManufacturerId,
           manufacturerName: packagingManufacturer.name,
           mixerId: null,
+          cashInOutId: result.Id,
           type: "PAYMENT",
           description: "Packaging manufacturer payment (Book)",
           debit: 0,
@@ -959,15 +959,36 @@ const getDataById = async (id) => {
 };
 
 const deleteIdFromDB = async (id) => {
-  const result = await CashInOut.destroy({
-    where: {
-      Id: id,
-    },
+  return db.sequelize.transaction(async (t) => {
+    const result = await CashInOut.destroy({
+      where: { Id: id },
+      transaction: t,
+    });
+
+    await Promise.all([
+      SupplierHistory.destroy({ where: { cashInOutId: id }, transaction: t }),
+      DollarSupplierHistory.destroy({
+        where: { cashInOutId: id },
+        transaction: t,
+      }),
+      LenderHistory.destroy({ where: { cashInOutId: id }, transaction: t }),
+      ManufacturerTransaction.destroy({
+        where: { cashInOutId: id },
+        transaction: t,
+      }),
+      PackagingManufacturerTransaction.destroy({
+        where: { cashInOutId: id },
+        transaction: t,
+      }),
+      OwnerTransaction.destroy({ where: { cashInOutId: id }, transaction: t }),
+      DirectorProfitShare.destroy({
+        where: { cashInOutId: id },
+        transaction: t,
+      }),
+    ]);
+
+    return result;
   });
-
-  await LenderHistory.destroy({ where: { cashInOutId: id } });
-
-  return result;
 };
 
 const updateOneFromDB = async (id, payload) => {
@@ -1060,18 +1081,44 @@ const updateOneFromDB = async (id, payload) => {
       },
     );
 
+    // Supplier — keep one history row per cash entry (upsert by
+    // cashInOutId), same pattern as Dollar Supplier below, so editing the
+    // Book entry updates the existing row instead of piling up duplicates,
+    // and clearing the supplier removes the mirrored row.
+    const existingSupplierHistory = await SupplierHistory.findOne({
+      where: { cashInOutId: id },
+      transaction: t,
+      paranoid: false,
+    });
+
     if (hasSupplierId) {
       const supplierData = {
         supplierId,
         bookId,
-        amount,
+        cashInOutId: id,
         status: "Paid",
         date,
         file,
-        note,
+        ...(amount !== undefined && amount !== null && String(amount) !== ""
+          ? { amount }
+          : {}),
       };
 
-      await SupplierHistory.create(supplierData, { transaction: t });
+      if (existingSupplierHistory) {
+        if (
+          existingSupplierHistory.deletedAt &&
+          typeof existingSupplierHistory.restore === "function"
+        ) {
+          await existingSupplierHistory.restore({ transaction: t });
+        }
+        await existingSupplierHistory.update(supplierData, {
+          transaction: t,
+        });
+      } else {
+        await SupplierHistory.create(supplierData, { transaction: t });
+      }
+    } else if (existingSupplierHistory) {
+      await existingSupplierHistory.destroy({ transaction: t });
     }
 
     // Dollar Supplier — keep one history row per cash entry (upsert by
@@ -1157,27 +1204,64 @@ const updateOneFromDB = async (id, payload) => {
       await existingLenderHistory.destroy({ transaction: t });
     }
 
+    // Manufacturer / Packaging Manufacturer — keep one transaction row per
+    // cash entry (upsert by cashInOutId), same pattern as Dollar Supplier /
+    // Lender above.
+    const existingManufacturerTransaction = await ManufacturerTransaction.findOne(
+      {
+        where: { cashInOutId: id },
+        transaction: t,
+        paranoid: false,
+      },
+    );
+
     if (hasManufacturerId) {
       const manufacturer = await Manufacturer.findByPk(manufacturerId, {
         transaction: t,
       });
       if (!manufacturer) throw new ApiError(404, "Manufacturer not found");
 
-      await ManufacturerTransaction.create(
-        {
-          manufacturerId,
-          manufacturerName: manufacturer.name,
-          mixerId: null,
-          type: "PAYMENT",
-          description: "Manufacturer payment (Book)",
-          debit: 0,
-          credit: amount,
-          date,
-          note: note || "",
-        },
-        { transaction: t },
-      );
+      const manufacturerTransactionData = {
+        manufacturerId,
+        manufacturerName: manufacturer.name,
+        mixerId: null,
+        cashInOutId: id,
+        type: "PAYMENT",
+        description: "Manufacturer payment (Book)",
+        debit: 0,
+        date,
+        note: note || "",
+        ...(amount !== undefined && amount !== null && String(amount) !== ""
+          ? { credit: amount }
+          : {}),
+      };
+
+      if (existingManufacturerTransaction) {
+        if (
+          existingManufacturerTransaction.deletedAt &&
+          typeof existingManufacturerTransaction.restore === "function"
+        ) {
+          await existingManufacturerTransaction.restore({ transaction: t });
+        }
+        await existingManufacturerTransaction.update(
+          manufacturerTransactionData,
+          { transaction: t },
+        );
+      } else {
+        await ManufacturerTransaction.create(manufacturerTransactionData, {
+          transaction: t,
+        });
+      }
+    } else if (existingManufacturerTransaction) {
+      await existingManufacturerTransaction.destroy({ transaction: t });
     }
+
+    const existingPackagingManufacturerTransaction =
+      await PackagingManufacturerTransaction.findOne({
+        where: { cashInOutId: id },
+        transaction: t,
+        paranoid: false,
+      });
 
     if (hasPackagingManufacturerId) {
       const packagingManufacturer = await PackagingManufacturer.findByPk(
@@ -1187,20 +1271,45 @@ const updateOneFromDB = async (id, payload) => {
       if (!packagingManufacturer)
         throw new ApiError(404, "Packaging manufacturer not found");
 
-      await PackagingManufacturerTransaction.create(
-        {
-          manufacturerId: packagingManufacturerId,
-          manufacturerName: packagingManufacturer.name,
-          mixerId: null,
-          type: "PAYMENT",
-          description: "Packaging manufacturer payment (Book)",
-          debit: 0,
-          credit: amount,
-          date,
-          note: note || "",
-        },
-        { transaction: t },
-      );
+      const packagingManufacturerTransactionData = {
+        manufacturerId: packagingManufacturerId,
+        manufacturerName: packagingManufacturer.name,
+        mixerId: null,
+        cashInOutId: id,
+        type: "PAYMENT",
+        description: "Packaging manufacturer payment (Book)",
+        debit: 0,
+        date,
+        note: note || "",
+        ...(amount !== undefined && amount !== null && String(amount) !== ""
+          ? { credit: amount }
+          : {}),
+      };
+
+      if (existingPackagingManufacturerTransaction) {
+        if (
+          existingPackagingManufacturerTransaction.deletedAt &&
+          typeof existingPackagingManufacturerTransaction.restore ===
+            "function"
+        ) {
+          await existingPackagingManufacturerTransaction.restore({
+            transaction: t,
+          });
+        }
+        await existingPackagingManufacturerTransaction.update(
+          packagingManufacturerTransactionData,
+          { transaction: t },
+        );
+      } else {
+        await PackagingManufacturerTransaction.create(
+          packagingManufacturerTransactionData,
+          { transaction: t },
+        );
+      }
+    } else if (existingPackagingManufacturerTransaction) {
+      await existingPackagingManufacturerTransaction.destroy({
+        transaction: t,
+      });
     }
 
     const existingOwnerTransaction = shouldSyncOwnerTransaction

@@ -4,6 +4,7 @@ const ItemRequisitionFilterAbleFileds = [
   "endDate",
   "name",
   "itemId",
+  "supplierId",
   "status",
 ];
 

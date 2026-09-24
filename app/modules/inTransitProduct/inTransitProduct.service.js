@@ -18,8 +18,20 @@ const {
   assertCatalogInventoryMovementVariants,
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
-const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const {
+  logStockMovement,
+  pendingMark,
+  assignPendingSource,
+} = require("../../../shared/stockMovementLogger");
 const fifo = require("../../../shared/fifoCostLayers");
+
+// Dispatch cost recorded on the row = quantity × the Stock Product's
+// purchase_price. FIFO layers are still consumed (to keep them in sync),
+// but their costs were incomplete and produced ৳0 / far-too-low costs, so
+// the row's cost follows the Stock Product price the business maintains.
+const stockPurchaseCost = (inventory, quantity) =>
+  Math.round(Number(inventory?.purchase_price || 0) * Number(quantity || 0) * 100) / 100;
+
 const InTransitProduct = db.inTransitProduct;
 const Notification = db.notification;
 const User = db.user;
@@ -255,7 +267,7 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
     variants: incomingVariants,
     purchase_price: movementPrices.purchase_price,
     sale_price: movementPrices.sale_price,
-    fifo_cost: consumed.totalCost,
+    fifo_cost: stockPurchaseCost(inventory, returnQty),
   };
 };
 
@@ -295,6 +307,7 @@ const restoreItemsToInventory = async (
     await logStockMovement({
       transaction,
       sourceType: "InTransitProduct",
+      sourceId,
       operation: "REVERSE",
       stockType: "ProductStock",
       productId: inventory.productId,
@@ -442,7 +455,10 @@ const insertIntoDB = async (data) => {
       quantity: returnQty,
       variants: incomingVariants,
     });
-    await result.update({ fifo_cost: consumed.totalCost }, { transaction: t });
+    await result.update(
+      { fifo_cost: stockPurchaseCost(inventory, returnQty) },
+      { transaction: t },
+    );
     await logStockMovement({
       transaction: t,
       sourceType: "InTransitProduct",
@@ -512,7 +528,10 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
     const normalizedItems = [];
 
     for (const item of items) {
-      normalizedItems.push(await moveItemFromInventory(item, t));
+      const pendingStart = pendingMark(t);
+      const movedItem = await moveItemFromInventory(item, t, date);
+      movedItem.pendingRange = [pendingStart, pendingMark(t)];
+      normalizedItems.push(movedItem);
     }
 
     const results = [];
@@ -537,6 +556,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
         },
         { transaction: t },
       );
+      await assignPendingSource(t, normalizedItem.pendingRange, result.Id);
       results.push(result);
     }
     const result = results[0];
@@ -1010,7 +1030,10 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
     const nextItems = preparedItems.length ? preparedItems : oldItems;
     const normalizedItems = [];
     for (const item of nextItems) {
-      normalizedItems.push(await moveItemFromInventory(item, t));
+      const pendingStart = pendingMark(t);
+      const movedItem = await moveItemFromInventory(item, t, date);
+      movedItem.pendingRange = [pendingStart, pendingMark(t)];
+      normalizedItems.push(movedItem);
     }
 
     // Delete the old single bulk row and create separate rows per item
@@ -1018,7 +1041,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
 
     const resolvedBatchId = existing.batchId || `batch-${Date.now()}`;
     for (const normalizedItem of normalizedItems) {
-      await InTransitProduct.create(
+      const createdRow = await InTransitProduct.create(
         {
           name: normalizedItem.name,
           supplierId,
@@ -1038,6 +1061,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
         },
         { transaction: t },
       );
+      await assignPendingSource(t, normalizedItem.pendingRange, createdRow.Id);
     }
     const updatedCount = normalizedItems.length;
 

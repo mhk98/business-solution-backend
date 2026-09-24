@@ -29,6 +29,12 @@ module.exports = (sequelize, DataTypes) => {
         defaultValue: 0,
         allowNull: true,
       },
+      // Exact weighted-average unit cost (purchase_price is an integer
+      // column, so it only carries the rounded figure). See shared/averageCost.js.
+      averageCost: {
+        type: DataTypes.DECIMAL(14, 4),
+        allowNull: true,
+      },
       sale_price: {
         type: DataTypes.INTEGER(10),
         defaultValue: 0,

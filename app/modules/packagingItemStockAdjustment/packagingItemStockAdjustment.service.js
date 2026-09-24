@@ -126,6 +126,7 @@ const reverseAdjustmentEffect = async ({
   stock,
   costBreakdown,
   transaction,
+  movementContext,
 }) => {
   const totalUnitValue = toNumber(unitValue);
   if (!packagingItemId || totalUnitValue <= 0) return;
@@ -153,13 +154,24 @@ const reverseAdjustmentEffect = async ({
     throw new ApiError(400, "Packaging item stock cannot be negative");
   }
 
-  await stockRow.update(
+  const updatedStockRow = await stockRow.update(
     {
       unit: currentStockPayload.isConvertedUnit ? currentStockPayload.unit : unit || stockRow.unit,
       unitValue: nextStock,
     },
     { transaction },
   );
+  await logStockMovement({
+    transaction,
+    ...movementContext,
+    stockType: "PackagingItemStock",
+    stockRow: updatedStockRow,
+    itemId: packagingItemId,
+    unit: updatedStockRow.unit,
+    quantityChange: delta,
+    balanceBefore: availableStock,
+    balanceAfter: nextStock,
+  });
 
   await pkgFifo.syncItemStockCost({ transaction, packagingItemId });
 };
@@ -286,7 +298,7 @@ const deleteIdFromDB = async (id) => {
   return db.sequelize.transaction(async (t) => {
     const existing = await PackagingItemStockAdjustment.findOne({
       where: { Id: id },
-      attributes: ["Id", "packagingItemId", "unit", "unitValue", "stock", "costBreakdown"],
+      attributes: ["Id", "packagingItemId", "unit", "unitValue", "stock", "costBreakdown", "date"],
       transaction: t,
       lock: t.LOCK.UPDATE,
     });
@@ -300,6 +312,12 @@ const deleteIdFromDB = async (id) => {
       stock: existing.stock,
       costBreakdown: existing.costBreakdown,
       transaction: t,
+      movementContext: {
+        sourceType: "PackagingItemStockAdjustment",
+        sourceId: existing.Id,
+        operation: "DELETE",
+        date: existing.date ? String(existing.date).slice(0, 10) : null,
+      },
     });
 
     return PackagingItemStockAdjustment.destroy({ where: { Id: id }, transaction: t });
@@ -359,6 +377,12 @@ const updateOneFromDB = async (id, payload) => {
       stock: existing.stock,
       costBreakdown: existing.costBreakdown,
       transaction: t,
+      movementContext: {
+        sourceType: "PackagingItemStockAdjustment",
+        sourceId: id,
+        operation: "UPDATE_REVERSE",
+        date: existing.date ? String(existing.date).slice(0, 10) : null,
+      },
     });
 
     const effect = await applyAdjustmentEffect({

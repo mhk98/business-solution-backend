@@ -18,7 +18,11 @@ const {
   assertCatalogInventoryMovementVariants,
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
-const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const {
+  logStockMovement,
+  pendingMark,
+  assignPendingSource,
+} = require("../../../shared/stockMovementLogger");
 const fifo = require("../../../shared/fifoCostLayers");
 const PurchaseReturnProduct = db.purchaseReturnProduct;
 const Notification = db.notification;
@@ -204,7 +208,7 @@ const normalizeReturnItem = async (item, transaction, date = null) => {
   };
 };
 
-const restoreReturnItemsToInventory = async (items = [], transaction) => {
+const restoreReturnItemsToInventory = async (items = [], transaction, sourceId = null) => {
   for (const item of items) {
     const qty = Number(item.quantity || 0);
     if (qty <= 0) throw new ApiError(400, "Invalid return quantity");
@@ -235,6 +239,7 @@ const restoreReturnItemsToInventory = async (items = [], transaction) => {
     await logStockMovement({
       transaction,
       sourceType: "PurchaseReturnProduct",
+      sourceId,
       operation: "REVERSE",
       stockType: "ProductStock",
       productId: inventory.productId,
@@ -422,7 +427,10 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
     const normalizedItems = [];
 
     for (const item of items) {
-      normalizedItems.push(await normalizeReturnItem(item, t));
+      const pendingStart = pendingMark(t);
+      const movedItem = await normalizeReturnItem(item, t);
+      movedItem.pendingRange = [pendingStart, pendingMark(t)];
+      normalizedItems.push(movedItem);
     }
 
     const results = [];
@@ -445,6 +453,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
         },
         { transaction: t },
       );
+      await assignPendingSource(t, normalizedItem.pendingRange, result.Id);
       results.push(result);
     }
     const result = results[0];
@@ -593,7 +602,7 @@ const deleteIdFromDB = async (id) => {
 
     const returnItems = parseItems(ret.items);
     if (returnItems.length > 0) {
-      await restoreReturnItemsToInventory(returnItems, t);
+      await restoreReturnItemsToInventory(returnItems, t, id);
 
       await PurchaseReturnProduct.destroy({
         where: { Id: id },
@@ -916,19 +925,22 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
           },
         ];
 
-    await restoreReturnItemsToInventory(restoreItems, t);
+    await restoreReturnItemsToInventory(restoreItems, t, id);
 
     const nextItems = preparedItems.length ? preparedItems : oldItems;
     const normalizedItems = [];
     for (const item of nextItems) {
-      normalizedItems.push(await normalizeReturnItem(item, t));
+      const pendingStart = pendingMark(t);
+      const movedItem = await normalizeReturnItem(item, t);
+      movedItem.pendingRange = [pendingStart, pendingMark(t)];
+      normalizedItems.push(movedItem);
     }
 
     // Delete the old single bulk row and create separate rows per item
     await PurchaseReturnProduct.destroy({ where: { Id: id }, transaction: t });
 
     for (const normalizedItem of normalizedItems) {
-      await PurchaseReturnProduct.create(
+      const createdRow = await PurchaseReturnProduct.create(
         {
           name: normalizedItem.name,
           supplierId,
@@ -946,6 +958,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
         },
         { transaction: t },
       );
+      await assignPendingSource(t, normalizedItem.pendingRange, createdRow.Id);
     }
     const updatedCount = normalizedItems.length;
 

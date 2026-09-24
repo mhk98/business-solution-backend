@@ -20,6 +20,9 @@ const {
   toBaseStockPayload,
 } = require("../../../helpers/unitConversionHelper");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const itemFifo = require("../../../shared/itemFifoCostLayers");
+const productFifo = require("../../../shared/fifoCostLayers");
+const { calculateMixerPurchasePrice } = require("../../../shared/mixerPurchaseCost");
 const Mixer = db.mixer;
 const Notification = db.notification;
 const User = db.user;
@@ -209,6 +212,14 @@ const getOutputPriceSummary = (variants, purchasePrice = 0, salePrice = 0) => {
   };
 };
 
+const parseCustomPurchasePrice = (value) => {
+  const price = Number(value);
+  if (value === "" || value === null || !Number.isFinite(price) || price < 0) {
+    throw new ApiError(400, "Custom purchase price must be 0 or greater");
+  }
+  return Math.round(price * 100) / 100;
+};
+
 const buildMixerNote = (
   note,
   mixItems,
@@ -282,6 +293,7 @@ const buildMixerNote = (
     variants: serializedVariants,
     warehouseId: warehouseId ? Number(warehouseId) : null,
     purchase_price: toNumber(outputPrices.purchase_price),
+    purchase_price_custom: Boolean(outputPrices.purchase_price_custom),
     sale_price: toNumber(outputPrices.sale_price),
   })}`;
 };
@@ -363,6 +375,7 @@ const parseMixerNote = (note = "") => {
       variants: normalizeOutputVariants(parsedMeta?.variants),
       warehouseId: parsedMeta?.warehouseId ? Number(parsedMeta.warehouseId) : null,
       purchase_price: toNumber(parsedMeta?.purchase_price),
+      purchase_price_custom: Boolean(parsedMeta?.purchase_price_custom),
       sale_price: toNumber(parsedMeta?.sale_price),
     };
   } catch (error) {
@@ -376,6 +389,7 @@ const parseMixerNote = (note = "") => {
       variants: [],
       warehouseId: null,
       purchase_price: 0,
+      purchase_price_custom: false,
       sale_price: 0,
     };
   }
@@ -680,6 +694,7 @@ const getStoredStockContext = async (mixerRecord, transaction) => {
     variants: parsed.variants || [],
     warehouseId: parsed.warehouseId || null,
     purchase_price: parsed.purchase_price || 0,
+    purchase_price_custom: Boolean(parsed.purchase_price_custom),
     sale_price: parsed.sale_price || 0,
     combo: mixerRecord?.combo,
     productId: mixerRecord?.productId,
@@ -724,9 +739,18 @@ const syncMixerOutputPricesOnly = async (
     {
       purchase_price: toNumber(purchasePrice),
       sale_price: toNumber(salePrice),
+      variants: parseVariants(inv.variants).map((variant) => ({
+        ...variant,
+        purchase_price: toNumber(purchasePrice),
+      })),
     },
     { transaction },
   );
+  await productFifo.setOpenLayersUnitCost({
+    transaction,
+    productId,
+    unitCost: toNumber(purchasePrice),
+  });
   await syncProductStockId(productData, inv.Id, transaction);
 };
 
@@ -806,6 +830,34 @@ const deleteMixerReceivedProduct = async (mixerId, transaction) => {
   });
 };
 
+// Mixer output is product stock coming in, so it opens FIFO cost layers at the
+// mixer's purchase price, same as a Purchase Product receipt does. Without
+// them the product had no cost layers, and dispatch/POS/report costs fell
+// back to ৳0 or stale sales-return layers.
+const openMixerOutputLayers = ({
+  transaction,
+  productId,
+  quantity,
+  variants,
+  purchasePrice,
+  movement,
+}) =>
+  productFifo.openForRow({
+    transaction,
+    productId,
+    quantity,
+    unitCost: toNumber(purchasePrice),
+    variants: normalizeOutputVariants(variants).map((variant) => ({
+      ...variant,
+      purchase_price: toNumber(purchasePrice),
+    })),
+    receivedDate: movement?.date
+      ? new Date(movement.date).toISOString().slice(0, 10)
+      : undefined,
+    sourceType: "Mixer",
+    sourceMovementId: movement?.Id || null,
+  });
+
 const addMixerOutputToInventory = async (
   productData,
   combo,
@@ -848,7 +900,7 @@ const addMixerOutputToInventory = async (
       }),
       { transaction },
     );
-    await logStockMovement({
+    const movement = await logStockMovement({
       transaction,
       ...movementContext,
       stockType: movementContext?.stockType || "ProductStock",
@@ -860,6 +912,14 @@ const addMixerOutputToInventory = async (
       quantityChange: quantity,
       balanceBefore,
       balanceAfter,
+    });
+    await openMixerOutputLayers({
+      transaction,
+      productId,
+      quantity,
+      variants: outputVariants,
+      purchasePrice,
+      movement,
     });
 
     await syncProductStockId(productData, inv.Id, transaction);
@@ -888,7 +948,7 @@ const addMixerOutputToInventory = async (
     }),
     { transaction },
   );
-  await logStockMovement({
+  const movement = await logStockMovement({
     transaction,
     ...movementContext,
     stockType: movementContext?.stockType || "ProductStock",
@@ -900,6 +960,14 @@ const addMixerOutputToInventory = async (
     quantityChange: quantity,
     balanceBefore: 0,
     balanceAfter: quantity,
+  });
+  await openMixerOutputLayers({
+    transaction,
+    productId,
+    quantity,
+    variants: outputVariants,
+    purchasePrice,
+    movement,
   });
 
   await syncProductStockId(productData, stock.Id, transaction);
@@ -961,6 +1029,7 @@ const removeMixerOutputFromInventory = async (
     balanceBefore,
     balanceAfter: nextQuantity,
   });
+  await productFifo.unwindForRow({ transaction, productId, quantity, variants });
 };
 
 const reconcileItemMasterStock = async (
@@ -1009,6 +1078,39 @@ const reconcileItemMasterStock = async (
       );
     }
 
+    // FIFO: Mixer consumption must draw down Item Stock's cost layers just
+    // like Factory production does — otherwise the layers drift out of sync
+    // with unitValue (exactly the bug that inflated Item Stock's Unit Cost
+    // for several items) and the very next Item Purchase's syncItemStockCost
+    // would silently overwrite whatever cost this left behind. A recipe edit
+    // that uses LESS of an item than before (delta > 0, net restore) has no
+    // stored breakdown of which layers it originally drew from, so — same as
+    // a Stock Adjustment "In" — it reopens a layer at the item's current
+    // average cost rather than guessing.
+    if (stockRow.itemId) {
+      if (delta < 0) {
+        await itemFifo.consumeFifo({
+          transaction,
+          itemId: stockRow.itemId,
+          quantity: -delta,
+        });
+      } else {
+        const unitCost = await itemFifo.currentUnitCost({
+          transaction,
+          itemId: stockRow.itemId,
+        });
+        await itemFifo.openLayer({
+          transaction,
+          itemId: stockRow.itemId,
+          unitCost,
+          quantity: delta,
+          receivedDate: new Date().toISOString().slice(0, 10),
+          sourceType: "Mixer",
+          sourceMovementId: movementContext?.sourceId || null,
+        });
+      }
+    }
+
     const updatedStockRow = await stockRow.update(
       {
         unit: currentStockPayload.isConvertedUnit
@@ -1018,6 +1120,12 @@ const reconcileItemMasterStock = async (
       },
       { transaction },
     );
+    if (stockRow.itemId) {
+      await itemFifo.syncItemStockCost({
+        transaction,
+        itemId: stockRow.itemId,
+      });
+    }
     await logStockMovement({
       transaction,
       ...movementContext,
@@ -1128,6 +1236,7 @@ const sanitizeMixerRecord = (record) => {
     mixItems,
     packagingItems,
     purchase_price,
+    purchase_price_custom,
     sale_price,
   } = parseMixerNote(record.note);
   if (typeof record.setDataValue === "function") {
@@ -1137,6 +1246,7 @@ const sanitizeMixerRecord = (record) => {
     record.setDataValue("mixItems", mixItems || []);
     record.setDataValue("packagingItems", packagingItems || []);
     record.setDataValue("purchase_price", purchase_price || 0);
+    record.setDataValue("purchase_price_custom", Boolean(purchase_price_custom));
     record.setDataValue("sale_price", sale_price || 0);
     record.setDataValue("unitWage", toNumber(record.unitWage));
     record.setDataValue("othersCost", toNumber(record.othersCost));
@@ -1152,6 +1262,7 @@ const sanitizeMixerRecord = (record) => {
     mixItems: mixItems || [],
     packagingItems: packagingItems || [],
     purchase_price: purchase_price || 0,
+    purchase_price_custom: Boolean(purchase_price_custom),
     sale_price: sale_price || 0,
     unitWage: toNumber(record.unitWage),
     othersCost: toNumber(record.othersCost),
@@ -1201,6 +1312,7 @@ const insertIntoDB = async (payload) => {
     combo,
     variants,
     purchase_price,
+    purchase_price_custom,
     sale_price,
     unitWage,
     othersCost,
@@ -1226,6 +1338,16 @@ const insertIntoDB = async (payload) => {
   );
 
   return db.sequelize.transaction(async (t) => {
+    // A user-entered (custom) Purchase Price wins over the recipe costing;
+    // the flag is kept in the note meta so later edits keep honouring it.
+    outputPrices.purchase_price_custom = Boolean(purchase_price_custom);
+    outputPrices.purchase_price = outputPrices.purchase_price_custom
+      ? parseCustomPurchasePrice(purchase_price)
+      : await calculateMixerPurchasePrice({
+          mixItems, packagingItems, combo: outputQuantity, unitWage,
+          othersCost: mixerOthersCost, manufacturerId, transaction: t,
+        });
+    outputVariants.forEach((variant) => { variant.purchase_price = outputPrices.purchase_price; });
     const manufacturer = await getManufacturerById(manufacturerId, t);
 
     const manufacturerContext = {
@@ -1458,6 +1580,7 @@ const updateOneFromDB = async (id, payload) => {
     combo,
     warehouseId,
     purchase_price,
+    purchase_price_custom,
     sale_price,
     unitWage,
     othersCost,
@@ -1575,6 +1698,23 @@ const updateOneFromDB = async (id, payload) => {
       nextUnitWage,
       nextOthersCost,
     );
+
+    nextOutputPrices.purchase_price_custom =
+      purchase_price_custom === undefined
+        ? Boolean(previousContext.purchase_price_custom)
+        : Boolean(purchase_price_custom);
+    nextOutputPrices.purchase_price = nextOutputPrices.purchase_price_custom
+      ? parseCustomPurchasePrice(
+          purchase_price === undefined
+            ? previousContext.purchase_price
+            : purchase_price,
+        )
+      : await calculateMixerPurchasePrice({
+          mixItems: nextMixItems, packagingItems: nextPackagingItems,
+          combo: nextCombo, unitWage: nextUnitWage, othersCost: nextOthersCost,
+          manufacturerId: nextManufacturerId, transaction: t,
+        });
+    nextVariants.forEach((variant) => { variant.purchase_price = nextOutputPrices.purchase_price; });
 
     const nextWarehouseId =
       warehouseId === undefined

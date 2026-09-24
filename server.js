@@ -16,6 +16,10 @@ const {
   startStellarAttendanceSync,
   stopStellarAttendanceSync,
 } = require("./app/jobs/stellarAttendanceSync.job");
+const {
+  startStockLedgerIntegrityCheck,
+  stopStockLedgerIntegrityCheck,
+} = require("./app/jobs/stockLedgerIntegrity.job");
 
 const { uploadDir } = require("./app/config/uploads");
 
@@ -45,6 +49,10 @@ const DEFAULT_ALLOWED_ORIGINS = [
   "https://www.kafelamart.digitalever.com.bd",
   "https://shifa.digitalever.com.bd",
   "https://www.shifa.digitalever.com.bd",
+  "https://holygift.digitalever.com.bd",
+  "https://www.holygift.digitalever.com.bd",
+  "https://nobobi.digitalever.com.bd",
+  "https://www.nobobi.digitalever.com.bd",
 ];
 
 const ALLOWED_ORIGINS = new Set(
@@ -188,6 +196,7 @@ const startServer = async () => {
     });
 
     startStellarAttendanceSync();
+    startStockLedgerIntegrityCheck();
   } catch (error) {
     console.error("❌ Failed to connect to database:", error.message);
     if (error.original?.code === "ER_USER_LIMIT_REACHED") {
@@ -208,6 +217,7 @@ startServer();
 process.on("SIGTERM", async () => {
   console.log("SIGTERM received. Shutting down gracefully...");
   stopStellarAttendanceSync();
+  stopStockLedgerIntegrityCheck();
   await db.sequelize.close();
   server.close(() => {
     console.log("Server closed");
@@ -218,6 +228,7 @@ process.on("SIGTERM", async () => {
 process.on("SIGINT", async () => {
   console.log("SIGINT received. Shutting down gracefully...");
   stopStellarAttendanceSync();
+  stopStockLedgerIntegrityCheck();
   await db.sequelize.close();
   server.close(() => {
     console.log("Server closed");

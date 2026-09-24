@@ -37,6 +37,7 @@ const MENU_PERMISSIONS = {
   STOCK_MOVEMENT: "stock_movement",
   PACKAGING_STOCK_MOVEMENT: "packaging_stock_movement",
   DAMAGE_STOCK_MOVEMENT: "damage_stock_movement",
+  INVENTORY_STOCK_MOVEMENT: "inventory_stock_movement",
   WORK_HISTORY: "work_history",
   MIXER: "mixer",
   INVENTORY: "inventory",

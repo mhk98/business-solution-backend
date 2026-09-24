@@ -14,7 +14,20 @@ const {
 
 const Notification = db.notification;
 const User = db.user;
-const ReceivedProductService = require("../modules/receivedProduct/receivedProduct.service");
+// Records that move stock must be deleted through their own service, which
+// puts the stock back and logs the StockMovement — a bare Model.destroy would
+// drop the document but leave its stock effect in place. Required lazily to
+// avoid require cycles with the services.
+const STOCK_DELETE_SERVICES = [
+  "receivedProduct", "inTransitProduct", "returnProduct", "purchaseReturnProduct",
+  "posReport", "damageProduct", "damageRepair", "damageRepaired", "mixer",
+  "manufacture", "stockAdjustment", "factoryStockAdjustment", "packagingItemPurchase",
+  "packagingItemStockAdjustment", "packagingFactoryStockAdjustment",
+];
+const stockDeleteService = (modelKey) =>
+  STOCK_DELETE_SERVICES.includes(modelKey)
+    ? require(`../modules/${modelKey}/${modelKey}.service`)
+    : null;
 const PENDING_UPDATE_NOTE = "[Approval pending for update]";
 const UPDATE_APPROVED_NOTE = "[Update request approved]";
 
@@ -299,8 +312,9 @@ const approvePendingWorkflow =
         existing.pendingAction === "Delete" ||
         existing.status === "Pending Delete"
       ) {
-        if (resolvedModelKey === "receivedProduct") {
-          await ReceivedProductService.deleteIdFromDB(req.params.id);
+        const deleteService = stockDeleteService(resolvedModelKey);
+        if (deleteService) {
+          await deleteService.deleteIdFromDB(req.params.id);
         } else {
           await Model.destroy({ where: { Id: req.params.id } });
         }

@@ -20,6 +20,12 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      // Links this row back to the Book Cash Out entry that created it, so
+      // editing/deleting that entry can find and sync this transaction row.
+      cashInOutId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       type: {
         type: DataTypes.STRING,
         allowNull: false,

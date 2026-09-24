@@ -3274,9 +3274,7 @@ const seedPackagingOpeningLayers = async () => {
 // back to the flat Item Stock row's current unit cost. Shared with
 // manufactureStock.service.js so live Factory Stock reads can show the same
 // "last known" cost this backfill uses.
-const {
-  buildItemUnitCostResolver,
-} = require("../shared/itemUnitCostResolver");
+const { buildItemUnitCostResolver } = require("../shared/itemUnitCostResolver");
 
 // One-time: seed FIFO cost layers for manufacture raw-material items (opening
 // balance = weighted-average unit cost from that item's purchases).
@@ -4053,9 +4051,65 @@ const ensureSupplierHistoryManufactureColumn = async () => {
       allowNull: true,
     });
   }
+
+  // SupplierHistory also gained a cashInOutId link back to the Book Cash
+  // Out entry that created it, so editing/deleting that entry can sync
+  // this history row instead of leaving it orphaned.
+  if (!tableDefinition.cashInOutId) {
+    await queryInterface.addColumn(tableName, "cashInOutId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+};
+
+// ManufacturerTransaction and PackagingManufacturerTransaction gained a
+// cashInOutId link back to the Book Cash Out entry that created them, so
+// editing/deleting that entry can sync these rows instead of leaving them
+// orphaned.
+const ensureManufacturerTransactionCashInOutColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+
+  for (const model of [
+    db.manufacturerTransaction,
+    db.packagingManufacturerTransaction,
+  ]) {
+    const tableName = model.getTableName();
+    const tableDefinition = await queryInterface.describeTable(tableName);
+
+    if (!tableDefinition.cashInOutId) {
+      await queryInterface.addColumn(tableName, "cashInOutId", {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      });
+    }
+  }
 };
 
 // DollarSupplierHistory gained USD breakdown columns (purchases entered in USD).
+// Weighted-average costing (shared/averageCost.js): exact average on the
+// product-keyed stock tables + the average after every stock movement.
+const ensureAverageCostColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const targets = [
+    [db.inventoryMaster, "averageCost"],
+    [db.damageStock, "averageCost"],
+    [db.damageReparingStock, "averageCost"],
+    [db.stockMovement, "averageCostAfter"],
+  ];
+  for (const [model, column] of targets) {
+    if (!model) continue;
+    const tableName = model.getTableName();
+    const tableDefinition = await queryInterface.describeTable(tableName);
+    if (!tableDefinition[column]) {
+      await queryInterface.addColumn(tableName, column, {
+        type: DataTypes.DECIMAL(14, 4),
+        allowNull: true,
+      });
+    }
+  }
+};
+
 const ensureDollarSupplierHistoryColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.dollarSupplierHistory.getTableName();
@@ -4106,6 +4160,7 @@ db.sequelize
   .then(async () => {
     await ensureCashInOutRefNoColumn();
     await ensureSupplierHistoryManufactureColumn();
+    await ensureManufacturerTransactionCashInOutColumns();
     await ensureDollarSupplierHistoryColumns();
     await ensureMarketingExpenseColumns();
     await ensureHolidayRangeColumns();
@@ -4220,6 +4275,7 @@ db.sequelize
     await syncLoanRowsFromCashInOut();
     await ensureInventoryMinimumStockColumn();
     await ensureAssetsStockColumns();
+    await ensureAverageCostColumns();
     await Promise.all(
       ["damageStock", "damageReparingStock"].map((modelKey) =>
         ensureDamageStockPriceColumns(modelKey),

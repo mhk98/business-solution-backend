@@ -16,7 +16,11 @@ const {
   assertCatalogInventoryMovementVariants,
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
-const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const {
+  logStockMovement,
+  pendingMark,
+  assignPendingSource,
+} = require("../../../shared/stockMovementLogger");
 const { resolveUnitPrice } = require("../../../shared/movementUnitPrice");
 const fifo = require("../../../shared/fifoCostLayers");
 const ReturnProduct = db.returnProduct;
@@ -188,11 +192,9 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
   const returnUnitSale = resolveUnitPrice(priceRow, "sale_price", {
     mode: "total",
   });
-  let returnUnitCost = resolveUnitPrice(priceRow, "purchase_price", {
-    mode: "total",
-  });
-  // No invented cost — if the return form did not carry a unit cost it stays 0
-  // ("cost not recorded"); the user can set it later.
+  // Returned units come back at the Stock Product's purchase_price — the
+  // same cost Intransit records when they leave (see inTransitProduct).
+  let returnUnitCost = toNumber(inventory.purchase_price);
   const returnMovement = await logStockMovement({
     transaction,
     sourceType: "ReturnProduct",
@@ -231,7 +233,7 @@ const moveItemFromInventory = async (item, transaction, date = null) => {
   };
 };
 
-const restoreItemsToInventory = async (items = [], transaction) => {
+const restoreItemsToInventory = async (items = [], transaction, sourceId = null) => {
   for (const item of items) {
     const inventory = await findInventoryByStoredReference(
       Number(item.productId ?? item.receivedId),
@@ -272,6 +274,7 @@ const restoreItemsToInventory = async (items = [], transaction) => {
     await logStockMovement({
       transaction,
       sourceType: "ReturnProduct",
+      sourceId,
       operation: "REVERSE",
       stockType: "ProductStock",
       productId: inventory.productId,
@@ -413,15 +416,8 @@ const insertIntoDB = async (data) => {
       "sale_price",
       { mode: "total" },
     );
-    let directReturnUnitCost = resolveUnitPrice(
-      {
-        quantity: returnQty,
-        purchase_price: Number(purchase_price),
-      },
-      "purchase_price",
-      { mode: "total" },
-    );
-    // No invented cost — 0 stays 0 when the return form has no unit cost.
+    // Stock Product purchase_price — see the bulk-return path above.
+    let directReturnUnitCost = toNumber(inventory.purchase_price);
     const directReturnMovement = await logStockMovement({
       transaction: t,
       sourceType: "ReturnProduct",
@@ -501,7 +497,10 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
     const normalizedItems = [];
 
     for (const item of items) {
-      normalizedItems.push(await moveItemFromInventory(item, t));
+      const pendingStart = pendingMark(t);
+      const movedItem = await moveItemFromInventory(item, t, date);
+      movedItem.pendingRange = [pendingStart, pendingMark(t)];
+      normalizedItems.push(movedItem);
     }
 
     const results = [];
@@ -526,6 +525,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
         },
         { transaction: t },
       );
+      await assignPendingSource(t, normalizedItem.pendingRange, result.Id);
       results.push(result);
     }
     const result = results[0];
@@ -677,7 +677,7 @@ const deleteIdFromDB = async (id) => {
 
     const returnItems = parseItems(ret.items);
     if (returnItems.length > 0) {
-      await restoreItemsToInventory(returnItems, t);
+      await restoreItemsToInventory(returnItems, t, id);
 
       await ReturnProduct.destroy({
         where: { Id: id },
@@ -1006,12 +1006,15 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
           },
         ];
 
-    await restoreItemsToInventory(restoreItems, t);
+    await restoreItemsToInventory(restoreItems, t, id);
 
     const nextItems = preparedItems.length ? preparedItems : oldItems;
     const normalizedItems = [];
     for (const item of nextItems) {
-      normalizedItems.push(await moveItemFromInventory(item, t));
+      const pendingStart = pendingMark(t);
+      const movedItem = await moveItemFromInventory(item, t, date);
+      movedItem.pendingRange = [pendingStart, pendingMark(t)];
+      normalizedItems.push(movedItem);
     }
 
     // Delete the old single bulk row and create separate rows per item
@@ -1019,7 +1022,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
 
     const resolvedBatchId = existing.batchId || `batch-${Date.now()}`;
     for (const normalizedItem of normalizedItems) {
-      await ReturnProduct.create(
+      const createdRow = await ReturnProduct.create(
         {
           name: normalizedItem.name,
           supplierId,
@@ -1039,6 +1042,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
         },
         { transaction: t },
       );
+      await assignPendingSource(t, normalizedItem.pendingRange, createdRow.Id);
     }
     const updatedCount = normalizedItems.length;
 

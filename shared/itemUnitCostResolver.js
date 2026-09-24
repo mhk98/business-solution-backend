@@ -1,8 +1,5 @@
-// Per-manufacture-item base-unit cost resolver: weighted-average of that
-// item's purchases (`manufacture` = Item Purchase), falling back to the flat
-// Item Stock row's current unit cost. Used to backfill/display a "last known"
-// unit cost for Factory Stock rows whose own running cost has gone to 0
-// (e.g. quantity fully consumed) without a per-lot FIFO layer to fall back on.
+// Latest non-deleted Item Purchase cost per base unit. Purchase date determines
+// recency; Id breaks ties. A zero-price purchase is a valid latest price.
 //
 // `db` is required lazily (inside the function, not at module load) because
 // this module is required both from service files (safe, models already
@@ -17,20 +14,21 @@ const { toBaseStockPayload } = require("../helpers/unitConversionHelper");
 const round4 = (value) => Math.round((Number(value) || 0) * 10000) / 10000;
 const baseOf = (unit, value) => toBaseStockPayload(unit, value).unitValue;
 
-const buildItemUnitCostResolver = async () => {
-  const db = require("../models");
+const buildItemUnitCostResolver = async ({ transaction, db: suppliedDb } = {}) => {
+  const db = suppliedDb || require("../models");
   const purchases = await db.manufacture.findAll({
     attributes: ["itemId", "unit", "unitValue", "cost"],
-    paranoid: false,
+    order: [["date", "DESC"], ["Id", "DESC"]],
+    paranoid: true,
+    transaction,
     raw: true,
   });
-  const agg = {};
+  const latest = new Map();
   for (const p of purchases) {
     const base = baseOf(p.unit, p.unitValue);
-    if (base <= 0) continue;
-    agg[p.itemId] ||= { qty: 0, value: 0 };
-    agg[p.itemId].qty += base;
-    agg[p.itemId].value += Number(p.cost) || 0;
+    const id = Number(p.itemId);
+    if (!id || base <= 0 || latest.has(id)) continue;
+    latest.set(id, Number(p.cost || 0) / base);
   }
 
   const flatStocks = await db.itemMaster.findAll({
@@ -39,6 +37,7 @@ const buildItemUnitCostResolver = async () => {
       [Op.or]: [{ productId: null }, { productId: 0 }],
     },
     raw: true,
+    transaction,
   });
   const flatUc = {};
   for (const s of flatStocks) {
@@ -47,8 +46,7 @@ const buildItemUnitCostResolver = async () => {
   }
 
   return (itemId, fallback = 0) => {
-    const a = agg[itemId];
-    if (a && a.qty > 0) return round4(a.value / a.qty);
+    if (latest.has(Number(itemId))) return latest.get(Number(itemId));
     if (flatUc[itemId] > 0) return round4(flatUc[itemId]);
     return round4(fallback);
   };

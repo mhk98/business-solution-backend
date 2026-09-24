@@ -13,7 +13,12 @@ const subtractVariantsPreserveZero = require("../../../shared/subtractVariantsPr
 const {
   productHasConfiguredVariations,
 } = require("../../../shared/inventoryVariantGuard");
-const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const { createStockTracker } = require("../../../shared/stockChangeTracker");
+const {
+  logStockMovement,
+  pendingMark,
+  assignPendingSource,
+} = require("../../../shared/stockMovementLogger");
 const DamageRepair = db.damageRepair;
 const Notification = db.notification;
 const User = db.user;
@@ -148,6 +153,7 @@ const syncDamageReparingStock = async (
     salePriceDelta = 0,
     variants,
     date,
+    sourceId = null,
   },
   transaction,
 ) => {
@@ -178,6 +184,7 @@ const syncDamageReparingStock = async (
     await logStockMovement({
       transaction,
       sourceType: "DamageRepair",
+      sourceId,
       operation: "SYNC",
       stockType: "RepairingStock",
       productId,
@@ -229,6 +236,7 @@ const syncDamageReparingStock = async (
   await logStockMovement({
     transaction,
     sourceType: "DamageRepair",
+      sourceId,
     operation: "SYNC",
     stockType: "RepairingStock",
     productId,
@@ -361,7 +369,10 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
   return db.sequelize.transaction(async (t) => {
     const normalizedItems = [];
     for (const item of items) {
-      normalizedItems.push(await moveDamageRepairItem({ ...item, date }, t));
+      const pendingStart = pendingMark(t);
+      const movedItem = await moveDamageRepairItem({ ...item, date }, t);
+      movedItem.pendingRange = [pendingStart, pendingMark(t)];
+      normalizedItems.push(movedItem);
     }
 
     const results = [];
@@ -385,6 +396,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
         },
         { transaction: t },
       );
+      await assignPendingSource(t, normalizedItem.pendingRange, result.Id);
       results.push(result);
     }
     const result = results[0];
@@ -556,6 +568,7 @@ const insertIntoDB = async (data) => {
 
     await syncDamageReparingStock(
       {
+          sourceId: result.Id,
         productId: catalogProductId,
         name: received.name,
         quantityDelta: returnQty,
@@ -760,6 +773,7 @@ const deleteIdFromDB = async (id) => {
 
         await syncDamageReparingStock(
           {
+          sourceId: id,
             productId: Number(received.productId),
             name: item.name || received.name,
             quantityDelta: -qty,
@@ -822,6 +836,7 @@ const deleteIdFromDB = async (id) => {
 
     await syncDamageReparingStock(
       {
+          sourceId: id,
         productId: Number(received.productId),
         name: ret.name,
         quantityDelta: -qty,
@@ -944,6 +959,18 @@ const updateOneFromDB = async (id, data) => {
 
     if (!oldStock) throw new ApiError(404, "DamageStock product not found");
 
+    // Edits move stock between Damage Stock and Repairing Stock rows
+    // directly; the tracker logs every net change not already logged by
+    // syncDamageReparingStock, so the movement ledger has no gap.
+    const tracker = createStockTracker({
+      transaction: t,
+      sourceType: "DamageRepair",
+      sourceId: id,
+      operation: "UPDATE",
+      date: inputDateStr || existing.date,
+    });
+    await tracker.touch("DamageStock", oldStock);
+
     const restoredOldVariants = mergeVariants(oldStock.variants, existingVariants);
     const restoredOldQuantity = hasVariantRows(restoredOldVariants)
       ? getVariantQuantityTotal(restoredOldVariants)
@@ -973,6 +1000,7 @@ const updateOneFromDB = async (id, data) => {
     }
 
     if (!received) throw new ApiError(404, "Received product not found");
+    await tracker.touch("DamageStock", received);
 
     const isSameDamageStock = Number(receivedId) === oldProductId;
     const availableQty = isSameDamageStock
@@ -1006,6 +1034,7 @@ const updateOneFromDB = async (id, data) => {
     if (productChanged) {
       await syncDamageReparingStock(
         {
+          sourceId: id,
           productId: oldCatalogProductId,
           name: existing.name,
           quantityDelta: -qty,
@@ -1084,6 +1113,7 @@ const updateOneFromDB = async (id, data) => {
     if (productChanged) {
       await syncDamageReparingStock(
         {
+          sourceId: id,
           productId: catalogProductId,
           name: received.name,
           quantityDelta: nextQty,
@@ -1099,6 +1129,7 @@ const updateOneFromDB = async (id, data) => {
         catalogProductId,
         t,
       );
+      await tracker.touch("RepairingStock", repairingStock);
       const nextRepairingVariants =
         existingVariants.length || selectedVariants.length
           ? mergeVariants(
@@ -1140,7 +1171,7 @@ const updateOneFromDB = async (id, data) => {
           { transaction: t },
         );
       } else if (nextRepairingQty > 0) {
-        await DamageReparingStock.create(
+        const createdRepairingStock = await DamageReparingStock.create(
           {
             productId: catalogProductId,
             name: received.name,
@@ -1158,6 +1189,7 @@ const updateOneFromDB = async (id, data) => {
           },
           { transaction: t },
         );
+        await tracker.created("RepairingStock", createdRepairingStock);
       }
     }
 
@@ -1171,6 +1203,8 @@ const updateOneFromDB = async (id, data) => {
     //   },
     //   { where: { Id: received.Id }, transaction: t },
     // );
+
+    await tracker.flush();
 
     const users = await User.findAll({
       attributes: ["Id", "role"],

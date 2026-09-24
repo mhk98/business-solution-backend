@@ -3,6 +3,7 @@ const paginationHelpers = require("../../../helpers/paginationHelper");
 const {
   formatStockForDisplay,
 } = require("../../../helpers/unitConversionHelper");
+const { isAverageCostLive } = require("../../../shared/averageCostRunner");
 const db = require("../../../models");
 const {
   PackagingFactoryStockSearchableFields,
@@ -19,12 +20,16 @@ const PackagingFactoryStock = db.packagingFactoryStock;
 const attachLastUnitCost = async (rows) => {
   if (!rows.length) return rows;
   const unitCostOf = await buildPackagingUnitCostResolver();
-  return rows.map((row) => ({
-    ...row,
-    lastUnitCost: row.packagingItemId
-      ? unitCostOf(row.packagingItemId, 0)
-      : 0,
-  }));
+  const averageLive = await isAverageCostLive();
+  return rows.map((row) => {
+    // After weighted-average go-live: the row's average (cost ÷ quantity).
+    const quantity = toBaseStockPayload(row.unit, row.unitValue).unitValue;
+    if (averageLive && quantity > 0) return { ...row, lastUnitCost: Number(row.cost || 0) / quantity };
+    return {
+      ...row,
+      lastUnitCost: row.packagingItemId ? unitCostOf(row.packagingItemId, 0) : 0,
+    };
+  });
 };
 
 const getAllFromDB = async (filters, options) => {

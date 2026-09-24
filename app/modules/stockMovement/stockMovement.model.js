@@ -103,6 +103,12 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.DECIMAL(14, 2),
         allowNull: true,
       },
+      // Weighted-average cost of the stock row right after this movement, so
+      // the value of any pool on any date = that day's qty × this figure.
+      averageCostAfter: {
+        type: DataTypes.DECIMAL(14, 4),
+        allowNull: true,
+      },
       costBreakdown: {
         type: DataTypes.JSON,
         allowNull: true,

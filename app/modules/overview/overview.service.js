@@ -478,20 +478,27 @@ const sumInventoryDisplayQuantityValue = async (
 ) => {
   if (!Model) return 0;
 
+  // Weighted-average costing: once a row carries its exact averageCost, the
+  // stock value is display quantity × that average (one average per product,
+  // not per variant). Rows without it keep the per-variant purchase prices.
+  const useAverage = priceField === "purchase_price" && Model.rawAttributes?.averageCost;
   const rows = await Model.findAll({
     where: activeWhere(Model, where),
     paranoid: true,
-    attributes: ["quantity", "variants", priceField],
+    attributes: ["quantity", "variants", priceField, ...(useAverage ? ["averageCost"] : [])],
   });
 
-  return rows.reduce(
-    (total, row) =>
+  return rows.reduce((total, row) => {
+    if (useAverage && row.averageCost !== null && row.averageCost !== undefined) {
+      return total + n(getInventoryDisplayQuantity(row)) * n(row.averageCost);
+    }
+    return (
       total +
       (priceField === "purchase_price"
         ? getInventoryStockBalance(row)
-        : n(getInventoryDisplayQuantity(row)) * n(row[priceField])),
-    0,
-  );
+        : n(getInventoryDisplayQuantity(row)) * n(row[priceField]))
+    );
+  }, 0);
 };
 
 const sumDisplayQuantity = async (Model, where = {}) => {

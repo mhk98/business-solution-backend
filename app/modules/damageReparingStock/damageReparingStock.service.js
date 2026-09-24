@@ -1,12 +1,19 @@
 const { Op } = require("sequelize"); // Ensure Op is imported
 const paginationHelpers = require("../../../helpers/paginationHelper");
+const { isAverageCostLive } = require("../../../shared/averageCostRunner");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const {
+  createWithStockLog,
+  updateWithStockLog,
+  destroyWithStockLog,
+} = require("../../../shared/directStockEdit");
 const {
   DamageReparingStockSearchableFields,
 } = require("./damageReparingStock.constants");
 const parseVariants = require("../../../shared/parseVariants");
 const { lastKnownUnitCostMap } = require("../../../shared/fifoCostLayers");
+const { getStockPurchaseValue } = require("../../../shared/stockPurchaseValue");
 
 const DamageReparingStock = db.damageReparingStock;
 const DamageStock = db.damageStock;
@@ -20,10 +27,15 @@ const DamageRepaired = db.damageRepaired;
 const attachLastUnitCost = async (rows) => {
   const list = Array.isArray(rows) ? rows : [rows].filter(Boolean);
   if (!list.length) return rows;
-  const map = await lastKnownUnitCostMap(list.map((r) => r.productId));
+  const [map, averageLive] = await Promise.all([
+    lastKnownUnitCostMap(list.map((r) => r.productId)),
+    isAverageCostLive(),
+  ]);
   const withCost = (row) => {
     const plain = row?.toJSON ? row.toJSON() : row;
-    return { ...plain, lastUnitCost: map.get(Number(plain?.productId)) || 0 };
+    // After weighted-average go-live the row's own average is its unit cost.
+    const average = averageLive && plain?.averageCost != null ? Number(plain.averageCost) : null;
+    return { ...plain, lastUnitCost: average ?? (map.get(Number(plain?.productId)) || 0) };
   };
   return Array.isArray(rows) ? rows.map(withCost) : withCost(rows);
 };
@@ -164,7 +176,7 @@ const addHistoricalZeroVariants = async (rows) => {
 };
 
 const insertIntoDB = async (data) => {
-  const result = await DamageReparingStock.create(data);
+  const result = await createWithStockLog(DamageReparingStock, "RepairingStock", data);
 
   return result;
 };
@@ -230,15 +242,17 @@ const getAllFromDB = async (filters, options) => {
   const dataWithHistoricalVariants = await addHistoricalZeroVariants(data);
 
   // ✅ total count + total quantity (same filters)
-  const [count, totalQuantity] = await Promise.all([
+  const [count, totalQuantity, totalPurchaseValue] = await Promise.all([
     DamageReparingStock.count({ where: whereConditions }),
     DamageReparingStock.sum("quantity", { where: whereConditions }),
+    getStockPurchaseValue(DamageReparingStock, whereConditions),
   ]);
 
   return {
     meta: {
       count, // total filtered records
       totalQuantity: totalQuantity || 0, // total filtered quantity
+      totalPurchaseValue,
       page,
       limit,
     },
@@ -257,11 +271,7 @@ const getDataById = async (id) => {
 };
 
 const deleteIdFromDB = async (id) => {
-  const result = await DamageReparingStock.destroy({
-    where: {
-      Id: id,
-    },
-  });
+  const result = await destroyWithStockLog(DamageReparingStock, "RepairingStock", { Id: id });
 
   return result;
 };
@@ -277,11 +287,7 @@ const updateOneFromDB = async (id, payload) => {
 
   assertQuantityMatchesExistingVariants(existing, payload.quantity);
 
-  const result = await DamageReparingStock.update(payload, {
-    where: {
-      Id: id,
-    },
-  });
+  const result = await updateWithStockLog(DamageReparingStock, "RepairingStock", { Id: id }, payload);
 
   return result;
 };

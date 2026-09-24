@@ -4,6 +4,7 @@ const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const { DamageRepairReturnSearchableFields } = require("./damageRepairReturn.constants");
 const parseVariants = require("../../../shared/parseVariants");
+const { createStockTracker } = require("../../../shared/stockChangeTracker");
 const mergeVariants = require("../../../shared/mergeVariants");
 const subtractVariantsPreserveZero = require("../../../shared/subtractVariantsPreserveZero");
 const {
@@ -97,6 +98,15 @@ const insertIntoDB = async (data) => {
       { transaction: t },
     );
 
+    const tracker = createStockTracker({
+      transaction: t,
+      sourceType: "DamageRepairReturn",
+      sourceId: result.Id,
+      operation: "CREATE",
+      date,
+    });
+    await tracker.touch("RepairingStock", repairingStock);
+
     const nextVariants = incomingVariants.length
       ? subtractVariantsPreserveZero(repairingStock.variants, incomingVariants)
       : repairingStock.variants;
@@ -111,6 +121,7 @@ const insertIntoDB = async (data) => {
       },
       { transaction: t },
     );
+    await tracker.flush();
 
     return result;
   });
@@ -189,6 +200,14 @@ const deleteIdFromDB = async (id) => {
     const itemVariants = parseVariants(ret.variants);
 
     const repairingStock = await findDamageReparingStockByProductId(Number(ret.productId), t);
+    const tracker = createStockTracker({
+      transaction: t,
+      sourceType: "DamageRepairReturn",
+      sourceId: ret.Id,
+      operation: "DELETE",
+      date: ret.date,
+    });
+    await tracker.touch("RepairingStock", repairingStock);
     if (repairingStock) {
       const restoredVariants = mergeVariants(repairingStock.variants, itemVariants);
       const restoredQuantity = restoredVariants.length
@@ -203,6 +222,8 @@ const deleteIdFromDB = async (id) => {
         { transaction: t },
       );
     }
+
+    await tracker.flush();
 
     await DamageRepair.destroy({ where: { Id: id }, transaction: t });
     return { deleted: true };

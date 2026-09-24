@@ -4,6 +4,7 @@ const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const { DamageReturnSearchableFields } = require("./damageReturn.constants");
 const parseVariants = require("../../../shared/parseVariants");
+const { createStockTracker } = require("../../../shared/stockChangeTracker");
 const mergeVariants = require("../../../shared/mergeVariants");
 const subtractVariants = require("../../../shared/subtractVariants");
 const {
@@ -91,6 +92,15 @@ const insertIntoDB = async (data) => {
       { transaction: t },
     );
 
+    const tracker = createStockTracker({
+      transaction: t,
+      sourceType: "DamageReturn",
+      sourceId: result.Id,
+      operation: "CREATE",
+      date,
+    });
+    await tracker.touch("DamageStock", dStock);
+
     const nextDamageVariants = incomingVariants.length
       ? subtractVariants(dStock.variants, incomingVariants)
       : dStock.variants;
@@ -105,6 +115,7 @@ const insertIntoDB = async (data) => {
       },
       { transaction: t },
     );
+    await tracker.flush();
 
     return result;
   });
@@ -183,6 +194,14 @@ const deleteIdFromDB = async (id) => {
     const itemVariants = parseVariants(ret.variants);
 
     const dStock = await findDamageStockByProductId(Number(ret.productId), t);
+    const tracker = createStockTracker({
+      transaction: t,
+      sourceType: "DamageReturn",
+      sourceId: ret.Id,
+      operation: "DELETE",
+      date: ret.date,
+    });
+    await tracker.touch("DamageStock", dStock);
     if (dStock) {
       const restoredVariants = mergeVariants(dStock.variants, itemVariants);
       const restoredQuantity = restoredVariants.length
@@ -197,6 +216,8 @@ const deleteIdFromDB = async (id) => {
         { transaction: t },
       );
     }
+
+    await tracker.flush();
 
     await DamageProduct.destroy({ where: { Id: id }, transaction: t });
     return { deleted: true };

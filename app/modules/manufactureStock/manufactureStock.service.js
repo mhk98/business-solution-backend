@@ -1,28 +1,39 @@
 const { Op } = require("sequelize");
 const paginationHelpers = require("../../../helpers/paginationHelper");
-const {
-  formatStockForDisplay,
-} = require("../../../helpers/unitConversionHelper");
+const { isAverageCostLive } = require("../../../shared/averageCostRunner");
 const db = require("../../../models");
 const {
   ManufactureStockSearchableFields,
 } = require("./manufactureStock.constants");
 const {
   buildItemUnitCostResolver,
+  baseOf,
 } = require("../../../shared/itemUnitCostResolver");
 
 const ManufactureStock = db.manufactureStock;
 
-// Weighted-avg purchase cost (falling back to the flat Item Stock unit cost)
+// Factory Stock always shows quantity/unit exactly as recorded (e.g. Ml, not
+// auto-converted to Liter) — formatStockForDisplay's Ml->Liter/Gram->Kg
+// conversion rewrites unitValue for display but leaves cost untouched,
+// which silently corrupts the Unit Cost column (cost ends up divided by the
+// converted quantity instead of the one it was actually priced against).
+const toPlainStockRow = (record) => (record?.toJSON ? record.toJSON() : { ...record });
+
+// Latest purchase cost (falling back to the flat Item Stock unit cost)
 // per itemId, so a Factory Stock row still shows a reference unit cost after
 // its own running `cost` has gone to 0 (quantity fully consumed).
 const attachLastUnitCost = async (rows) => {
   if (!rows.length) return rows;
   const unitCostOf = await buildItemUnitCostResolver();
-  return rows.map((row) => ({
-    ...row,
-    lastUnitCost: row.itemId ? unitCostOf(row.itemId, 0) : 0,
-  }));
+  // After weighted-average go-live the row's own average (cost ÷ quantity) is
+  // the unit cost; the last purchase price only fills in for empty stock.
+  const averageLive = await isAverageCostLive();
+  return rows.map((row) => {
+    const quantity = baseOf(row.unit, row.unitValue);
+    const average = quantity > 0 ? Number(row.cost) / quantity : 0;
+    const unitCost = averageLive && quantity > 0 ? average : unitCostOf(row.itemId, average);
+    return { ...row, unitCost, lastUnitCost: unitCost };
+  });
 };
 
 const getAllFromDB = async (filters, options) => {
@@ -88,7 +99,7 @@ const getAllFromDB = async (filters, options) => {
       totalQuantity: totalQuantity || 0,
       totalBalance: Number(totalBalance || 0),
     },
-    data: await attachLastUnitCost(data.map(formatStockForDisplay)),
+    data: await attachLastUnitCost(data.map(toPlainStockRow)),
   };
 };
 
@@ -97,7 +108,7 @@ const getDataById = async (id) => {
     where: { productId: id },
   });
 
-  return attachLastUnitCost(data.map(formatStockForDisplay));
+  return attachLastUnitCost(data.map(toPlainStockRow));
 };
 
 const getAllFromDBWithoutQuery = async () => {
@@ -106,7 +117,7 @@ const getAllFromDBWithoutQuery = async () => {
     order: [["createdAt", "DESC"]],
   });
 
-  return attachLastUnitCost(data.map(formatStockForDisplay));
+  return attachLastUnitCost(data.map(toPlainStockRow));
 };
 
 const ManufactureStockService = {

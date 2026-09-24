@@ -15,7 +15,11 @@ const {
 const {
   assertInventoryMovementVariants,
 } = require("../../../shared/inventoryVariantGuard");
-const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const {
+  logStockMovement,
+  pendingMark,
+  assignPendingSource,
+} = require("../../../shared/stockMovementLogger");
 const fifo = require("../../../shared/fifoCostLayers");
 const PosReport = db.posReport;
 const Notification = db.notification;
@@ -278,6 +282,7 @@ const insertIntoDB = async (payload) => {
   const finalStatus = String(status || "").trim() || "Active";
 
   return await db.sequelize.transaction(async (t) => {
+    const pendingStart = pendingMark(t);
     const fifoCost = await applyPosItemMovement(items, t, "sale", date);
 
     // ✅ 2) PosReport create
@@ -301,6 +306,7 @@ const insertIntoDB = async (payload) => {
       },
       { transaction: t },
     );
+    await assignPendingSource(t, pendingStart, result.Id);
 
     if (items.length > 0) {
       const cart = [];
@@ -460,7 +466,9 @@ const deleteIdFromDB = async (id) => {
 
     const existingItems = normalizeItems(ret.items);
 
+    const pendingStart = pendingMark(t);
     await applyPosItemMovement(existingItems, t, "restore", ret.date);
+    await assignPendingSource(t, pendingStart, ret.Id);
     await removeConfirmOrdersForPosReportItems(
       existingItems,
       ret.date,
@@ -637,6 +645,7 @@ const updateOneFromDB = async (id, data) => {
 
     finalStatusForNotification = finalStatus;
 
+    const pendingStart = pendingMark(t);
     await applyPosItemMovement(existing.items, t, "restore", existing.date);
     const fifoCost = await applyPosItemMovement(
       items,
@@ -644,6 +653,7 @@ const updateOneFromDB = async (id, data) => {
       "sale",
       date || existing.date,
     );
+    await assignPendingSource(t, pendingStart, existing.Id);
 
     return PosReport.update(
       {

@@ -12,7 +12,12 @@ const mergeVariants = require("../../../shared/mergeVariants");
 const parseVariants = require("../../../shared/parseVariants");
 const subtractVariants = require("../../../shared/subtractVariants");
 const subtractVariantsPreserveZero = require("../../../shared/subtractVariantsPreserveZero");
-const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const { createStockTracker } = require("../../../shared/stockChangeTracker");
+const {
+  logStockMovement,
+  pendingMark,
+  assignPendingSource,
+} = require("../../../shared/stockMovementLogger");
 const fifo = require("../../../shared/fifoCostLayers");
 
 // Repaired goods re-entering ProductStock open a cost layer; deleting a repair
@@ -326,7 +331,10 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
   return db.sequelize.transaction(async (t) => {
     const normalizedItems = [];
     for (const item of items) {
-      normalizedItems.push(await moveDamageRepairedItem(item, t));
+      const pendingStart = pendingMark(t);
+      const movedItem = await moveDamageRepairedItem(item, t, date);
+      movedItem.pendingRange = [pendingStart, pendingMark(t)];
+      normalizedItems.push(movedItem);
     }
 
     const results = [];
@@ -351,6 +359,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
         },
         { transaction: t },
       );
+      await assignPendingSource(t, normalizedItem.pendingRange, result.Id);
       results.push(result);
     }
     const result = results[0];
@@ -1020,6 +1029,18 @@ const updateOneFromDB = async (id, data) => {
       throw new ApiError(404, "Old DamageReparingStock not found");
     }
 
+    // Edits move stock between Repairing Stock and Stock Product rows
+    // directly; the tracker logs every net change so the movement ledger has
+    // no gap.
+    const tracker = createStockTracker({
+      transaction: t,
+      sourceType: "DamageRepaired",
+      sourceId: id,
+      operation: "UPDATE",
+      date: inputDateStr || existingRepaired.date,
+    });
+    await tracker.touch("RepairingStock", oldDamageReparingStock);
+
     const oldCatalogProductId = Number(oldDamageReparingStock.productId);
     if (!oldCatalogProductId) {
       throw new ApiError(
@@ -1057,6 +1078,7 @@ const updateOneFromDB = async (id, data) => {
     });
 
     if (!oldInventory) throw new ApiError(404, "Inventory not found");
+    await tracker.touch("ProductStock", oldInventory);
 
     const rolledBackInventoryVariants = subtractVariants(
       oldInventory.variants,
@@ -1082,6 +1104,7 @@ const updateOneFromDB = async (id, data) => {
       t,
     );
 
+    await tracker.touch("RepairingStock", targetDamageReparingStock);
     if (!targetDamageReparingStock) {
       throw new ApiError(404, "DamageReparingStock product not found");
     }
@@ -1109,6 +1132,7 @@ const updateOneFromDB = async (id, data) => {
     }
 
     if (!targetInventory) throw new ApiError(404, "Inventory not found");
+    await tracker.touch("ProductStock", targetInventory);
 
     const availableDamageQty = getStockQuantity(targetDamageReparingStock);
     if (availableDamageQty < returnQty) {
@@ -1198,6 +1222,8 @@ const updateOneFromDB = async (id, data) => {
       },
       { transaction: t },
     );
+
+    await tracker.flush();
 
     // ✅ 5) Notification
     const users = await User.findAll({

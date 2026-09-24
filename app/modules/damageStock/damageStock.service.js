@@ -1,9 +1,16 @@
 const { Op } = require("sequelize"); // Ensure Op is imported
 const paginationHelpers = require("../../../helpers/paginationHelper");
+const { isAverageCostLive } = require("../../../shared/averageCostRunner");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const {
+  createWithStockLog,
+  updateWithStockLog,
+  destroyWithStockLog,
+} = require("../../../shared/directStockEdit");
 const { DamageStockSearchableFields } = require("./damageStock.constants");
 const { lastKnownUnitCostMap } = require("../../../shared/fifoCostLayers");
+const { getStockPurchaseValue } = require("../../../shared/stockPurchaseValue");
 
 const DamageStock = db.damageStock;
 const Supplier = db.supplier;
@@ -16,16 +23,21 @@ const Warehouse = db.warehouse;
 const attachLastUnitCost = async (rows) => {
   const list = Array.isArray(rows) ? rows : [rows].filter(Boolean);
   if (!list.length) return rows;
-  const map = await lastKnownUnitCostMap(list.map((r) => r.productId));
+  const [map, averageLive] = await Promise.all([
+    lastKnownUnitCostMap(list.map((r) => r.productId)),
+    isAverageCostLive(),
+  ]);
   const withCost = (row) => {
     const plain = row?.toJSON ? row.toJSON() : row;
-    return { ...plain, lastUnitCost: map.get(Number(plain?.productId)) || 0 };
+    // After weighted-average go-live the row's own average is its unit cost.
+    const average = averageLive && plain?.averageCost != null ? Number(plain.averageCost) : null;
+    return { ...plain, lastUnitCost: average ?? (map.get(Number(plain?.productId)) || 0) };
   };
   return Array.isArray(rows) ? rows.map(withCost) : withCost(rows);
 };
 
 const insertIntoDB = async (data) => {
-  const result = await DamageStock.create(data);
+  const result = await createWithStockLog(DamageStock, "DamageStock", data);
 
   return result;
 };
@@ -90,15 +102,17 @@ const getAllFromDB = async (filters, options) => {
   });
 
   // ✅ total count + total quantity (same filters)
-  const [count, totalQuantity] = await Promise.all([
+  const [count, totalQuantity, totalPurchaseValue] = await Promise.all([
     DamageStock.count({ where: whereConditions }),
     DamageStock.sum("quantity", { where: whereConditions }),
+    getStockPurchaseValue(DamageStock, whereConditions),
   ]);
 
   return {
     meta: {
       count, // total filtered records
       totalQuantity: totalQuantity || 0, // total filtered quantity
+      totalPurchaseValue,
       page,
       limit,
     },
@@ -117,21 +131,13 @@ const getDataById = async (id) => {
 };
 
 const deleteIdFromDB = async (id) => {
-  const result = await DamageStock.destroy({
-    where: {
-      Id: id,
-    },
-  });
+  const result = await destroyWithStockLog(DamageStock, "DamageStock", { Id: id });
 
   return result;
 };
 
 const updateOneFromDB = async (id, payload) => {
-  const result = await DamageStock.update(payload, {
-    where: {
-      Id: id,
-    },
-  });
+  const result = await updateWithStockLog(DamageStock, "DamageStock", { Id: id }, payload);
 
   return result;
 };

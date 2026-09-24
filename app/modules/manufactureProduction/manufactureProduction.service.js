@@ -1,7 +1,6 @@
 const { Op } = require("sequelize");
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const {
-  formatStockForDisplay,
   toBaseStockPayload,
   toNumber,
 } = require("../../../helpers/unitConversionHelper");
@@ -45,12 +44,14 @@ const buildVariantKey = (variant) => {
   return entries.map(([key, value]) => `${key}:${value}`).join("|");
 };
 
-const buildItemStockWhere = ({ itemId, productId, variantKey }) => {
-  const where = { itemId };
-
-  if (productId) {
-    where.productId = productId;
-  }
+// Item Stock has exactly one row per (itemId, variantKey) — `productId` is
+// informational only and must not fork a separate stock pool (mirrors
+// manufacture.service.js's buildStockWhere; see its comment for why).
+const buildItemStockWhere = ({ itemId, variantKey }) => {
+  const where = {
+    itemId,
+    [Op.or]: [{ productId: null }, { productId: 0 }],
+  };
 
   if (variantKey) {
     where.variantKey = variantKey;
@@ -65,17 +66,14 @@ const buildItemStockWhere = ({ itemId, productId, variantKey }) => {
   return where;
 };
 
-const buildManufacturerStockWhere = ({
-  manufacturerId,
-  itemId,
-  productId,
-  variantKey,
-}) => {
-  const where = { manufacturerId, itemId };
-
-  if (productId) {
-    where.productId = productId;
-  }
+// Factory Stock is genuinely partitioned by manufacturerId (a real physical
+// location) but, like Item Stock, must not also fork on productId.
+const buildManufacturerStockWhere = ({ manufacturerId, itemId, variantKey }) => {
+  const where = {
+    manufacturerId,
+    itemId,
+    [Op.or]: [{ productId: null }, { productId: 0 }],
+  };
 
   if (variantKey) {
     where.variantKey = variantKey;
@@ -130,7 +128,7 @@ const adjustStockBalance = async ({
       const createdStockRow = await Model.create(
         {
           itemId,
-          productId: productId || null,
+          productId: null,
           name,
           manufacturerId,
           manufacturerName,
@@ -187,7 +185,7 @@ const adjustStockBalance = async ({
   const updatedStockRow = await stockRow.update(
     {
       itemId,
-      productId: productId || stockRow.productId || null,
+      productId: null,
       name,
       manufacturerId,
       manufacturerName,
@@ -205,7 +203,7 @@ const adjustStockBalance = async ({
     stockType: movementContext?.stockType || stockLabel,
     stockRow: updatedStockRow,
     itemId,
-    productId: productId || stockRow.productId || null,
+    productId: productId || null,
     manufacturerId,
     name,
     variant,
@@ -281,20 +279,18 @@ const insertIntoDB = async (payload = {}) => {
   return db.sequelize.transaction(async (t) => {
     const data = await buildPayload(payload, null, { transaction: t });
 
-    // FIFO: consume the oldest Item Stock layers for this production. The move's
-    // cost = the FIFO total (only when it consumes the flat raw-material pool).
-    let consumed = null;
-    if (!data.productId) {
-      consumed = await itemFifo.consumeFifo({
-        transaction: t,
-        itemId: data.itemId,
-        quantity: toNumber(data.unitValue),
-      });
-      data.cost = consumed.totalCost;
-    }
+    // FIFO: consume the oldest Item Stock layers for this production — always,
+    // regardless of productId (informational only; see buildItemStockWhere).
+    // The move's cost is the real FIFO total, never a manually entered value.
+    const consumed = await itemFifo.consumeFifo({
+      transaction: t,
+      itemId: data.itemId,
+      quantity: toNumber(data.unitValue),
+    });
+    data.cost = consumed.totalCost;
 
     const productionRecord = await ManufactureProduction.create(
-      consumed ? { ...data, costBreakdown: consumed.costBreakdown } : data,
+      { ...data, costBreakdown: consumed.costBreakdown },
       { transaction: t },
     );
 
@@ -312,9 +308,7 @@ const insertIntoDB = async (payload = {}) => {
         stockType: "ItemStock",
       },
     });
-    if (!data.productId) {
-      await itemFifo.syncItemStockCost({ transaction: t, itemId: data.itemId });
-    }
+    await itemFifo.syncItemStockCost({ transaction: t, itemId: data.itemId });
 
     await adjustStockBalance({
       Model: ManufacturerStock,
@@ -386,7 +380,10 @@ const getAllFromDB = async (filters, options) => {
 
   return {
     meta: { page, limit, count },
-    data: data.map(formatStockForDisplay),
+    // Shows quantity/unit exactly as recorded (e.g. Ml, not auto-converted
+    // to Liter) — see manufacture.service.js's formatManufactureForDisplay
+    // comment for why formatStockForDisplay isn't used here.
+    data: data.map((record) => (record?.toJSON ? record.toJSON() : { ...record })),
   };
 };
 
@@ -432,13 +429,14 @@ const deleteIdFromDB = async (id) => {
       },
     });
 
-    if (!data.productId) {
-      await itemFifo.restoreToLayers({
-        transaction: t,
-        costBreakdown: existing.costBreakdown,
-      });
-      await itemFifo.syncItemStockCost({ transaction: t, itemId: data.itemId });
-    }
+    // Legacy rows created before this fix (when productId still exempted a
+    // production from FIFO) have no costBreakdown — restoreToLayers is a
+    // safe no-op for those (nothing to restore).
+    await itemFifo.restoreToLayers({
+      transaction: t,
+      costBreakdown: existing.costBreakdown,
+    });
+    await itemFifo.syncItemStockCost({ transaction: t, itemId: data.itemId });
 
     return ManufactureProduction.destroy({ where: { Id: id }, transaction: t });
   });
@@ -535,27 +533,24 @@ const updateOneFromDB = async (id, payload = {}) => {
         },
       });
 
-      // FIFO: undo the old production's layer consumption.
-      if (!oldData.productId) {
-        await itemFifo.restoreToLayers({
-          transaction: t,
-          costBreakdown: existing.costBreakdown,
-        });
-        await itemFifo.syncItemStockCost({
-          transaction: t,
-          itemId: oldData.itemId,
-        });
-      }
+      // FIFO: undo the old production's layer consumption (legacy rows with
+      // no costBreakdown are a safe no-op here).
+      await itemFifo.restoreToLayers({
+        transaction: t,
+        costBreakdown: existing.costBreakdown,
+      });
+      await itemFifo.syncItemStockCost({
+        transaction: t,
+        itemId: oldData.itemId,
+      });
 
       // FIFO: re-consume for the edited production.
-      if (!nextData.productId) {
-        consumed = await itemFifo.consumeFifo({
-          transaction: t,
-          itemId: nextData.itemId,
-          quantity: toNumber(nextData.unitValue),
-        });
-        nextData.cost = consumed.totalCost;
-      }
+      consumed = await itemFifo.consumeFifo({
+        transaction: t,
+        itemId: nextData.itemId,
+        quantity: toNumber(nextData.unitValue),
+      });
+      nextData.cost = consumed.totalCost;
 
       await adjustStockBalance({
         Model: ItemMaster,
@@ -571,12 +566,10 @@ const updateOneFromDB = async (id, payload = {}) => {
           stockType: "ItemStock",
         },
       });
-      if (!nextData.productId) {
-        await itemFifo.syncItemStockCost({
-          transaction: t,
-          itemId: nextData.itemId,
-        });
-      }
+      await itemFifo.syncItemStockCost({
+        transaction: t,
+        itemId: nextData.itemId,
+      });
 
       await adjustStockBalance({
         Model: ManufacturerStock,

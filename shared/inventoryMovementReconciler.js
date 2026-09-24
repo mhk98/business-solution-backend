@@ -3,6 +3,7 @@ const {
   buildSyncedInventoryStockPayload,
   getVariantQuantityTotal,
   hasVariantRows,
+  getInventoryDisplayQuantity,
 } = require("./variantQuantity");
 
 const parseItems = (value) => {
@@ -224,9 +225,16 @@ const calculateExpectedInventoryForProduct = async (
 };
 
 const reconcileInventoryForProduct = async (db, catalogProductId, transaction) => {
+  if (!transaction) {
+    return db.sequelize.transaction((t) => reconcileInventoryForProduct(db, catalogProductId, t));
+  }
   const productId = Number(catalogProductId);
   if (!productId) return null;
 
+  // Serialize reconciliation with the stock mutation, including its audit row.
+  const lockedInventory = await db.inventoryMaster.findOne({
+    where: { productId }, transaction, lock: transaction.LOCK.UPDATE,
+  });
   const expected = await calculateExpectedInventoryForProduct(
     db,
     productId,
@@ -234,11 +242,7 @@ const reconcileInventoryForProduct = async (db, catalogProductId, transaction) =
   );
   if (!expected) return null;
 
-  let inventory = await db.inventoryMaster.findOne({
-    where: { productId },
-    transaction,
-    lock: transaction?.LOCK?.UPDATE,
-  });
+  let inventory = lockedInventory;
 
   if (!inventory) {
     inventory = await db.inventoryMaster.create(
@@ -256,6 +260,7 @@ const reconcileInventoryForProduct = async (db, catalogProductId, transaction) =
     );
   }
 
+  const balanceBefore = getInventoryDisplayQuantity(inventory);
   await inventory.update(
     buildSyncedInventoryStockPayload({
       quantity: expected.quantity,
@@ -263,6 +268,24 @@ const reconcileInventoryForProduct = async (db, catalogProductId, transaction) =
     }),
     { transaction },
   );
+
+  const balanceAfter = getInventoryDisplayQuantity(inventory);
+  if (balanceAfter !== balanceBefore) {
+    const { logStockMovement } = require("./stockMovementLogger");
+    await logStockMovement({
+      transaction,
+      sourceType: "InventoryReconciliation",
+      operation: "RECONCILE",
+      stockType: "ProductStock",
+      stockRow: inventory,
+      productId,
+      unit: "Pcs",
+      quantityChange: balanceAfter - balanceBefore,
+      balanceBefore,
+      balanceAfter,
+      metadata: { reason: "Stock recalculated from source transactions" },
+    });
+  }
 
   if (Number(expected.product.stockId || 0) !== Number(inventory.Id)) {
     await expected.product.update({ stockId: inventory.Id }, { transaction });

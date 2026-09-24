@@ -18,7 +18,11 @@ const {
   assertCatalogInventoryMovementVariants,
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
-const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const {
+  logStockMovement,
+  pendingMark,
+  assignPendingSource,
+} = require("../../../shared/stockMovementLogger");
 const { resolveUnitPrice } = require("../../../shared/movementUnitPrice");
 const fifo = require("../../../shared/fifoCostLayers");
 
@@ -430,9 +434,11 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
             },
           ];
 
+      const removalStart = pendingMark(t);
       for (const item of itemsToRemove) {
         await removeReceivedItemFromInventory(item, t, inputDateStr || null);
       }
+      await assignPendingSource(t, [removalStart, pendingMark(t)], id);
 
       const productIds = [
         ...new Set(preparedItems.map((item) => Number(item.productId))),
@@ -480,12 +486,14 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
         };
 
         normalizedItems.push(normalizedItem);
+        const pendingStart = pendingMark(t);
         await applyReceivedItemToInventory(
           normalizedItem,
           productData,
           t,
           inputDateStr || null,
         );
+        normalizedItem.pendingRange = [pendingStart, pendingMark(t)];
       }
 
       // Delete the old single bulk row and create separate rows per item
@@ -493,7 +501,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
 
       const resolvedBatchId = batchId || existing.batchId || `batch-${Date.now()}`;
       for (const normalizedItem of normalizedItems) {
-        await ReceivedProduct.create(
+        const createdRow = await ReceivedProduct.create(
           {
             name: normalizedItem.name,
             quantity: normalizedItem.quantity,
@@ -515,6 +523,7 @@ const updateBulkOneFromDB = async (id, payload, preparedItems = []) => {
           },
           { transaction: t },
         );
+        await assignPendingSource(t, normalizedItem.pendingRange, createdRow.Id);
       }
 
       await sendReceivedProductNotifications({
@@ -650,6 +659,7 @@ const insertIntoDB = async (data, file) => {
     // =========================
     // InventoryMaster Update / Insert
     // =========================
+    const pendingStart = pendingMark(t);
     await applyReceivedItemToInventory(
       {
         productId,
@@ -664,6 +674,7 @@ const insertIntoDB = async (data, file) => {
       t,
       date,
     );
+    await assignPendingSource(t, pendingStart, result.Id);
 
     // =========================
     // Warranty
@@ -794,7 +805,9 @@ const insertBulkIntoDB = async (data, file, preparedItems = null) => {
       };
 
       normalizedItems.push(normalizedItem);
+      const pendingStart = pendingMark(t);
       await applyReceivedItemToInventory(normalizedItem, productData, t, date);
+      normalizedItem.pendingRange = [pendingStart, pendingMark(t)];
 
       if (
         Number(normalizedItem.warrantyValue) > 0 &&
@@ -837,6 +850,7 @@ const insertBulkIntoDB = async (data, file, preparedItems = null) => {
         },
         { transaction: t },
       );
+      await assignPendingSource(t, normalizedItem.pendingRange, result.Id);
       results.push(result);
     }
     const result = results[0];

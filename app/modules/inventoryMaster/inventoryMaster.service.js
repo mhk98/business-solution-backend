@@ -1,7 +1,14 @@
 const { Op } = require("sequelize"); // Ensure Op is imported
 const paginationHelpers = require("../../../helpers/paginationHelper");
+const { businessDate } = require("../../../shared/stockReportBalances");
+const { isAverageCostLive } = require("../../../shared/averageCostRunner");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
+const {
+  createWithStockLog,
+  updateWithStockLog,
+  destroyWithStockLog,
+} = require("../../../shared/directStockEdit");
 const {
   InventoryMasterSearchableFields,
 } = require("./inventoryMaster.constants");
@@ -36,16 +43,18 @@ const attachLastUnitCost = async (rows) => {
   const list = Array.isArray(rows) ? rows : [rows].filter(Boolean);
   if (!list.length) return rows;
   const productIds = list.map((r) => r.productId);
-  const [avgMap, lastMap] = await Promise.all([
+  const [avgMap, lastMap, averageLive] = await Promise.all([
     currentAverageCostMap(productIds),
     lastKnownUnitCostMap(productIds),
+    isAverageCostLive(),
   ]);
   const withCost = (row) => {
     const plain = row?.toJSON ? row.toJSON() : row;
     const pid = Number(plain?.productId);
+    const average = averageLive && plain?.averageCost != null ? Number(plain.averageCost) : null;
     return {
       ...plain,
-      lastUnitCost: avgMap.get(pid) || lastMap.get(pid) || 0,
+      lastUnitCost: average ?? (avgMap.get(pid) || lastMap.get(pid) || 0),
     };
   };
   return Array.isArray(rows) ? rows.map(withCost) : withCost(rows);
@@ -145,7 +154,7 @@ const buildAuditRow = async (inventoryRow) => {
 };
 
 const insertIntoDB = async (data) => {
-  const result = await InventoryMaster.create(data);
+  const result = await createWithStockLog(InventoryMaster, "ProductStock", data);
 
   return result;
 };
@@ -250,21 +259,13 @@ const getDataById = async (id) => {
 };
 
 const deleteIdFromDB = async (id) => {
-  const result = await InventoryMaster.destroy({
-    where: {
-      Id: id,
-    },
-  });
+  const result = await destroyWithStockLog(InventoryMaster, "ProductStock", { Id: id });
 
   return result;
 };
 
 const updateOneFromDB = async (id, payload) => {
-  const result = await InventoryMaster.update(payload, {
-    where: {
-      Id: id,
-    },
-  });
+  const result = await updateWithStockLog(InventoryMaster, "ProductStock", { Id: id }, payload);
 
   return result;
 };
@@ -308,7 +309,11 @@ const updatePriceFromDB = async (id, payload = {}) => {
   // FIFO layers — otherwise reports built on the FIFO weighted average (All
   // Books' এভারেজ পারচেস প্রাইস) keep surfacing whatever wrong unit cost the
   // stock was originally received at, even after the catalog price is fixed.
+  // Under weighted-average costing the edit is a revaluation: same quantity,
+  // new average from now on. Logged as a zero-quantity REVALUATION movement
+  // that the average cost engine treats as the new starting average.
   await db.sequelize.transaction(async (transaction) => {
+    if (purchase_price !== undefined) updates.averageCost = purchase_price;
     await record.update(updates, { transaction });
     if (purchase_price !== undefined) {
       await setOpenLayersUnitCost({
@@ -316,6 +321,29 @@ const updatePriceFromDB = async (id, payload = {}) => {
         productId: record.productId,
         unitCost: purchase_price,
       });
+      const quantity = Number(record.quantity || 0);
+      await db.stockMovement.create(
+        {
+          sourceType: "PriceRevaluation",
+          sourceId: record.Id,
+          operation: "REVALUATION",
+          stockType: "ProductStock",
+          stockRowId: record.Id,
+          productId: record.productId,
+          name: record.name,
+          direction: "NONE",
+          unit: "Pcs",
+          date: businessDate(),
+          quantityChange: 0,
+          balanceBefore: quantity,
+          balanceAfter: quantity,
+          averageCostAfter: purchase_price,
+        },
+        { transaction },
+      );
+      transaction.afterCommit(() =>
+        require("../../../shared/averageCostRunner").scheduleAverageRecompute(),
+      );
     }
   });
 

@@ -28,6 +28,13 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      // Links this row back to the Book Cash Out entry that created it, so
+      // editing/deleting that entry can find and sync this history row.
+      // Null for rows created from other flows (e.g. Item Purchase above).
+      cashInOutId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       status: {
         type: DataTypes.ENUM("Paid", "Unpaid"),
         allowNull: true,

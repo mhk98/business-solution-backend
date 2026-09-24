@@ -19,7 +19,12 @@ const {
   assertCatalogInventoryMovementVariants,
   assertInventoryVariantStock,
 } = require("../../../shared/inventoryVariantGuard");
-const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const { createStockTracker } = require("../../../shared/stockChangeTracker");
+const {
+  logStockMovement,
+  pendingMark,
+  assignPendingSource,
+} = require("../../../shared/stockMovementLogger");
 const fifo = require("../../../shared/fifoCostLayers");
 const DamageProduct = db.damageProduct;
 const Notification = db.notification;
@@ -276,7 +281,10 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
   return db.sequelize.transaction(async (t) => {
     const normalizedItems = [];
     for (const item of items) {
-      normalizedItems.push(await moveDamageProductItem(item, t));
+      const pendingStart = pendingMark(t);
+      const movedItem = await moveDamageProductItem(item, t, date);
+      movedItem.pendingRange = [pendingStart, pendingMark(t)];
+      normalizedItems.push(movedItem);
     }
 
     const results = [];
@@ -300,6 +308,7 @@ const insertBulkIntoDB = async (data = {}, preparedItems = null) => {
         },
         { transaction: t },
       );
+      await assignPendingSource(t, normalizedItem.pendingRange, result.Id);
       results.push(result);
     }
     const result = results[0];
@@ -1125,6 +1134,7 @@ const updateOneFromDB = async (id, payload) => {
         "purchase_price",
         "sale_price",
         "items",
+        "date",
       ],
       transaction: t,
       lock: t.LOCK.UPDATE,
@@ -1183,6 +1193,17 @@ const updateOneFromDB = async (id, payload) => {
 
     if (!oldInv) throw new ApiError(404, "Old inventory product not found");
 
+    // Edits move stock between Stock Product and Damage Stock rows directly;
+    // the tracker logs every net change so the movement ledger has no gap.
+    const tracker = createStockTracker({
+      transaction: t,
+      sourceType: "DamageProduct",
+      sourceId: id,
+      operation: "UPDATE",
+      date: inputDateStr || existing.date,
+    });
+    await tracker.touch("ProductStock", oldInv);
+
     const restoredOldVariants = mergeVariants(
       oldInv.variants,
       existingVariants,
@@ -1205,6 +1226,7 @@ const updateOneFromDB = async (id, payload) => {
     }
 
     if (!targetInv) throw new ApiError(404, "Product not found in inventory");
+    await tracker.touch("ProductStock", targetInv);
     await assertCatalogInventoryMovementVariants({
       db,
       inventory: targetInv,
@@ -1255,6 +1277,7 @@ const updateOneFromDB = async (id, payload) => {
       oldCatalogProductId,
       t,
     );
+    await tracker.touch("DamageStock", oldDamageStock);
     const targetCatalogProductId = Number(targetInv.productId);
     const productChanged = targetCatalogProductId !== oldCatalogProductId;
 
@@ -1294,7 +1317,7 @@ const updateOneFromDB = async (id, payload) => {
         { transaction: t },
       );
     } else if (!productChanged) {
-      await DamageStock.create(
+      const createdDamageStock = await DamageStock.create(
         {
           productId: targetCatalogProductId,
           name: targetInv.name,
@@ -1305,6 +1328,7 @@ const updateOneFromDB = async (id, payload) => {
         },
         { transaction: t },
       );
+      await tracker.created("DamageStock", createdDamageStock);
     } else {
       if (oldDamageStock) {
         const rolledBackDamageVariants = subtractVariants(
@@ -1342,6 +1366,7 @@ const updateOneFromDB = async (id, payload) => {
         targetCatalogProductId,
         t,
       );
+      await tracker.touch("DamageStock", targetDamageStock);
 
       if (targetDamageStock) {
         await targetDamageStock.update(
@@ -1358,7 +1383,7 @@ const updateOneFromDB = async (id, payload) => {
           { transaction: t },
         );
       } else {
-        await DamageStock.create(
+        const createdDamageStock = await DamageStock.create(
           {
             productId: targetCatalogProductId,
             name: targetInv.name,
@@ -1369,6 +1394,7 @@ const updateOneFromDB = async (id, payload) => {
           },
           { transaction: t },
         );
+        await tracker.created("DamageStock", createdDamageStock);
       }
     }
 
@@ -1379,6 +1405,8 @@ const updateOneFromDB = async (id, payload) => {
       }),
       { transaction: t },
     );
+
+    await tracker.flush();
 
     const [updatedCount] = await DamageProduct.update(data, {
       where: {

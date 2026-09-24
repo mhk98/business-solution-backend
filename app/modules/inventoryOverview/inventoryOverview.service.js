@@ -1,3 +1,4 @@
+const { collectStockBalances } = require("../../../shared/stockReportBalances");
 const { getFundTransferPaymentModeRows } = require("../../../shared/fundTransferPaymentModes");
 const { Op } = require("sequelize");
 const db = require("../../../models");
@@ -346,24 +347,12 @@ const findRows = async (Model, where = {}, label, include = []) => {
   }));
 };
 
-// For dispatch (Intransit) and Sales Return rows the money is frozen on the row
-// itself at transaction time — the reports read that, never the current catalog.
-// Purchase side prefers the FIFO cost, falling back to the frozen line total.
+// Sales totals for dispatch and returns remain recorded transaction totals.
 const FROZEN_MONEY_SOURCES = new Set(["Intransit Product", "Sales Return"]);
 
-const rowPurchaseValue = (row, priceByName) => {
-  if (FROZEN_MONEY_SOURCES.has(row.source)) {
-    // fifo_cost === 0 means "recorded, genuinely zero" (no-invention rule) and
-    // must stay 0 — only fall back to purchase_price when it was never set
-    // (null/undefined). `n(row.fifo_cost) || ...` would wrongly treat 0 the
-    // same as unset, diverging from the Dashboard's SQL COALESCE (which only
-    // substitutes on NULL) and inflating this page's Total Purchase.
-    return row.fifo_cost === null || row.fifo_cost === undefined
-      ? n(row.purchase_price)
-      : n(row.fifo_cost);
-  }
-  return n(row.quantity) * getStockPriceForRow(priceByName, row).purchase_price;
-};
+// Overview History values every purchase using the current database price.
+const rowPurchaseValue = (row, priceByName) =>
+  n(row.quantity) * getStockPriceForRow(priceByName, row).purchase_price;
 
 const rowSaleValue = (row, priceByName) => {
   if (FROZEN_MONEY_SOURCES.has(row.source)) {
@@ -374,35 +363,38 @@ const rowSaleValue = (row, priceByName) => {
 
 const parseRowVariants = (row) => {
   if (Array.isArray(row.variants)) return row.variants;
-  try { return JSON.parse(row.variants || "[]"); } catch { return []; }
+  try { const parsed = JSON.parse(row.variants || "[]"); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
 };
 
 const normalizeProductNameKey = (name) => String(name || "").trim().toLowerCase();
 
-// Purchase Price / Sale Price for every row (and the Total Purchase/Total
-// Sale summary cards) are driven by ONE source: the Stock Product's current
-// catalog price — never each movement's own recorded purchase_price/sale_price
-// field. Those movement-level fields are inconsistent across sources (some
-// store a unit price, some a pre-computed total, some leave it at 0) and
-// drift out of sync with the catalog over time, which previously made the
-// numbers on screen hard to trust. Using the Stock Product price everywhere
-// means the displayed unit price always matches what's summed into the
-// totals — if that price is 0, both correctly show/add 0.
+// Match by product ID first so renamed products and duplicate names cannot
+// select another product's purchase price. Names support legacy rows without IDs.
 const getStockPriceMap = async (rows) => {
   const rawNames = Array.from(
     new Set(rows.map((row) => String(row.name || "").trim()).filter(Boolean)),
   );
 
   const priceByName = new Map();
-  if (!rawNames.length) return priceByName;
+  const productIds = [...new Set(rows.map((row) => row.productId).filter(Boolean))];
+  if (!rawNames.length && !productIds.length) return priceByName;
 
   const stockRows = await InventoryMaster.findAll({
-    where: { name: { [Op.in]: rawNames } },
-    attributes: ["name", "purchase_price", "sale_price"],
+    where: { [Op.or]: [
+      { productId: { [Op.in]: productIds } },
+      { name: { [Op.in]: rawNames } },
+    ] },
+    attributes: ["productId", "name", "purchase_price", "sale_price"],
     paranoid: true,
   });
 
   stockRows.forEach((stockRow) => {
+    if (stockRow.productId) {
+      priceByName.set(`product:${stockRow.productId}`, {
+        purchase_price: n(stockRow.purchase_price),
+        sale_price: n(stockRow.sale_price),
+      });
+    }
     const key = normalizeProductNameKey(stockRow.name);
     if (key && !priceByName.has(key)) {
       priceByName.set(key, {
@@ -416,7 +408,9 @@ const getStockPriceMap = async (rows) => {
 };
 
 const getStockPriceForRow = (priceByName, row) =>
-  priceByName.get(normalizeProductNameKey(row.name)) || {
+  (row.productId
+    ? priceByName.get(`product:${row.productId}`)
+    : priceByName.get(normalizeProductNameKey(row.name))) || {
     purchase_price: 0,
     sale_price: 0,
   };
@@ -1108,15 +1102,7 @@ const STOCK_MOVEMENT_TYPE_PREFIX = {
   RepairingStock: "repairingStock",
 };
 
-// Opening/In/Out/Closing per product, built directly from the immutable
-// StockMovement ledger (see shared/stockMovementLogger.js) instead of
-// replaying every source table's sign conventions. Closing is simply the
-// balanceAfter of the last movement on or before `to`; Opening is the
-// balanceAfter of the last movement strictly before `from` (0 if the
-// product has no movement logged before the range — i.e. no history prior
-// to whenever logging started for it). Only movements recorded *after*
-// this ledger went live are covered; older activity that predates it has
-// no rows here by design.
+// Opening and closing balances are computed from effective dated movements.
 const computeStockMovementLedgerReport = async ({ from, to, name } = {}) => {
   if (!from || !to) {
     throw new ApiError(400, "from এবং to দুইটাই দিতে হবে (YYYY-MM-DD)");
@@ -1124,9 +1110,14 @@ const computeStockMovementLedgerReport = async ({ from, to, name } = {}) => {
   if (!StockMovement) return { meta: { from, to, count: 0 }, data: [] };
 
   const nameWhere = buildNameWhere(name);
-  const [rows, currentPriceRows] = await Promise.all([
+  const [rows, currentPriceRows, damageRows, repairingRows] = await Promise.all([
     StockMovement.findAll({
-      where: { ...nameWhere, date: { [Op.lte]: to } },
+      // No `date <= to` cutoff: balances are walked back from live stock, so
+      // movements dated after `to` are needed too (see collectStockBalances).
+      // (An empty `{}` inside Op.or would be dropped, matching nothing.)
+      where: name
+        ? { [Op.or]: [nameWhere, { operation: "HISTORY_REBUILD" }] }
+        : {},
       order: [
         ["date", "ASC"],
         ["createdAt", "ASC"],
@@ -1136,24 +1127,22 @@ const computeStockMovementLedgerReport = async ({ from, to, name } = {}) => {
     }),
     InventoryMaster.findAll({
       where: nameWhere,
-      attributes: ["productId", "purchase_price"],
       paranoid: false,
       raw: true,
     }),
+    DamageStock.findAll({ where: nameWhere, paranoid: false, raw: true }),
+    DamageReparingStock.findAll({ where: nameWhere, paranoid: false, raw: true }),
   ]);
-  const purchasePriceByProductId = new Map(
-    currentPriceRows.map((row) => [Number(row.productId), n(row.purchase_price)]),
-  );
-  // `InventoryMaster.purchase_price` is overwritten with whatever the LATEST
-  // purchase cost was (see receivedProduct.service.js) — it does not reflect
-  // which lots are actually still in stock, so a product with two purchases
-  // at different prices reports the wrong number for whatever's really left.
-  // The true lot-aware price is the weighted average of currently-open FIFO
-  // layers; fall back to the last known layer (fully depleted right now) and
-  // finally to the catalog `purchase_price` (no FIFO history at all).
-  // Sourced from the movement rows themselves (not `currentPriceRows`) so a
-  // product whose InventoryMaster row is soft-deleted still gets priced —
-  // its historical movements and FIFO layers are unaffected by that.
+  // A live Stock Product row wins over a soft-deleted one for the same product.
+  const purchasePriceByProductId = new Map();
+  currentPriceRows
+    .sort((a, b) => Number(!a.deletedAt) - Number(!b.deletedAt))
+    .forEach((row) => {
+      purchasePriceByProductId.set(Number(row.productId), n(row.purchase_price));
+    });
+  // FIFO averages are only a fallback for products without a Stock Product
+  // row (see the PurchasePrice assignment below). Sourced from the movement
+  // rows themselves so a soft-deleted product still gets priced.
   const productIds = [
     ...new Set(rows.map((row) => row.productId).filter(Boolean)),
   ];
@@ -1164,34 +1153,29 @@ const computeStockMovementLedgerReport = async ({ from, to, name } = {}) => {
 
   const map = new Map();
 
-  rows.forEach((row) => {
-    const stockType = STOCK_MOVEMENT_TYPE_PREFIX[row.stockType];
-    if (!stockType || !row.productId) return;
-
-    const key = `${row.productId}`;
-    if (!map.has(key)) {
-      map.set(key, { productId: row.productId, productsName: row.name });
-    }
+  const balances = collectStockBalances({ movements: rows, from, to, stocksByType: {
+    ProductStock: currentPriceRows,
+    DamageStock: damageRows,
+    RepairingStock: repairingRows,
+  } });
+  balances.forEach((balance) => {
+    const stockType = STOCK_MOVEMENT_TYPE_PREFIX[balance.type];
+    if (!stockType) return;
+    const pid = Number(balance.groupId);
+    const key = String(pid);
+    if (!map.has(key)) map.set(key, { productId: pid, productsName: balance.name });
     const entry = map.get(key);
-    entry.productsName = row.name || entry.productsName;
-
-    const closingQty = n(row.balanceAfter);
-    entry[`${stockType}Closing`] = closingQty;
-    const pid = Number(row.productId);
-    entry[`${stockType}PurchasePrice`] =
-      currentAvgPriceByProductId.get(pid) ||
-      lastKnownPriceByProductId.get(pid) ||
-      purchasePriceByProductId.get(pid) ||
-      0;
-
-    if (row.date < from) {
-      entry[`${stockType}Opening`] = closingQty;
-    } else {
-      const change = n(row.quantityChange);
-      entry[`${stockType}In`] = n(entry[`${stockType}In`]) + Math.max(change, 0);
-      entry[`${stockType}Out`] =
-        n(entry[`${stockType}Out`]) + Math.max(-change, 0);
+    for (const [field, value] of Object.entries({ Opening: balance.opening,
+      Closing: balance.closing, In: balance.in, Out: balance.out })) {
+      entry[`${stockType}${field}`] = n(entry[`${stockType}${field}`]) + n(value);
     }
+    const currentPrice = purchasePriceByProductId.has(pid)
+      ? purchasePriceByProductId.get(pid)
+      : currentAvgPriceByProductId.get(pid) || lastKnownPriceByProductId.get(pid) || 0;
+    // Weighted-average costing: each date is valued at that day's average
+    // (from the movement ledger); pools without one yet use the current price.
+    entry[`${stockType}PurchasePrice`] = balance.closingAverage ?? currentPrice;
+    entry[`${stockType}OpeningPurchasePrice`] = balance.openingAverage ?? currentPrice;
   });
 
   const all = Array.from(map.values())
@@ -1201,12 +1185,14 @@ const computeStockMovementLedgerReport = async ({ from, to, name } = {}) => {
         const opening = n(row[`${stockType}Opening`]);
         const closing = n(row[`${stockType}Closing`]);
         const price = n(row[`${stockType}PurchasePrice`]);
+        const openingPrice = n(row[`${stockType}OpeningPurchasePrice`] ?? price);
         result[`${stockType}Opening`] = opening;
         result[`${stockType}In`] = n(row[`${stockType}In`]);
         result[`${stockType}Out`] = n(row[`${stockType}Out`]);
         result[`${stockType}Closing`] = closing;
         result[`${stockType}PurchasePrice`] = price;
-        result[`${stockType}OpeningPurchaseCost`] = opening * price;
+        result[`${stockType}OpeningPurchasePrice`] = openingPrice;
+        result[`${stockType}OpeningPurchaseCost`] = opening * openingPrice;
         result[`${stockType}ClosingPurchaseCost`] = closing * price;
       });
       return result;
@@ -1252,7 +1238,7 @@ const computeStockMovementLedgerReport = async ({ from, to, name } = {}) => {
 // grouped by whichever id field StockMovement was logged with for that pool
 // (productId for Product/Damage/Repairing, itemId for everything else).
 // `from` is optional: when given, each pool also gets an `${prefix}Opening`
-// (balance as of the last movement dated before `from`); otherwise Opening is 0.
+// (balance at the end of the day before `from`); otherwise Opening is 0.
 const computeStockMovementClosingReport = async ({
   from,
   to,
@@ -1260,6 +1246,7 @@ const computeStockMovementClosingReport = async ({
   groupIdField,
   stockTypeMap,
   priceByGroupIdByPrefix,
+  stocksByType,
 }) => {
   if (!to) {
     throw new ApiError(400, "to তারিখ দিতে হবে (YYYY-MM-DD)");
@@ -1268,11 +1255,11 @@ const computeStockMovementClosingReport = async ({
 
   const nameWhere = buildNameWhere(name);
   const stockTypeValues = Object.keys(stockTypeMap);
+  if (stockTypeMap.ItemStock) stockTypeValues.push("PackagingStock");
   const rows = await StockMovement.findAll({
     where: {
-      ...nameWhere,
-      date: { [Op.lte]: to },
-      stockType: { [Op.in]: stockTypeValues },
+      [Op.or]: [{ ...nameWhere,
+        stockType: { [Op.in]: stockTypeValues } }, { operation: "HISTORY_REBUILD" }],
     },
     order: [
       ["date", "ASC"],
@@ -1283,19 +1270,20 @@ const computeStockMovementClosingReport = async ({
   });
 
   const map = new Map();
-  rows.forEach((row) => {
-    const prefix = stockTypeMap[row.stockType];
-    const groupId = row[groupIdField];
-    if (!prefix || !groupId) return;
-
-    const key = String(groupId);
-    if (!map.has(key)) map.set(key, { groupId, name: row.name });
+  const balances = collectStockBalances({ movements: rows, stocksByType, from, to });
+  balances.forEach((balance) => {
+    const prefix = stockTypeMap[balance.type];
+    if (!prefix) return;
+    const key = String(balance.groupId);
+    if (!map.has(key)) map.set(key, { groupId: balance.groupId, name: balance.name });
     const entry = map.get(key);
-    entry.name = row.name || entry.name;
-    entry[`${prefix}Closing`] = n(row.balanceAfter);
-    if (from && row.date < from) {
-      entry[`${prefix}Opening`] = n(row.balanceAfter);
-    }
+    entry[`${prefix}Closing`] = n(entry[`${prefix}Closing`]) + balance.closing;
+    entry[`${prefix}Opening`] = n(entry[`${prefix}Opening`]) + balance.opening;
+    // Weighted-average costing: value each stock row (manufacturer / variant)
+    // at its own average on that day; rows without one use the group price.
+    const groupPrice = (priceByGroupIdByPrefix[prefix] || new Map()).get(Number(balance.groupId)) || 0;
+    entry[`${prefix}ClosingCost`] = n(entry[`${prefix}ClosingCost`]) + balance.closing * (balance.closingAverage ?? groupPrice);
+    entry[`${prefix}OpeningCost`] = n(entry[`${prefix}OpeningCost`]) + balance.opening * (balance.openingAverage ?? groupPrice);
   });
 
   const prefixes = [...new Set(Object.values(stockTypeMap))];
@@ -1309,10 +1297,15 @@ const computeStockMovementClosingReport = async ({
         // manufacturer) is not the same balance as Item Stock (the central raw
         // pool), even though they share the same itemId, so they can (and often
         // do) carry different current unit costs.
-        result[`${prefix}PurchasePrice`] =
-          (priceByGroupIdByPrefix[prefix] || new Map()).get(
-            Number(row.groupId),
-          ) || 0;
+        const groupPrice = (priceByGroupIdByPrefix[prefix] || new Map()).get(
+          Number(row.groupId),
+        ) || 0;
+        result[`${prefix}ClosingCost`] = n(row[`${prefix}ClosingCost`]);
+        result[`${prefix}OpeningCost`] = n(row[`${prefix}OpeningCost`]);
+        // Shown price = the group's weighted average (total value ÷ quantity).
+        result[`${prefix}PurchasePrice`] = result[`${prefix}Closing`] > 0
+          ? result[`${prefix}ClosingCost`] / result[`${prefix}Closing`]
+          : groupPrice;
       });
       return result;
     })
@@ -1328,13 +1321,11 @@ const computeStockMovementClosingReport = async ({
   const openingPurchaseCostByPrefix = {};
   prefixes.forEach((prefix) => {
     purchaseCostByPrefix[`${prefix}PurchaseCost`] = all.reduce(
-      (sum, row) =>
-        sum + n(row[`${prefix}Closing`]) * n(row[`${prefix}PurchasePrice`]),
+      (sum, row) => sum + n(row[`${prefix}ClosingCost`]),
       0,
     );
     openingPurchaseCostByPrefix[`${prefix}OpeningPurchaseCost`] = all.reduce(
-      (sum, row) =>
-        sum + n(row[`${prefix}Opening`]) * n(row[`${prefix}PurchasePrice`]),
+      (sum, row) => sum + n(row[`${prefix}OpeningCost`]),
       0,
     );
   });
@@ -1365,13 +1356,21 @@ const computeStockMovementClosingReport = async ({
 // depleted right now) but which still have FIFO layer history — a
 // stale-but-real reference price beats reporting ৳0 for a nonzero closing qty.
 const buildUnitPriceMap = (rows, idField, fallbackMap = new Map()) => {
+  const totals = new Map();
+  rows.filter((row) => !row.deletedAt).forEach((row) => {
+    const id = Number(row[idField]);
+    if (!id) return;
+    const total = totals.get(id) || { quantity: 0, cost: 0 };
+    total.quantity += n(row.unitValue);
+    total.cost += n(row.cost);
+    totals.set(id, total);
+  });
   const map = new Map();
   rows.forEach((row) => {
     const id = Number(row[idField]);
     if (!id) return;
-    const qty = n(row.unitValue);
-    const liveUnitCost = qty ? n(row.cost) / qty : 0;
-    map.set(id, liveUnitCost || fallbackMap.get(id) || 0);
+    const total = totals.get(id);
+    map.set(id, total?.quantity > 0 ? total.cost / total.quantity : fallbackMap.get(id) || 0);
   });
   return map;
 };
@@ -1383,13 +1382,11 @@ const computeItemFactoryStockReport = async ({ from, to, name } = {}) => {
   const [itemStockRows, factoryStockRows] = await Promise.all([
     ItemMaster.findAll({
       where: buildNameWhere(name),
-      attributes: ["itemId", "cost", "unitValue"],
       paranoid: false,
       raw: true,
     }),
     ManufactureStock.findAll({
       where: buildNameWhere(name),
-      attributes: ["itemId", "cost", "unitValue"],
       paranoid: false,
       raw: true,
     }),
@@ -1409,19 +1406,12 @@ const computeItemFactoryStockReport = async ({ from, to, name } = {}) => {
     name,
     groupIdField: "itemId",
     stockTypeMap: { ItemStock: "itemStock", FactoryStock: "factoryStock" },
+    stocksByType: { ItemStock: itemStockRows, FactoryStock: factoryStockRows },
     priceByGroupIdByPrefix: {
       itemStock: buildUnitPriceMap(itemStockRows, "itemId", itemStockFallback),
-      factoryStock: new Map(
-        factoryStockRows
-          .map((row) => {
-            const id = Number(row.itemId);
-            if (!id) return null;
-            const qty = n(row.unitValue);
-            const liveUnitCost = qty ? n(row.cost) / qty : 0;
-            return [id, liveUnitCost || factoryStockFallback(id, 0)];
-          })
-          .filter(Boolean),
-      ),
+      factoryStock: buildUnitPriceMap(factoryStockRows, "itemId", new Map(
+        factoryStockRows.map((row) => [Number(row.itemId), factoryStockFallback(Number(row.itemId), 0)]),
+      )),
     },
   });
 };
@@ -1434,13 +1424,11 @@ const computePackagingStockReport = async ({ from, to, name } = {}) => {
     await Promise.all([
       PackagingItemStock.findAll({
         where: buildNameWhere(name),
-        attributes: ["packagingItemId", "cost", "unitValue"],
         paranoid: false,
         raw: true,
       }),
       PackagingFactoryStock.findAll({
         where: buildNameWhere(name),
-        attributes: ["packagingItemId", "cost", "unitValue"],
         paranoid: false,
         raw: true,
       }),
@@ -1461,6 +1449,8 @@ const computePackagingStockReport = async ({ from, to, name } = {}) => {
     to,
     name,
     groupIdField: "itemId",
+    stocksByType: { PackagingItemStock: packagingItemStockRows,
+      PackagingFactoryStock: packagingFactoryStockRows },
     stockTypeMap: {
       PackagingItemStock: "packagingItemStock",
       PackagingFactoryStock: "packagingFactoryStock",
@@ -1471,17 +1461,9 @@ const computePackagingStockReport = async ({ from, to, name } = {}) => {
         "packagingItemId",
         packagingItemStockFallback,
       ),
-      packagingFactoryStock: new Map(
-        packagingFactoryStockRows
-          .map((row) => {
-            const id = Number(row.packagingItemId);
-            if (!id) return null;
-            const qty = n(row.unitValue);
-            const liveUnitCost = qty ? n(row.cost) / qty : 0;
-            return [id, liveUnitCost || packagingFactoryStockFallback(id, 0)];
-          })
-          .filter(Boolean),
-      ),
+      packagingFactoryStock: buildUnitPriceMap(packagingFactoryStockRows, "packagingItemId", new Map(
+        packagingFactoryStockRows.map((row) => [Number(row.packagingItemId), packagingFactoryStockFallback(Number(row.packagingItemId), 0)]),
+      )),
     },
   });
 };
@@ -1590,6 +1572,21 @@ const getPettyCashBalance = async (date, operator) => {
 const getPettyCashOpeningBalance = (from) => getPettyCashBalance(from, Op.lt);
 const getPettyCashEndingBalance = (to) => getPettyCashBalance(to, Op.lte);
 
+// DM balances follow the same dated cutoffs as the cash/stock statement.
+const getDmBalance = async (date, operator) => {
+  if (!date) return 0;
+  const where = { date: { [operator]: date }, deletedAt: { [Op.is]: null } };
+  const [cashIn, cashOut] = await Promise.all([
+    db.marketingExpense.sum("amount", {
+      where: { ...where, paymentStatus: "CashIn" },
+    }),
+    db.marketingExpense.sum("amount", {
+      where: { ...where, paymentStatus: "CashOut" },
+    }),
+  ]);
+  return n(cashIn) - n(cashOut);
+};
+
 // Summary wrapper consumed by the Dashboard and the Monthly Reporting Book
 // PDF — one place for both, replacing the two near-identical copies that
 // used to live in overview.service.js and monthlyReportingBook.service.js.
@@ -1619,6 +1616,8 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     cashEndingBalanceByPaymentMode,
     pettyCashOpeningBalance,
     pettyCashEndingBalance,
+    dmOpeningBalance,
+    dmEndingBalance,
   ] = await Promise.all([
     computeStockMovementLedgerReport({ from, to }),
     computeItemFactoryStockReport({ from, to }),
@@ -1644,6 +1643,8 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     getCashEndingBalanceByPaymentMode(to),
     getPettyCashOpeningBalance(from),
     getPettyCashEndingBalance(to),
+    getDmBalance(from, Op.lt),
+    getDmBalance(to, Op.lte),
   ]);
   const rows = report.data || [];
 
@@ -1661,6 +1662,8 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
       cashEndingBalanceByPaymentMode,
       pettyCashOpeningBalance,
       pettyCashEndingBalance,
+      dmOpeningBalance,
+      dmEndingBalance,
       receivableOpeningBalance: [
         salesDue, salaryAdvance, supplierReceivable, dollarSupplierReceivable,
         manufacturerReceivable, packagingManufacturerReceivable, lenderReceivable,
@@ -1739,16 +1742,14 @@ const attachRowUnitPricing = (rows, priceByName) =>
   rows.map((row) => {
     const stockPrice = getStockPriceForRow(priceByName, row);
     const qty = n(row.quantity);
-    const frozen = FROZEN_MONEY_SOURCES.has(row.source);
+    const frozenSale = FROZEN_MONEY_SOURCES.has(row.source);
 
     return {
       ...row,
-      unitPurchasePrice:
-        frozen && qty > 0
-          ? rowPurchaseValue(row, priceByName) / qty
-          : stockPrice.purchase_price,
+      purchase_price: stockPrice.purchase_price,
+      unitPurchasePrice: stockPrice.purchase_price,
       unitSalePrice:
-        frozen && qty > 0
+        frozenSale && qty > 0
           ? rowSaleValue(row, priceByName) / qty
           : stockPrice.sale_price,
       // This movement's own variant/quantity split (e.g. which batches went
@@ -1756,7 +1757,10 @@ const attachRowUnitPricing = (rows, priceByName) =>
       // a raw JSON string rather than an already-decoded array. Shown for
       // reference only; pricing for these is the same flat Stock Product
       // price as the row, not tracked per variant.
-      variants: parseRowVariants(row),
+      variants: parseRowVariants(row).map((variant) => ({
+        ...variant,
+        purchase_price: stockPrice.purchase_price,
+      })),
     };
   });
 

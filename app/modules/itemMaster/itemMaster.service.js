@@ -1,24 +1,39 @@
 const { Op } = require("sequelize"); // Ensure Op is imported
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const {
-  formatStockForDisplay,
   toBaseStockPayload,
 } = require("../../../helpers/unitConversionHelper");
+const { isAverageCostLive } = require("../../../shared/averageCostRunner");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
-const { ItemMasterSearchableFields } = require("./itemMaster.constants");
 const {
-  lastKnownUnitCostMap,
-} = require("../../../shared/itemFifoCostLayers");
+  createWithStockLog,
+  updateWithStockLog,
+  destroyWithStockLog,
+} = require("../../../shared/directStockEdit");
+const { ItemMasterSearchableFields } = require("./itemMaster.constants");
+const { buildItemUnitCostResolver, baseOf } = require("../../../shared/itemUnitCostResolver");
 const ItemMaster = db.itemMaster;
+
+// Item Stock always shows quantity/unit exactly as purchased (e.g. Ml, not
+// auto-converted to Liter) — formatStockForDisplay's Ml->Liter/Gram->Kg
+// conversion rewrites unitValue for display but leaves cost untouched,
+// which silently corrupts the Unit Cost column (cost ends up divided by the
+// converted quantity instead of the one it was actually priced against).
+const toPlainStockRow = (record) => (record?.toJSON ? record.toJSON() : { ...record });
 
 const attachLastUnitCost = async (rows) => {
   if (!rows.length) return rows;
-  const lastUnitCostMap = await lastKnownUnitCostMap(rows.map((r) => r.itemId));
-  return rows.map((row) => ({
-    ...row,
-    lastUnitCost: lastUnitCostMap.get(Number(row.itemId)) || 0,
-  }));
+  const unitCostOf = await buildItemUnitCostResolver();
+  // After weighted-average go-live the row's own average (cost ÷ quantity) is
+  // the unit cost; the last purchase price only fills in for empty stock.
+  const averageLive = await isAverageCostLive();
+  return rows.map((row) => {
+    const quantity = baseOf(row.unit, row.unitValue);
+    const average = quantity > 0 ? Number(row.cost) / quantity : 0;
+    const unitCost = averageLive && quantity > 0 ? average : unitCostOf(row.itemId, average);
+    return { ...row, unitCost, lastUnitCost: unitCost };
+  });
 };
 
 const normalizeStockPayload = (payload = {}) => {
@@ -42,7 +57,7 @@ const normalizeStockPayload = (payload = {}) => {
 };
 
 const insertIntoDB = async (data) => {
-  const result = await ItemMaster.create(normalizeStockPayload(data));
+  const result = await createWithStockLog(ItemMaster, "ItemStock", normalizeStockPayload(data));
 
   return result;
 };
@@ -120,7 +135,7 @@ const getAllFromDB = async (filters, options) => {
       page,
       limit,
     },
-    data: await attachLastUnitCost(data.map(formatStockForDisplay)),
+    data: await attachLastUnitCost(data.map(toPlainStockRow)),
   };
 };
 
@@ -131,25 +146,17 @@ const getDataById = async (id) => {
     },
   });
 
-  return attachLastUnitCost(result.map(formatStockForDisplay));
+  return attachLastUnitCost(result.map(toPlainStockRow));
 };
 
 const deleteIdFromDB = async (id) => {
-  const result = await ItemMaster.destroy({
-    where: {
-      Id: id,
-    },
-  });
+  const result = await destroyWithStockLog(ItemMaster, "ItemStock", { Id: id });
 
   return result;
 };
 
 const updateOneFromDB = async (id, payload) => {
-  const result = await ItemMaster.update(normalizeStockPayload(payload), {
-    where: {
-      Id: id,
-    },
-  });
+  const result = await updateWithStockLog(ItemMaster, "ItemStock", { Id: id }, normalizeStockPayload(payload));
 
   return result;
 };
@@ -160,7 +167,7 @@ const getAllFromDBWithoutQuery = async () => {
     order: [["createdAt", "DESC"]],
   });
 
-  return attachLastUnitCost(result.map(formatStockForDisplay));
+  return attachLastUnitCost(result.map(toPlainStockRow));
 };
 
 const ItemMasterService = {

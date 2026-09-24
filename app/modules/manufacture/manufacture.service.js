@@ -1,6 +1,5 @@
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const {
-  formatStockForDisplay,
   toBaseStockPayload,
   toNumber,
 } = require("../../../helpers/unitConversionHelper");
@@ -44,12 +43,20 @@ const buildVariantKey = (variant) => {
   return entries.map(([key, value]) => `${key}:${value}`).join("|");
 };
 
-const buildStockWhere = ({ itemId, productId, variantKey }) => {
-  const where = { itemId };
-
-  if (productId) {
-    where.productId = productId;
-  }
+// Item Stock has exactly one row per (itemId, variantKey) — `productId` on a
+// purchase is informational (which product this raw material was bought
+// for) and must NOT fork a separate stock pool. Matching loosely on
+// `productId` here used to let purchases silently land on whatever row the
+// first purchase happened to create (with or without a productId), splitting
+// one item's true stock/cost across multiple rows and leaving FIFO layers
+// (keyed by itemId only) out of sync with whichever row actually held the
+// quantity. Always resolving to the single productId-less row keeps Item
+// Stock, its FIFO layers, and Factory Stock's FIFO-sourced cost consistent.
+const buildStockWhere = ({ itemId, variantKey }) => {
+  const where = {
+    itemId,
+    [Op.or]: [{ productId: null }, { productId: 0 }],
+  };
 
   if (variantKey) {
     where.variantKey = variantKey;
@@ -72,8 +79,13 @@ const normalizeUnitPayload = (unit, unitValue) => {
   return toBaseStockPayload(unit, unitValue);
 };
 
+// Item Purchase always shows quantity/unit exactly as entered (e.g. Ml, not
+// auto-converted to Liter) — formatStockForDisplay's Ml->Liter/Gram->Kg
+// conversion rewrites unitValue for display but leaves cost untouched,
+// which silently corrupts the Unit Cost column (cost ends up divided by the
+// converted quantity instead of the one it was actually priced against).
 const formatManufactureForDisplay = (record) => {
-  const formatted = formatStockForDisplay(record);
+  const formatted = record?.toJSON ? record.toJSON() : { ...record };
   const relatedItemName = formatted?.Item?.name;
 
   return relatedItemName ? { ...formatted, name: relatedItemName } : formatted;
@@ -99,7 +111,7 @@ const adjustStockBalance = async ({
   if (!delta) return null;
 
   const stockRow = await Model.findOne({
-    where: buildStockWhere({ itemId, productId, variantKey }),
+    where: buildStockWhere({ itemId, variantKey }),
     transaction,
     lock: transaction.LOCK.UPDATE,
     order: [["createdAt", "ASC"]],
@@ -110,7 +122,7 @@ const adjustStockBalance = async ({
       const createdStockRow = await Model.create(
         {
           itemId,
-          productId: productId || null,
+          productId: null,
           name,
           variant,
           variantKey: variantKey || null,
@@ -168,7 +180,7 @@ const adjustStockBalance = async ({
   const updatedStockRow = await stockRow.update(
     {
       itemId,
-      productId: productId || stockRow.productId || null,
+      productId: null,
       name,
       variant,
       variantKey: variantKey || null,
@@ -186,7 +198,7 @@ const adjustStockBalance = async ({
     stockType: movementContext?.stockType || stockLabel,
     stockRow: updatedStockRow,
     itemId,
-    productId: productId || stockRow.productId || null,
+    productId: productId || null,
     name,
     variant,
     variantKey: variantKey || null,
@@ -227,7 +239,7 @@ const adjustStockBalanceForSameTarget = async ({
   if (!quantityDelta && !costDelta) return null;
 
   const stockRow = await Model.findOne({
-    where: buildStockWhere({ itemId, productId, variantKey }),
+    where: buildStockWhere({ itemId, variantKey }),
     transaction,
     lock: transaction.LOCK.UPDATE,
     order: [["createdAt", "ASC"]],
@@ -255,7 +267,7 @@ const adjustStockBalanceForSameTarget = async ({
   const updatedStockRow = await stockRow.update(
     {
       itemId,
-      productId: productId || stockRow.productId || null,
+      productId: null,
       name,
       variant,
       variantKey: variantKey || null,
@@ -272,7 +284,7 @@ const adjustStockBalanceForSameTarget = async ({
     stockType: movementContext?.stockType || stockLabel,
     stockRow: updatedStockRow,
     itemId,
-    productId: productId || stockRow.productId || null,
+    productId: productId || null,
     name,
     variant,
     variantKey: variantKey || null,
@@ -361,19 +373,20 @@ const insertIntoDB = async (payload) => {
       },
     });
 
-    // FIFO: raw-material item purchases open a cost layer at Item Stock level.
-    if (!productId) {
-      await itemFifo.openLayer({
-        transaction: t,
-        itemId,
-        unitCost: calculatedUnitCost,
-        quantity: totalUnitValue,
-        receivedDate: date || new Date().toISOString().slice(0, 10),
-        sourceType: "ItemPurchase",
-        sourceMovementId: manufactureRecord.Id,
-      });
-      await itemFifo.syncItemStockCost({ transaction: t, itemId });
-    }
+    // FIFO: every raw-material item purchase opens a cost layer at Item Stock
+    // level, regardless of whether it's tagged with a productId — the
+    // productId is informational only (see buildStockWhere above) and must
+    // not exempt a purchase from FIFO cost tracking.
+    await itemFifo.openLayer({
+      transaction: t,
+      itemId,
+      unitCost: calculatedUnitCost,
+      quantity: totalUnitValue,
+      receivedDate: date || new Date().toISOString().slice(0, 10),
+      sourceType: "ItemPurchase",
+      sourceMovementId: manufactureRecord.Id,
+    });
+    await itemFifo.syncItemStockCost({ transaction: t, itemId });
 
     // Linked SupplierHistory row so this purchase's due/paid tracking can be
     // found and kept in sync later (see updateOneFromDB) — one row per
@@ -648,7 +661,7 @@ const getAllFromDB = async (filters, options) => {
 
 const getDataById = async (id) => {
   const data = await Manufacture.findAll({ where: { productId: id } });
-  return data.map(formatStockForDisplay);
+  return data.map(formatManufactureForDisplay);
 };
 
 const deleteIdFromDB = async (id) => {
@@ -701,27 +714,19 @@ const deleteIdFromDB = async (id) => {
       },
     });
 
-    if (!existing.productId) {
-      await itemFifo.unwindInbound({
-        transaction: t,
-        itemId: existing.itemId,
-        quantity: oldUnitValue,
-      });
-      await itemFifo.syncItemStockCost({
-        transaction: t,
-        itemId: existing.itemId,
-      });
-    }
+    await itemFifo.unwindInbound({
+      transaction: t,
+      itemId: existing.itemId,
+      quantity: oldUnitValue,
+    });
+    await itemFifo.syncItemStockCost({
+      transaction: t,
+      itemId: existing.itemId,
+    });
 
     return Manufacture.destroy({
       where: { Id: id },
       transaction: t,
-      movementContext: {
-        sourceType: "ItemPurchase",
-        sourceId: id,
-        operation: "UPDATE_REVERSE",
-        stockType: "ItemStock",
-      },
     });
   });
 };
@@ -870,6 +875,12 @@ const updateOneFromDB = async (id, payload) => {
         cost: oldCost,
         delta: -oldUnitValue,
         transaction: t,
+        movementContext: {
+          sourceType: "ItemPurchase",
+          sourceId: id,
+          operation: "UPDATE_REVERSE",
+          stockType: "ItemStock",
+        },
       });
 
       await adjustStockBalance({
@@ -895,31 +906,30 @@ const updateOneFromDB = async (id, payload) => {
       });
     }
 
-    // FIFO: unwind the old purchase layer, open a fresh one for the edit.
-    if (!oldProductId) {
-      await itemFifo.unwindInbound({
-        transaction: t,
-        itemId: oldItemId,
-        quantity: oldUnitValue,
-      });
-      await itemFifo.syncItemStockCost({ transaction: t, itemId: oldItemId });
-    }
-    if (!nextProductId) {
-      await itemFifo.openLayer({
-        transaction: t,
-        itemId: nextItemId,
-        unitCost:
-          totalUnitValue > 0 ? toNumber(nextTotalCost) / totalUnitValue : 0,
-        quantity: totalUnitValue,
-        receivedDate:
-          String(date || "").slice(0, 10) ||
-          existing.date ||
-          new Date().toISOString().slice(0, 10),
-        sourceType: "ItemPurchase",
-        sourceMovementId: id,
-      });
-      await itemFifo.syncItemStockCost({ transaction: t, itemId: nextItemId });
-    }
+    // FIFO: unwind the old purchase layer, open a fresh one for the edit —
+    // unconditionally, since productId no longer exempts a purchase from
+    // FIFO tracking (see buildStockWhere above).
+    await itemFifo.unwindInbound({
+      transaction: t,
+      itemId: oldItemId,
+      quantity: oldUnitValue,
+    });
+    await itemFifo.syncItemStockCost({ transaction: t, itemId: oldItemId });
+
+    await itemFifo.openLayer({
+      transaction: t,
+      itemId: nextItemId,
+      unitCost:
+        totalUnitValue > 0 ? toNumber(nextTotalCost) / totalUnitValue : 0,
+      quantity: totalUnitValue,
+      receivedDate:
+        String(date || "").slice(0, 10) ||
+        existing.date ||
+        new Date().toISOString().slice(0, 10),
+      sourceType: "ItemPurchase",
+      sourceMovementId: id,
+    });
+    await itemFifo.syncItemStockCost({ transaction: t, itemId: nextItemId });
 
     const [count] = await Manufacture.update(data, {
       where: { Id: id },
@@ -994,7 +1004,7 @@ const getAllFromDBWithoutQuery = async () => {
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });
-  return data.map(formatStockForDisplay);
+  return data.map(formatManufactureForDisplay);
 };
 
 const ManufactureService = {

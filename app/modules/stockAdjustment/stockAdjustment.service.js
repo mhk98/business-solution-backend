@@ -1,13 +1,13 @@
 const { Op } = require("sequelize");
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const {
-  formatStockForDisplay,
   toBaseStockPayload,
   toNumber,
 } = require("../../../helpers/unitConversionHelper");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const itemFifo = require("../../../shared/itemFifoCostLayers");
 const {
   StockAdjustmentSearchableFields,
 } = require("./stockAdjustment.constants");
@@ -20,6 +20,11 @@ const User = db.user;
 const Item = db.item;
 const ItemMaster = db.itemMaster;
 const Supplier = db.supplier;
+
+// Shows quantity/unit exactly as recorded (e.g. Ml, not auto-converted to
+// Liter) — see manufacture.service.js's formatManufactureForDisplay comment
+// for why formatStockForDisplay isn't used here.
+const toPlainStockRow = (record) => (record?.toJSON ? record.toJSON() : { ...record });
 
 const parseVariantPayload = (value) => {
   if (!value) return null;
@@ -47,12 +52,14 @@ const buildVariantKey = (variant) => {
   return entries.map(([key, value]) => `${key}:${value}`).join("|");
 };
 
-const buildStockWhere = ({ itemId, productId, variantKey }) => {
-  const where = { itemId };
-
-  if (productId) {
-    where.productId = productId;
-  }
+// Item Stock has exactly one row per (itemId, variantKey) — `productId` is
+// informational only and must not fork a separate stock pool (mirrors
+// manufacture.service.js's buildStockWhere; see its comment for why).
+const buildStockWhere = ({ itemId, variantKey }) => {
+  const where = {
+    itemId,
+    [Op.or]: [{ productId: null }, { productId: 0 }],
+  };
 
   if (variantKey) {
     where.variantKey = variantKey;
@@ -159,10 +166,43 @@ const reconcileItemMasterStockAdjustment = async (
       throw new ApiError(400, "Item stock cannot be negative");
     }
 
+    // FIFO: a Stock Adjustment carries no cost of its own, so it must never
+    // leave ItemMaster.cost frozen while unitValue moves (that's exactly how
+    // Item Stock and its FIFO layers drifted apart before this fix — see
+    // manufacture.service.js's buildStockWhere comment for the same bug's
+    // other half). Out consumes the oldest layers like any other outflow; In
+    // opens a fresh layer valued at the item's current average cost, since
+    // there's no purchase price to attribute it to.
+    if (delta < 0) {
+      await itemFifo.consumeFifo({
+        transaction,
+        itemId: effectAdjustment.itemId,
+        quantity: -delta,
+      });
+    } else {
+      const unitCost = await itemFifo.currentUnitCost({
+        transaction,
+        itemId: effectAdjustment.itemId,
+      });
+      await itemFifo.openLayer({
+        transaction,
+        itemId: effectAdjustment.itemId,
+        unitCost,
+        quantity: delta,
+        receivedDate: new Date().toISOString().slice(0, 10),
+        sourceType: "StockAdjustment",
+        sourceMovementId: movementContext?.sourceId || null,
+      });
+    }
+
     const updatedStockRow = await stockRow.update(
       { unitValue: nextUnitValue },
       { transaction },
     );
+    await itemFifo.syncItemStockCost({
+      transaction,
+      itemId: effectAdjustment.itemId,
+    });
     await logStockMovement({
       transaction,
       ...movementContext,
@@ -234,7 +274,6 @@ const insertIntoDB = async (payload) => {
     const stockRow = await ItemMaster.findOne({
       where: buildStockWhere({
         itemId,
-        productId,
         variantKey: normalizedVariantKey,
       }),
       transaction: t,
@@ -257,10 +296,35 @@ const insertIntoDB = async (payload) => {
       const balanceBefore = currentStockPayload.unitValue;
       const balanceAfter = stock === "In" ? plusQuantity : minusQuantity;
       const delta = stock === "In" ? totalUnitValue : -totalUnitValue;
+
+      // FIFO: see reconcileItemMasterStockAdjustment above for why a Stock
+      // Adjustment must always touch the layers, not just unitValue.
+      if (delta < 0) {
+        await itemFifo.consumeFifo({
+          transaction: t,
+          itemId,
+          quantity: -delta,
+        });
+      } else {
+        const unitCost = await itemFifo.currentUnitCost({
+          transaction: t,
+          itemId,
+        });
+        await itemFifo.openLayer({
+          transaction: t,
+          itemId,
+          unitCost,
+          quantity: delta,
+          receivedDate: date || new Date().toISOString().slice(0, 10),
+          sourceType: "StockAdjustment",
+          sourceMovementId: stockAdjustmentRecord.Id,
+        });
+      }
+
       const updatedStockRow = await stockRow.update(
         {
           itemId,
-          productId: productId || stockRow.productId || null,
+          productId: null,
           name: itemData.name,
           variant: normalizedVariant,
           variantKey: normalizedVariantKey,
@@ -272,6 +336,7 @@ const insertIntoDB = async (payload) => {
         },
         { transaction: t },
       );
+      await itemFifo.syncItemStockCost({ transaction: t, itemId });
       await logStockMovement({
         transaction: t,
         sourceType: "StockAdjustment",
@@ -280,7 +345,7 @@ const insertIntoDB = async (payload) => {
         stockType: "ItemStock",
         stockRow: updatedStockRow,
         itemId,
-        productId: productId || stockRow.productId || null,
+        productId: productId || null,
         name: itemData.name,
         variant: normalizedVariant,
         variantKey: normalizedVariantKey,
@@ -292,15 +357,28 @@ const insertIntoDB = async (payload) => {
         balanceAfter,
       });
     } else if (stock === "In") {
+      // Brand-new item with no prior stock/cost basis — the layer opens at
+      // ৳0 (no-invention rule) rather than guessing a price.
+      await itemFifo.openLayer({
+        transaction: t,
+        itemId,
+        unitCost: 0,
+        quantity: totalUnitValue,
+        receivedDate: date || new Date().toISOString().slice(0, 10),
+        sourceType: "StockAdjustment",
+        sourceMovementId: stockAdjustmentRecord.Id,
+      });
+
       const createdStockRow = await ItemMaster.create(
         {
           itemId,
-          productId: productId || null,
+          productId: null,
           name: itemData.name,
           variant: normalizedVariant,
           variantKey: normalizedVariantKey,
           unitValue: totalUnitValue,
           unit: normalizedPayload.unit,
+          cost: 0,
           stock,
         },
         { transaction: t },
@@ -393,13 +471,13 @@ const getAllFromDB = async (filters, options) => {
 
   return {
     meta: { page, limit, count },
-    data: data.map(formatStockForDisplay),
+    data: data.map(toPlainStockRow),
   };
 };
 
 const getDataById = async (id) => {
   const data = await StockAdjustment.findAll({ where: { productId: id } });
-  return data.map(formatStockForDisplay);
+  return data.map(toPlainStockRow);
 };
 
 const deleteIdFromDB = async (id) => {
@@ -628,7 +706,7 @@ const getAllFromDBWithoutQuery = async () => {
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });
-  return data.map(formatStockForDisplay);
+  return data.map(toPlainStockRow);
 };
 
 const StockAdjustmentService = {
