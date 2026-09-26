@@ -459,6 +459,8 @@ const updateOneFromDB = async (id, payload, user) => {
   }
 
   const data = buildEmployeeData(workflowPayload, existing.status);
+  // Only relink the login account when the caller explicitly sends userId.
+  if (payload.userId === undefined) delete data.userId;
 
   await ensureLinkedUserExists(data.userId);
 

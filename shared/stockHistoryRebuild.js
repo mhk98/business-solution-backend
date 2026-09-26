@@ -91,16 +91,17 @@ function buildStockHistory(data) {
   }
   for (const row of active('Mixers')) {
     const marker = '__MIXER_META__=';
-    if (!String(row.note).includes(marker)) { issues.push({source:'Mixer',sourceId:row.Id,error:'Missing material metadata'});continue; }
+    const source = row.entryType === 'combo_production' ? 'ComboProduction' : 'Mixer';
+    if (!String(row.note).includes(marker)) { issues.push({source,sourceId:row.Id,error:'Missing material metadata'});continue; }
     const meta = JSON.parse(row.note.slice(row.note.indexOf(marker)+marker.length));
     for (const line of meta.mixItems || []) {
       const item = byId('ItemMasters',line.manufactureId);
       const manufacturerId = meta.manufacturerId || row.manufacturerId;
       const type = manufacturerId ? 'FactoryStock' : 'ItemStock';
       const stock = manufacturerId ? materialStock(type,{...item,manufacturerId}) : item;
-      add(type,'Mixer',row,stock,-base(line));
+      add(type,source,row,stock,-base(line));
     }
-    for (const line of meta.packagingItems || []) add('ItemStock','Mixer',row,byId('ItemMasters',line.itemMasterId),-base(line));
+    for (const line of meta.packagingItems || []) add('ItemStock',source,row,byId('ItemMasters',line.itemMasterId),-base(line));
     // Finished output is already represented by its ReceivedProduct document.
   }
   for (const row of active('PackagingItemPurchases')) add('PackagingItemStock','PackagingItemPurchase',row,materialStock('PackagingItemStock',row),base(row));
@@ -108,7 +109,18 @@ function buildStockHistory(data) {
     add('PackagingItemStock','PackagingFactory',row,materialStock('PackagingItemStock',{...row,manufacturerId:null}),-base(row));
     add('PackagingFactoryStock','PackagingFactory',row,materialStock('PackagingFactoryStock',row),base(row));
   }
-  if (active('PackagingMixers').length) issues.push({error:'Packaging mixer reconstruction requires reviewed material metadata'});
+  // Packaging Mixer: consumes Packaging Factory Stock lines, produces the
+  // finished item into its Item Stock row (the variant-less row, oldest first —
+  // the same row packagingMixer.service's adjustItemStock picks).
+  for (const row of active('PackagingMixers')) {
+    for (const line of parse(row.packagingItems)) {
+      add('PackagingFactoryStock','PackagingMixer',row,byId('PackagingFactoryStocks',line.packagingFactoryStockId),-base(line));
+    }
+    const target = (data.ItemMasters || [])
+      .filter((s) => Number(s.itemId) === Number(row.itemId) && !s.variantKey)
+      .sort((a,b) => Number(!!a.deletedAt) - Number(!!b.deletedAt) || String(a.createdAt).localeCompare(String(b.createdAt)))[0];
+    add('ItemStock','PackagingMixer',row,target,base(row));
+  }
   events.sort((a,b)=>a.date.localeCompare(b.date)||String(a.sourceCreatedAt).localeCompare(String(b.sourceCreatedAt))||a.sourceId-b.sourceId);
   const balances = new Map();
   for (const event of events) {

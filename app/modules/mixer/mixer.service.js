@@ -34,6 +34,15 @@ const ManufactureStock = db.manufactureStock;
 const InventoryMaster = db.inventoryMaster;
 const ReceivedProduct = db.receivedProduct;
 const MIXER_META_PREFIX = "\n__MIXER_META__=";
+const MIXER_ENTRY_TYPE = "mixer";
+const COMBO_PRODUCTION_ENTRY_TYPE = "combo_production";
+
+// Combo Production runs are Mixer rows but log their stock movements under
+// their own source type so Stock Movement keeps the two apart.
+const movementSourceType = (mixerRecord) =>
+  mixerRecord?.entryType === COMBO_PRODUCTION_ENTRY_TYPE
+    ? "ComboProduction"
+    : "Mixer";
 
 const toNumber = (value) => {
   const num = Number(value || 0);
@@ -1298,8 +1307,9 @@ const sanitizeMixerRecord = (record) => {
 //   });
 // };
 
-const insertIntoDB = async (payload) => {
-  console.log("mixer", payload);
+// `internal` is only set by server-side callers (Combo Production) — never
+// from the request body — so a client can't re-tag a Mixer entry.
+const insertIntoDB = async (payload, internal = {}) => {
 
   const {
     productId,
@@ -1376,6 +1386,8 @@ const insertIntoDB = async (payload) => {
         othersCost: mixerOthersCost,
         wageAmount,
         note: storedNote,
+        entryType: internal.entryType || MIXER_ENTRY_TYPE,
+        templateMixerId: internal.templateMixerId || null,
       },
       { transaction: t },
     );
@@ -1401,14 +1413,14 @@ const insertIntoDB = async (payload) => {
       { mixItems: mixItems || [], manufacturerId: manufacturer?.Id || null },
       t,
       {
-        sourceType: "Mixer",
+        sourceType: movementSourceType(result),
         sourceId: result.Id,
         operation: "CREATE",
         stockType: "FactoryStock",
       },
     );
     await reconcilePackagingStock([], packagingItems || [], t, {
-      sourceType: "Mixer",
+      sourceType: movementSourceType(result),
       sourceId: result.Id,
       operation: "CREATE",
       stockType: "ItemStock",
@@ -1421,7 +1433,7 @@ const insertIntoDB = async (payload) => {
       outputPrices.sale_price,
       t,
       {
-        sourceType: "Mixer",
+        sourceType: movementSourceType(result),
         sourceId: result.Id,
         operation: "CREATE",
         stockType: "ProductStock",
@@ -1444,7 +1456,11 @@ const insertIntoDB = async (payload) => {
     return sanitizeMixerRecord(result);
   });
 };
-const getAllFromDB = async (filters, options) => {
+const getAllFromDB = async (
+  filters,
+  options,
+  { entryType = MIXER_ENTRY_TYPE } = {},
+) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
   const { searchTerm, startDate, endDate, ...otherFilters } = filters;
 
@@ -1479,6 +1495,7 @@ const getAllFromDB = async (filters, options) => {
   }
 
   andConditions.push({ deletedAt: { [Op.is]: null } });
+  andConditions.push({ entryType });
 
   const whereConditions = andConditions.length
     ? { [Op.and]: andConditions }
@@ -1521,7 +1538,7 @@ const deleteIdFromDB = async (id) => {
 
     const existingContext = await getStoredStockContext(existing, t);
     await removeMixerOutputFromInventory(existingContext, t, {
-      sourceType: "Mixer",
+      sourceType: movementSourceType(existing),
       sourceId: existing.Id,
       operation: "DELETE",
       stockType: "ProductStock",
@@ -1532,14 +1549,14 @@ const deleteIdFromDB = async (id) => {
       { mixItems: [], manufacturerId: null },
       t,
       {
-        sourceType: "Mixer",
+        sourceType: movementSourceType(existing),
         sourceId: existing.Id,
         operation: "DELETE",
         stockType: "FactoryStock",
       },
     );
     await reconcilePackagingStock(existingContext.packagingItems || [], [], t, {
-      sourceType: "Mixer",
+      sourceType: movementSourceType(existing),
       sourceId: existing.Id,
       operation: "DELETE",
       stockType: "ItemStock",
@@ -1601,10 +1618,17 @@ const updateOneFromDB = async (id, payload) => {
       "unitWage",
       "othersCost",
       "wageAmount",
+      "entryType",
     ],
   });
 
   if (!existing) return 0;
+  if (existing.entryType === COMBO_PRODUCTION_ENTRY_TYPE) {
+    throw new ApiError(
+      400,
+      "Combo Production entries can't be edited from Mixer — delete and re-enter them from Combo Production",
+    );
+  }
 
   const { displayNote: oldDisplayNote } = parseMixerNote(existing.note);
   const oldNote = String(oldDisplayNote || "").trim();
@@ -1904,6 +1928,7 @@ const updateOneFromDB = async (id, payload) => {
 
 const getAllFromDBWithoutQuery = async () => {
   const data = await Mixer.findAll({
+    where: { entryType: MIXER_ENTRY_TYPE },
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });
@@ -1911,6 +1936,9 @@ const getAllFromDBWithoutQuery = async () => {
 };
 
 const MixerService = {
+  MIXER_ENTRY_TYPE,
+  COMBO_PRODUCTION_ENTRY_TYPE,
+  parseMixerNote,
   getAllFromDB,
   insertIntoDB,
   deleteIdFromDB,

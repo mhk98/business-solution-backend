@@ -8,12 +8,185 @@ const {
 const {
   resolveApprovalNotificationMessage,
 } = require("../../../shared/approvalNotification");
+const {
+  toBaseStockPayload,
+} = require("../../../helpers/unitConversionHelper");
 
 const ItemRequisition = db.itemRequisition;
 const Item = db.item;
 const Notification = db.notification;
 const User = db.user;
 const Supplier = db.supplier;
+
+const SupplierHistory = db.supplierHistory;
+
+// Receiving a requisition line is what brings the item in: once its status is
+// "Item Received" (or later "Completed") it owns one Item Purchase (Item Stock
+// + cost at amount ÷ quantity, via the Item Purchase service so stock
+// movements and costing follow that path) and one Unpaid SupplierHistory row
+// (the supplier's due — Item Purchase itself no longer posts dues). Edits keep
+// both in step; moving back to an earlier status or deleting removes them.
+// Only lines with supplierDueTracked (created after this change) do this;
+// older ones were handled through Item Purchase.
+const RECEIVED_STATUSES = new Set(["Item Received", "Completed"]);
+// Only an explicit move back to one of these un-receives a line. Workflow
+// statuses set around it (e.g. "Pending Delete" while a delete awaits
+// approval) must not pull the received stock back out.
+const PRE_RECEIPT_STATUSES = new Set(["Pending", "Approved", "Pay For Purchase"]);
+
+const toDateKey = (value) =>
+  value ? String(value).slice(0, 10) : new Date().toISOString().slice(0, 10);
+
+const buildPurchasePayload = (requisition) => ({
+  itemId: requisition.itemId,
+  unit: requisition.unit || "Pcs",
+  unitValue: Number(requisition.quantity || 0),
+  cost: Number(requisition.amount || 0),
+  date: toDateKey(requisition.date),
+  supplierId: normalizeOptionalId(requisition.supplierId),
+  note: `Item Requisition #${requisition.Id}`,
+});
+
+// Item Purchase stores quantities in base units, so compare in base units.
+const sameQuantity = (a, b) => {
+  const left = toBaseStockPayload(a.unit || "Pcs", a.unitValue);
+  const right = toBaseStockPayload(b.unit || "Pcs", b.unitValue);
+  return (
+    String(left.unit).toLowerCase() === String(right.unit).toLowerCase() &&
+    Math.abs(Number(left.unitValue) - Number(right.unitValue)) < 0.0001
+  );
+};
+
+const purchaseMatches = (purchase, payload) =>
+  Number(purchase.itemId) === Number(payload.itemId) &&
+  sameQuantity(purchase, payload) &&
+  Number(purchase.cost) === Number(payload.cost) &&
+  toDateKey(purchase.date) === payload.date &&
+  Number(purchase.supplierId || 0) === Number(payload.supplierId || 0);
+
+// Received quantity joins the item's shared Item Stock row. Once anything has
+// gone out of that row after this receipt came in (Mixer, Factory, Stock
+// Adjustment…), the receipt's quantity/amount are locked: taking it back or
+// re-costing it would rewrite stock that has already been used.
+const ITEM_STOCK_TYPES = ["ItemStock", "PackagingStock"];
+const STOCK_USED_MESSAGE =
+  "This item's received stock has already been used (Mixer/Factory etc.) — quantity, amount and item can't be changed, and it can't be un-received or deleted. Other fields can still be edited.";
+
+const isReceivedStockUsed = async (manufactureId, transaction) => {
+  if (!manufactureId) return false;
+  const receipt = await db.stockMovement.findOne({
+    where: {
+      sourceType: "ItemPurchase",
+      sourceId: manufactureId,
+      stockType: { [Op.in]: ITEM_STOCK_TYPES },
+      quantityChange: { [Op.gt]: 0 },
+    },
+    attributes: ["Id", "stockRowId"],
+    order: [["Id", "ASC"]],
+    transaction,
+  });
+  if (!receipt?.stockRowId) return false;
+
+  const usage = await db.stockMovement.findOne({
+    where: {
+      Id: { [Op.gt]: receipt.Id },
+      stockType: { [Op.in]: ITEM_STOCK_TYPES },
+      stockRowId: receipt.stockRowId,
+      quantityChange: { [Op.lt]: 0 },
+      [Op.not]: { sourceType: "ItemPurchase", sourceId: manufactureId },
+    },
+    attributes: ["Id"],
+    transaction,
+  });
+  return Boolean(usage);
+};
+
+const syncItemPurchase = async (requisition, received, transaction) => {
+  // Required lazily: the Item Purchase service reads db.itemRequisition.
+  const ManufactureService = require("../manufacture/manufacture.service");
+  const options = { transaction, fromRequisition: true };
+  const manufactureId = normalizeOptionalId(requisition.manufactureId);
+
+  if (!received) {
+    if (manufactureId) {
+      if (await isReceivedStockUsed(manufactureId, transaction)) {
+        throw new ApiError(400, STOCK_USED_MESSAGE);
+      }
+      await ManufactureService.deleteIdFromDB(manufactureId, options);
+      await requisition.update({ manufactureId: null }, { transaction });
+    }
+    return;
+  }
+
+  const payload = buildPurchasePayload(requisition);
+  const purchase = manufactureId
+    ? await db.manufacture.findOne({ where: { Id: manufactureId }, transaction })
+    : null;
+
+  if (!purchase) {
+    const created = await ManufactureService.insertIntoDB(payload, options);
+    await requisition.update({ manufactureId: created.Id }, { transaction });
+    return;
+  }
+
+  if (purchaseMatches(purchase, payload)) return;
+
+  const stockChanged =
+    Number(purchase.itemId) !== Number(payload.itemId) ||
+    !sameQuantity(purchase, payload) ||
+    Number(purchase.cost) !== Number(payload.cost);
+
+  if (!(await isReceivedStockUsed(purchase.Id, transaction))) {
+    await ManufactureService.updateOneFromDB(purchase.Id, payload, options);
+    return;
+  }
+  if (stockChanged) throw new ApiError(400, STOCK_USED_MESSAGE);
+
+  // Stock already used: only the purchase's own details change (supplier,
+  // date) — its stock and cost stay exactly as received.
+  await purchase.update(
+    { supplierId: payload.supplierId, date: payload.date },
+    { transaction },
+  );
+};
+
+const syncSupplierDue = async (requisition, received, transaction) => {
+  const existing = await SupplierHistory.findOne({
+    where: { itemRequisitionId: requisition.Id },
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+  const supplierId = normalizeOptionalId(requisition.supplierId);
+  const amount = Number(requisition.amount || 0);
+
+  if (!received || !supplierId || amount <= 0) {
+    if (existing) await existing.destroy({ transaction });
+    return;
+  }
+
+  const data = {
+    supplierId,
+    amount,
+    status: "Unpaid",
+    date: toDateKey(requisition.date),
+    itemRequisitionId: requisition.Id,
+  };
+  if (existing) {
+    await existing.update(data, { transaction });
+  } else {
+    await SupplierHistory.create(data, { transaction });
+  }
+};
+
+const syncReceipt = async (requisition, transaction) => {
+  if (!requisition?.supplierDueTracked) return;
+  const status = String(requisition.status || "").trim();
+  const received =
+    RECEIVED_STATUSES.has(status) ||
+    (Boolean(requisition.manufactureId) && !PRE_RECEIPT_STATUSES.has(status));
+  await syncItemPurchase(requisition, received, transaction);
+  await syncSupplierDue(requisition, received, transaction);
+};
 
 const ITEM_REQUISITION_STATUS_UPDATE_ROLES = [
   "superAdmin",
@@ -156,7 +329,10 @@ const insertIntoDB = async (data = {}) => {
       delete mergedData.items;
 
       const payload = await buildPayload(mergedData, null, { transaction: t });
-      const result = await ItemRequisition.create(payload, { transaction: t });
+      const result = await ItemRequisition.create(
+        { ...payload, supplierDueTracked: true },
+        { transaction: t },
+      );
       createdRecords.push(result);
     }
 
@@ -244,6 +420,16 @@ const getAllFromDB = async (filters, options) => {
     ItemRequisition.sum("quantity", { where: whereConditions }),
   ]);
 
+  // Lets the edit form lock Quantity/Amount/Item once received stock is used.
+  await Promise.all(
+    data.map(async (row) =>
+      row.setDataValue(
+        "stockUsed",
+        await isReceivedStockUsed(row.manufactureId),
+      ),
+    ),
+  );
+
   return {
     meta: {
       count,
@@ -276,13 +462,33 @@ const getDataById = async (id) => {
   return result;
 };
 
-const deleteIdFromDB = async (id) => {
-  const result = await ItemRequisition.destroy({
-    where: { Id: id },
+const deleteIdFromDB = async (id) =>
+  db.sequelize.transaction(async (t) => {
+    const existing = await ItemRequisition.findOne({
+      where: { Id: id },
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+    if (existing?.manufactureId) {
+      if (await isReceivedStockUsed(existing.manufactureId, t)) {
+        throw new ApiError(400, STOCK_USED_MESSAGE);
+      }
+      // Takes the received quantity back out of Item Stock.
+      const ManufactureService = require("../manufacture/manufacture.service");
+      await ManufactureService.deleteIdFromDB(existing.manufactureId, {
+        transaction: t,
+        fromRequisition: true,
+      });
+    }
+    await SupplierHistory.destroy({
+      where: { itemRequisitionId: id },
+      transaction: t,
+    });
+    return ItemRequisition.destroy({
+      where: { Id: id },
+      transaction: t,
+    });
   });
-
-  return result;
-};
 
 const updateOneFromDB = async (id, data = {}) => {
   const existing = await ItemRequisition.findOne({
@@ -320,10 +526,12 @@ const updateOneFromDB = async (id, data = {}) => {
         throw new ApiError(400, "Item requisition update failed");
       }
 
-      return ItemRequisition.findOne({
+      const updated = await ItemRequisition.findOne({
         where: { Id: id },
         transaction: t,
       });
+      await syncReceipt(updated, t);
+      return updated;
     });
   }
 
@@ -339,10 +547,12 @@ const updateOneFromDB = async (id, data = {}) => {
       throw new ApiError(400, "Item requisition update failed");
     }
 
-    return ItemRequisition.findOne({
+    const updated = await ItemRequisition.findOne({
       where: { Id: id },
       transaction: t,
     });
+    await syncReceipt(updated, t);
+    return updated;
   });
 };
 

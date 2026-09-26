@@ -1,8 +1,18 @@
 const { checkStockLedgerIntegrity } = require("../../shared/stockLedgerIntegrity");
 const {
+  autoGoLiveEmptyDatabase,
   recomputeAverageCosts,
   registerAverageCostHooks,
 } = require("../../shared/averageCostRunner");
+
+// A brand-new (empty) database switches weighted-average costing on by itself.
+const goLiveIfEmpty = async () => {
+  try {
+    await autoGoLiveEmptyDatabase();
+  } catch (error) {
+    console.error("[averageCost] empty-database go-live check failed:", error.message);
+  }
+};
 
 // Hourly safety net for the StockMovement ledger the dated stock reports are
 // built on: any stock change some flow forgot to log is found within the hour
@@ -26,6 +36,7 @@ const runCheck = async () => {
     console.error("[stockLedgerIntegrity] check failed:", error.message);
   }
   // Weighted-average costing safety net (normally triggered per stock change).
+  await goLiveIfEmpty();
   try {
     await recomputeAverageCosts();
   } catch (error) {
@@ -39,6 +50,7 @@ let firstRunHandle = null;
 const startStockLedgerIntegrityCheck = () => {
   if (intervalHandle) return;
   registerAverageCostHooks();
+  goLiveIfEmpty();
   // First run a minute after boot, so startup isn't slowed down.
   firstRunHandle = setTimeout(runCheck, 60 * 1000);
   firstRunHandle.unref?.();

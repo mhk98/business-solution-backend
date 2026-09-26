@@ -40,6 +40,7 @@ const MENU_PERMISSIONS = {
   INVENTORY_STOCK_MOVEMENT: "inventory_stock_movement",
   WORK_HISTORY: "work_history",
   MIXER: "mixer",
+  COMBO_PRODUCTION: "combo_production",
   INVENTORY: "inventory",
   INVENTORY_OVERVIEW: "inventory_overview",
   STOCK_PRODUCT: "stock_product",

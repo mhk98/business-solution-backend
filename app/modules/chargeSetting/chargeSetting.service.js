@@ -33,6 +33,11 @@ const normalizeChargeType = (chargeType) => {
   return value;
 };
 
+const getUserName = (user) =>
+  (user &&
+    (`${user.FirstName || ""} ${user.LastName || ""}`.trim() || user.Email)) ||
+  null;
+
 const getModelByType = (chargeType) => CHARGE_MODELS[normalizeChargeType(chargeType)];
 
 const normalizeAmount = (amount) => {
@@ -166,6 +171,12 @@ const getChargeSettings = async (filters, options) => {
           attributes: ["Id", "name"],
           required: false,
         },
+        {
+          model: db.user,
+          as: "createdBy",
+          attributes: ["Id", "FirstName", "LastName", "Email"],
+          required: false,
+        },
       ]
     : [];
   const data = await Model.findAll({
@@ -187,7 +198,13 @@ const getChargeSettings = async (filters, options) => {
       const json = row.toJSON();
       return {
         ...json,
-        employeeName: json.employee?.name || json.workReport?.name || null,
+        // Show whoever was logged in when the entry was made, not the
+        // employee profile linked to that login.
+        employeeName:
+          getUserName(json.createdBy) ||
+          json.employee?.name ||
+          json.workReport?.name ||
+          null,
         isFromWorkReport: json.source === "cs_work_report",
       };
     }),

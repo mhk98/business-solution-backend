@@ -70,6 +70,19 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      // True for requisitions created after receiving started posting Item
+      // Stock + supplier due. Older rows were handled through Item Purchase and
+      // never post either.
+      supplierDueTracked: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+      },
+      // The Item Purchase created when this line was received.
+      manufactureId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       date: {
         type: DataTypes.DATEONLY,
         allowNull: true,

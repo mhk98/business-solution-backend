@@ -35,6 +35,12 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      // Links this due row back to the Item Requisition line that created it,
+      // so editing/deleting the requisition keeps the supplier's due in sync.
+      itemRequisitionId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       status: {
         type: DataTypes.ENUM("Paid", "Unpaid"),
         allowNull: true,

@@ -24,10 +24,19 @@ const STOCK_DELETE_SERVICES = [
   "manufacture", "stockAdjustment", "factoryStockAdjustment", "packagingItemPurchase",
   "packagingItemStockAdjustment", "packagingFactoryStockAdjustment",
 ];
-const stockDeleteService = (modelKey) =>
-  STOCK_DELETE_SERVICES.includes(modelKey)
+// Same idea for documents whose delete must also clear a linked ledger row
+// (Item Requisition → its supplier due), where the module folder name differs.
+const LINKED_DELETE_SERVICE_PATHS = {
+  itemRequisition: "../modules/itemRequision/itemRequision.service",
+};
+const stockDeleteService = (modelKey) => {
+  if (LINKED_DELETE_SERVICE_PATHS[modelKey]) {
+    return require(LINKED_DELETE_SERVICE_PATHS[modelKey]);
+  }
+  return STOCK_DELETE_SERVICES.includes(modelKey)
     ? require(`../modules/${modelKey}/${modelKey}.service`)
     : null;
+};
 const PENDING_UPDATE_NOTE = "[Approval pending for update]";
 const UPDATE_APPROVED_NOTE = "[Update request approved]";
 

@@ -5,6 +5,7 @@ const EmployeeWorkReportFilterableFields = [
   "employeeId",
   "startDate",
   "endDate",
+  "saleType",
 ];
 
 const EmployeeWorkReportSearchableFields = ["name"];
@@ -34,6 +35,7 @@ const EmployeeWorkReportNumericFields = [
   "ideskReceived",
   "callDone",
   "callReceived",
+  "callReceiveDone",
   "whatsappDone",
   "whatsappReceived",
   "totalAssign",

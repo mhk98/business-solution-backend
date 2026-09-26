@@ -25,7 +25,9 @@ const loadDocumentUnitCosts = async (transaction) => {
     costs.set(`ReceivedProduct:${row.Id}`, Number(row.purchase_price || 0));
     const mixerId = row.source === "Mixer" && String(row.batchId || "").match(/^mixer-(\d+)$/)?.[1];
     if (mixerId && (!row.deletedAt || !costs.has(`Mixer:${mixerId}`))) {
+      // Combo Production runs are Mixer rows logged under their own source.
       costs.set(`Mixer:${mixerId}`, Number(row.purchase_price || 0));
+      costs.set(`ComboProduction:${mixerId}`, Number(row.purchase_price || 0));
     }
   }
   const perBaseUnit = (row) => {
@@ -178,7 +180,42 @@ const isAverageCostLive = async () => {
   return liveCache.live;
 };
 
+// A brand-new website (empty database: no movements, no stock) goes live on
+// its own — there is nothing to seed, so it just needs the go-live marker.
+// Databases with existing data still go live via scripts/goLiveAverageCost.js.
+const autoGoLiveEmptyDatabase = async () =>
+  db.sequelize.transaction(async (transaction) => {
+    const [lock] = await db.sequelize.query(
+      "SELECT GET_LOCK('average_cost_golive', 0) AS got",
+      { transaction, type: db.Sequelize.QueryTypes.SELECT },
+    );
+    if (!Number(lock?.got)) return false;
+    try {
+      if (await db.stockMovement.count({ transaction })) return false;
+      for (const pool of Object.values(POOLS)) {
+        const model = db[pool.model];
+        if (!model) continue;
+        const field = pool.id === "productId" ? "quantity" : "unitValue";
+        if (await model.count({ where: { [field]: { [Op.gt]: 0 } }, transaction })) return false;
+      }
+      await db.stockMovement.create(
+        {
+          sourceType: "AverageCostGoLive", operation: "AVERAGE_SEED",
+          stockType: "AverageCostGoLive", name: "Weighted-average costing go-live (empty database)",
+          direction: "NONE", date: businessDate(), quantityChange: 0, balanceBefore: 0, balanceAfter: 0,
+        },
+        { transaction },
+      );
+      liveCache = { checkedAt: 0, live: true };
+      console.log("[averageCost] empty database — weighted-average costing is live");
+      return true;
+    } finally {
+      await db.sequelize.query("SELECT RELEASE_LOCK('average_cost_golive')", { transaction });
+    }
+  });
+
 module.exports = {
+  autoGoLiveEmptyDatabase,
   isAverageCostLive,
   recomputeAverageCosts,
   scheduleAverageRecompute,

@@ -412,7 +412,15 @@ const getMyReports = async (actor, filters, options) => {
 
 const getAllReports = async (filters = {}, options = {}, actor) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
-  const { searchTerm, reportDate, userId, employeeId, startDate, endDate } = filters;
+  const {
+    searchTerm,
+    reportDate,
+    userId,
+    employeeId,
+    startDate,
+    endDate,
+    saleType,
+  } = filters;
   const andConditions = [];
 
   if (!PRIVILEGED_ROLES.has(actor.role)) {
@@ -441,6 +449,12 @@ const getAllReports = async (filters = {}, options = {}, actor) => {
 
   if (employeeId) {
     andConditions.push(await buildEmployeeFilterCondition(employeeId));
+  }
+
+  if (saleType) {
+    andConditions.push(
+      saleType === "none" ? { saleType: null } : { saleType },
+    );
   }
 
   const where = andConditions.length ? { [Op.and]: andConditions } : {};

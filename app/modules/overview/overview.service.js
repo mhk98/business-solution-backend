@@ -37,11 +37,6 @@ const DeliveryCharge = db.deliveryCharge;
 const DeliveryAdvance = db.deliveryAdvance;
 const ShippingCharge = db.shippingCharge;
 
-// Delivery advances synced from CS Work Reports are "table entry only" — they
-// must not move net revenue the way manually recorded advances do.
-const NON_WORK_REPORT_SOURCE = {
-  [Op.or]: [{ source: { [Op.is]: null } }, { source: { [Op.ne]: "cs_work_report" } }],
-};
 const UserLogHistory = db.userLogHistory;
 const StellarAttendanceLog = db.stellarAttendanceLog;
 const EmployeeList = db.employeeList;
@@ -430,6 +425,29 @@ const sumExcludedCashOutAmount = async (where = {}) => {
       "Expense";
     return status === "Not Expense" ? n(total + n(row.amount)) : total;
   }, 0);
+};
+
+// Book CashIn entries under the "Offline Sales" category are sales made
+// outside the courier/POS flow, so they count toward Net Revenue. Match by the
+// linked category and, for rows that only carry the text label, by name.
+const OFFLINE_SALES_CATEGORY_NAME = "Offline Sales";
+
+const sumOfflineSalesCashIn = async (where = {}) => {
+  const categories = await Category.findAll({
+    where: { name: OFFLINE_SALES_CATEGORY_NAME },
+    attributes: ["Id"],
+    paranoid: true,
+  });
+  const categoryIds = categories.map((category) => category.Id);
+
+  return sumField(CashInOut, "amount", {
+    ...where,
+    paymentStatus: "CashIn",
+    [Op.or]: [
+      ...(categoryIds.length ? [{ categoryId: { [Op.in]: categoryIds } }] : []),
+      { categoryId: null, category: OFFLINE_SALES_CATEGORY_NAME },
+    ],
+  });
 };
 
 const countWhere = async (Model, where = {}) => {
@@ -932,6 +950,7 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     legacySalesReturnPurchaseAmount,
     posSalesAmount,
     posPurchaseAmount,
+    offlineSalesAmount,
   ] = await Promise.all([
     sumField(MarketingExpense, "amount", {
       ...transactionDateWhere,
@@ -986,10 +1005,8 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     sumField(CodCharge, "amount", transactionDateWhere),
     sumField(CodChange, "amount", transactionDateWhere),
     sumField(DeliveryCharge, "amount", transactionDateWhere),
-    sumField(DeliveryAdvance, "amount", {
-      ...transactionDateWhere,
-      ...NON_WORK_REPORT_SOURCE,
-    }),
+    // Includes CS Work Report advances as well as manual ones.
+    sumField(DeliveryAdvance, "amount", transactionDateWhere),
     sumField(ShippingCharge, "amount", transactionDateWhere),
     countLowStockProducts(snapshotWhere),
     countWhere(PurchaseRequisition, {
@@ -1009,6 +1026,7 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     sumField(ReturnProduct, "purchase_price", transactionDateWhere),
     sumField(PosReport, "total", posCostedDateWhere),
     sumField(PosReport, "fifo_cost", posCostedDateWhere),
+    sumOfflineSalesCashIn(transactionDateWhere),
   ]);
 
   const netCashPosition = n(totalCashInAmount - totalCashOutAmount);
@@ -1028,7 +1046,8 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
       n(totalCodChange) -
       n(totalDeliveryCharge) +
       n(totalDeliveryAdvance) +
-      n(totalShippingCharge),
+      n(totalShippingCharge) +
+      n(offlineSalesAmount),
   );
   const netPurchase = n(
     inTransitPurchaseAmount - salesReturnPurchaseAmount + posPurchaseAmount,
@@ -1080,6 +1099,7 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
     totalDeliveryCharge,
     totalDeliveryAdvance,
     totalShippingCharge,
+    offlineSalesAmount,
     netSalesBeforeCharges,
     netRevenue,
     netPurchase,

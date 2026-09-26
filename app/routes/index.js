@@ -70,6 +70,7 @@ const ManufactureStockRoutes = require("../modules/manufactureStock/manufactureS
 const ManufactureProductionRoutes = require("../modules/manufactureProduction/manufactureProduction.routes");
 const ManufacturerRoutes = require("../modules/manufacturer/manufacturer.routes");
 const MixerRoutes = require("../modules/mixer/mixer.routes");
+const ComboProductionRoutes = require("../modules/comboProduction/comboProduction.routes");
 const ItemRoutes = require("../modules/item/item.routes");
 const PackagingItemRoutes = require("../modules/packagingItem/packagingItem.routes");
 const PackagingItemPurchaseRoutes = require("../modules/packagingItemPurchase/packagingItemPurchase.routes");
@@ -279,6 +280,10 @@ const moduleRoutes = [
   {
     path: "/mixer",
     route: MixerRoutes,
+  },
+  {
+    path: "/combo-production",
+    route: ComboProductionRoutes,
   },
   {
     path: "/intransit-product",

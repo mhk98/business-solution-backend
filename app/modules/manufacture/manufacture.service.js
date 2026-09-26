@@ -15,6 +15,27 @@ const Item = db.item;
 const Supplier = db.supplier;
 const ItemMaster = db.itemMaster;
 const SupplierHistory = db.supplierHistory;
+
+// Item Requisition creates/edits/deletes its own Item Purchase when an item is
+// received, inside the requisition's transaction (options.transaction).
+const runInTransaction = (options, fn) =>
+  options?.transaction ? fn(options.transaction) : db.sequelize.transaction(fn);
+
+// Purchases created by an Item Requisition are managed from that requisition —
+// editing/deleting them here would leave its stock and supplier due out of step.
+const assertNotRequisitionManaged = async (id, options) => {
+  if (options?.fromRequisition || !db.itemRequisition) return;
+  const requisition = await db.itemRequisition.findOne({
+    where: { manufactureId: id },
+    attributes: ["Id"],
+  });
+  if (requisition) {
+    throw new ApiError(
+      400,
+      `This purchase comes from Item Requisition #${requisition.Id} — edit or delete it there`,
+    );
+  }
+};
 const { Op, Sequelize } = require("sequelize");
 
 const parseVariantPayload = (value) => {
@@ -297,7 +318,7 @@ const adjustStockBalanceForSameTarget = async ({
   return updatedStockRow;
 };
 
-const insertIntoDB = async (payload) => {
+const insertIntoDB = async (payload, options = {}) => {
   const {
     itemId,
     productId,
@@ -312,7 +333,10 @@ const insertIntoDB = async (payload) => {
     variantKey,
   } = payload;
 
-  const itemData = await Item.findOne({ where: { Id: itemId } });
+  const itemData = await Item.findOne({
+    where: { Id: itemId },
+    transaction: options.transaction,
+  });
   if (!itemData) throw new ApiError(404, "Item not found");
 
   const normalizedPayload = normalizeUnitPayload(unit, unitValue);
@@ -329,7 +353,7 @@ const insertIntoDB = async (payload) => {
     totalUnitValue > 0 ? totalCost / totalUnitValue : 0;
   const finalStatus = String(status || "").trim() || "Active";
 
-  return db.sequelize.transaction(async (t) => {
+  return runInTransaction(options, async (t) => {
     const manufactureData = {
       itemId,
       productId: productId || null,
@@ -388,22 +412,11 @@ const insertIntoDB = async (payload) => {
     });
     await itemFifo.syncItemStockCost({ transaction: t, itemId });
 
-    // Linked SupplierHistory row so this purchase's due/paid tracking can be
-    // found and kept in sync later (see updateOneFromDB) — one row per
-    // purchase line, not batched, so an edit to one item never has to guess
-    // which shared row to adjust.
-    if (supplierId && totalCost > 0) {
-      await SupplierHistory.create(
-        {
-          supplierId,
-          manufactureId: manufactureRecord.Id,
-          amount: totalCost,
-          status: "Unpaid",
-          date: date || new Date().toISOString().slice(0, 10),
-        },
-        { transaction: t },
-      );
-    }
+    // No supplier due is posted here any more — the supplier's due for items
+    // comes from Item Requisition (see itemRequision.service syncSupplierDue),
+    // and posting it here too would count the same purchase twice. Purchases
+    // created before that change keep their linked row, which the update
+    // path below still keeps in sync.
 
     return manufactureRecord;
   });
@@ -664,8 +677,9 @@ const getDataById = async (id) => {
   return data.map(formatManufactureForDisplay);
 };
 
-const deleteIdFromDB = async (id) => {
-  return db.sequelize.transaction(async (t) => {
+const deleteIdFromDB = async (id, options = {}) => {
+  await assertNotRequisitionManaged(id, options);
+  return runInTransaction(options, async (t) => {
     const existing = await Manufacture.findOne({
       where: { Id: id },
       attributes: [
@@ -731,7 +745,8 @@ const deleteIdFromDB = async (id) => {
   });
 };
 
-const updateOneFromDB = async (id, payload) => {
+const updateOneFromDB = async (id, payload, options = {}) => {
+  await assertNotRequisitionManaged(id, options);
   const {
     itemId,
     productId,
@@ -764,6 +779,7 @@ const updateOneFromDB = async (id, payload) => {
       "variantKey",
       "supplierId",
     ],
+    transaction: options.transaction,
   });
 
   if (!existing) return 0;
@@ -784,7 +800,10 @@ const updateOneFromDB = async (id, payload) => {
   const nextTotalCost =
     totalCost === undefined ? toNumber(existing.cost) : totalCost;
   const nextItemId = itemId || existing.itemId;
-  const nextItem = await Item.findOne({ where: { Id: nextItemId } });
+  const nextItem = await Item.findOne({
+    where: { Id: nextItemId },
+    transaction: options.transaction,
+  });
   if (!nextItem) throw new ApiError(404, "Item not found");
 
   const nextProductId =
@@ -840,7 +859,7 @@ const updateOneFromDB = async (id, payload) => {
     String(oldProductId || "") === String(nextProductId || "") &&
     String(oldVariantKey || "") === String(nextVariantKey || "");
 
-  const updatedCount = await db.sequelize.transaction(async (t) => {
+  const updatedCount = await runInTransaction(options, async (t) => {
     if (isSameStockTarget) {
       await adjustStockBalanceForSameTarget({
         Model: ItemMaster,
@@ -969,7 +988,7 @@ const updateOneFromDB = async (id, payload) => {
     return count;
   });
 
-  if (updatedCount <= 0) return updatedCount;
+  if (updatedCount <= 0 || options.transaction) return updatedCount;
 
   const users = await User.findAll({
     attributes: ["Id", "role"],

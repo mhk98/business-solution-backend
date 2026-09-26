@@ -68,6 +68,17 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      // "mixer" for recipe entries made on the Mixer screen, "combo_production"
+      // for Combo Production runs that re-use an existing mixer's recipe.
+      entryType: {
+        type: DataTypes.STRING(32),
+        allowNull: false,
+        defaultValue: "mixer",
+      },
+      templateMixerId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       deletedAt: {
         type: DataTypes.DATE,
         allowNull: true,

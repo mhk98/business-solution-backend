@@ -1209,6 +1209,11 @@ db.employeeWorkReport.belongsTo(db.employeeList, {
     foreignKey: "employeeWorkReportId",
     as: "workReport",
   });
+  ChargeModel.belongsTo(db.user, {
+    foreignKey: "createdByUserId",
+    as: "createdBy",
+    constraints: false,
+  });
 });
 
 db.user.hasMany(db.logisticWorkReport, {
@@ -2068,6 +2073,11 @@ const ensureEmployeeWorkReportColumns = async () => {
     allowNull: false,
     defaultValue: 0,
   });
+  await maybeAddColumn("callReceiveDone", {
+    type: DataTypes.INTEGER(10),
+    allowNull: false,
+    defaultValue: 0,
+  });
   await maybeAddColumn("products", {
     type: DataTypes.JSON,
     allowNull: true,
@@ -2119,6 +2129,45 @@ const ensureChargeEmployeeColumns = async () => {
     await db.sequelize.query(
       `UPDATE \`${tableName}\` SET \`source\` = 'manual' WHERE \`source\` IS NULL`,
     );
+  }
+};
+
+// CS Work Reports saved before the charge sync existed never got mirrored
+// rows. Create them once; reports that already have a row (even soft-deleted)
+// are left alone so this stays idempotent across boots.
+const backfillWorkReportCharges = async () => {
+  const targets = [
+    ["codChangeDiscount", db.codChange, "CS Work Report — Discount (COD Change)"],
+    ["shippingCharge", db.shippingCharge, "CS Work Report — Shipping Charge"],
+    ["advancePayment", db.deliveryAdvance, "CS Work Report — Advance Payment"],
+  ];
+
+  for (const [field, Model, note] of targets) {
+    const reports = await db.employeeWorkReport.findAll({
+      where: { [field]: { [Op.gt]: 0 } },
+      attributes: ["Id", "userId", "employeeId", "reportDate", field],
+    });
+    if (!reports.length) continue;
+
+    const linked = await Model.findAll({
+      where: { employeeWorkReportId: reports.map((report) => report.Id) },
+      attributes: ["employeeWorkReportId"],
+      paranoid: false,
+    });
+    const linkedIds = new Set(linked.map((row) => row.employeeWorkReportId));
+
+    const rows = reports
+      .filter((report) => !linkedIds.has(report.Id))
+      .map((report) => ({
+        date: String(report.reportDate).slice(0, 10),
+        amount: Number(report[field]).toFixed(2),
+        note,
+        source: "cs_work_report",
+        employeeId: report.employeeId || null,
+        employeeWorkReportId: report.Id,
+        createdByUserId: report.userId || null,
+      }));
+    if (rows.length) await Model.bulkCreate(rows);
   }
 };
 
@@ -2542,6 +2591,23 @@ const ensureItemRequisitionUnitColumn = async () => {
       type: DataTypes.STRING,
       allowNull: true,
       defaultValue: "Pcs",
+    });
+  }
+
+  // Existing rows stay false so their (already Item Purchase-tracked) amounts
+  // never start posting a second supplier due when edited.
+  if (!tableDefinition.supplierDueTracked) {
+    await queryInterface.addColumn(tableName, "supplierDueTracked", {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    });
+  }
+
+  if (!tableDefinition.manufactureId) {
+    await queryInterface.addColumn(tableName, "manufactureId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
     });
   }
 };
@@ -2969,6 +3035,21 @@ const ensureMixerManufacturerColumns = async () => {
       type: DataTypes.DECIMAL(14, 2),
       allowNull: false,
       defaultValue: 0,
+    });
+  }
+
+  if (!tableDefinition.entryType) {
+    await queryInterface.addColumn(tableName, "entryType", {
+      type: DataTypes.STRING(32),
+      allowNull: false,
+      defaultValue: "mixer",
+    });
+  }
+
+  if (!tableDefinition.templateMixerId) {
+    await queryInterface.addColumn(tableName, "templateMixerId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
     });
   }
 };
@@ -4061,6 +4142,15 @@ const ensureSupplierHistoryManufactureColumn = async () => {
       allowNull: true,
     });
   }
+
+  // Item Requisition is now the source of a supplier's due for items; this
+  // links the due row back to the requisition line so edits/deletes sync it.
+  if (!tableDefinition.itemRequisitionId) {
+    await queryInterface.addColumn(tableName, "itemRequisitionId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
 };
 
 // ManufacturerTransaction and PackagingManufacturerTransaction gained a
@@ -4170,6 +4260,7 @@ db.sequelize
     await ensureEmployeeColumns();
     await ensureEmployeeWorkReportColumns();
     await ensureChargeEmployeeColumns();
+    await backfillWorkReportCharges();
     await ensureLogisticWorkReportColumns();
     await ensureShifaReportColumns();
     await ensureShifaIncentiveColumns();

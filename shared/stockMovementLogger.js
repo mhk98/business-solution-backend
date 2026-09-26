@@ -38,6 +38,7 @@ const SOURCE_DOCUMENT_MODELS = {
   ItemPurchase: "manufacture",
   Factory: "manufactureProduction",
   Mixer: "mixer",
+  ComboProduction: "mixer",
   StockAdjustment: "stockAdjustment",
   FactoryStockAdjustment: "factoryStockAdjustment",
   PackagingItemPurchase: "packagingItemPurchase",
