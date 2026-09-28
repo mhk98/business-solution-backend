@@ -1,38 +1,57 @@
 const router = require("express").Router();
-const { ENUM_USER_ROLE } = require("../../enums/user");
 const auth = require("../../middlewares/auth");
-const { requireAnyPermission } = require("../../middlewares/requireMenuPermission");
+const {
+  requireAnyPermission,
+  requireMenuPermission,
+} = require("../../middlewares/requireMenuPermission");
 const ChargeSettingController = require("./chargeSetting.controller");
 
-const chargeSettingPermission = requireAnyPermission([
-  "cod_change",
-  "cod_charge",
-  "delivery_advance",
-  "delivery_charge",
-  "shipping_charge",
-]);
+// Access follows Role Permissions (not a fixed role list), per charge type:
+// COD Charge permission opens only COD Charge, etc. — so e.g. an accountant
+// given COD Charge / Delivery Charge in Role Permissions can use exactly
+// those two. superAdmin always passes (effective permissions "*").
+const CHARGE_TYPE_PERMISSIONS = {
+  cod: "cod_charge",
+  codchange: "cod_change",
+  delivery: "delivery_charge",
+  deliveryadvance: "delivery_advance",
+  shippingcharge: "shipping_charge",
+};
+
+const chargeSettingPermission = (req, res, next) => {
+  const chargeType = String(req.query?.chargeType || req.body?.chargeType || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[-_\s]/g, "");
+  const permission = CHARGE_TYPE_PERMISSIONS[chargeType];
+  // Unknown/missing type: the service rejects it with "Invalid charge type".
+  if (!permission) {
+    return requireAnyPermission(Object.values(CHARGE_TYPE_PERMISSIONS))(req, res, next);
+  }
+  return requireMenuPermission(permission)(req, res, next);
+};
 
 router.get(
   "/",
-  auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
+  auth(),
   chargeSettingPermission,
   ChargeSettingController.getChargeSettings,
 );
 router.post(
   "/create",
-  auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
+  auth(),
   chargeSettingPermission,
   ChargeSettingController.createChargeSetting,
 );
 router.put(
   "/:id",
-  auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
+  auth(),
   chargeSettingPermission,
   ChargeSettingController.updateChargeSetting,
 );
 router.delete(
   "/:id",
-  auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
+  auth(),
   chargeSettingPermission,
   ChargeSettingController.deleteChargeSetting,
 );

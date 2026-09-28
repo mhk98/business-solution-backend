@@ -6,6 +6,9 @@ const {
   toNumber,
 } = require("../../../helpers/unitConversionHelper");
 const db = require("../../../models");
+const {
+  assertUnitMatchesStockRow,
+} = require("../../../shared/itemStockUnitGuard");
 const ApiError = require("../../../error/ApiError");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const {
@@ -15,6 +18,7 @@ const {
   resolveApprovalNotificationMessage,
 } = require("../../../shared/approvalNotification");
 const pkgFifo = require("../../../shared/packagingFifoCostLayers");
+const { costAtCurrentAverage } = require("../../../shared/averageCost");
 
 const PackagingItemStockAdjustment = db.packagingItemStockAdjustment;
 const PackagingItemStock = db.packagingItemStock;
@@ -46,6 +50,7 @@ const applyAdjustmentEffect = async ({
     throw new ApiError(404, "Packaging item stock not found");
   }
 
+  assertUnitMatchesStockRow(stockRow, unit || stockRow.unit, "Packaging Item Stock");
   const normalizedPayload = toBaseStockPayload(unit || stockRow.unit, unitValue);
   const totalUnitValue = normalizedPayload.unitValue;
 
@@ -97,6 +102,7 @@ const applyAdjustmentEffect = async ({
     {
       unit: currentStockPayload.isConvertedUnit ? currentStockPayload.unit : stockRow.unit,
       unitValue: balanceAfter,
+      cost: costAtCurrentAverage(stockRow.cost, availableStock, balanceAfter),
     },
     { transaction },
   );
@@ -158,6 +164,7 @@ const reverseAdjustmentEffect = async ({
     {
       unit: currentStockPayload.isConvertedUnit ? currentStockPayload.unit : unit || stockRow.unit,
       unitValue: nextStock,
+      cost: costAtCurrentAverage(stockRow.cost, availableStock, nextStock),
     },
     { transaction },
   );
@@ -368,6 +375,14 @@ const updateOneFromDB = async (id, payload) => {
       ? toBaseStockPayload(existing.unit, existing.unitValue)
       : toBaseStockPayload(unit === "" || unit == null ? existing.unit : unit, unitValue);
   const nextStock = stock === "" || stock == null ? existing.stock : stock;
+  assertUnitMatchesStockRow(
+    await PackagingItemStock.findOne({
+      where: { packagingItemId: existing.packagingItemId },
+      order: [["createdAt", "ASC"]],
+    }),
+    unit === "" || unit == null ? existing.unit : unit,
+    "Packaging Item Stock",
+  );
 
   const updatedCount = await db.sequelize.transaction(async (t) => {
     await reverseAdjustmentEffect({

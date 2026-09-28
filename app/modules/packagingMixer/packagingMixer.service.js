@@ -9,6 +9,9 @@ const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const { PackagingMixerSearchableFields } = require("./packagingMixer.constants");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const {
+  assertUnitMatchesStockRow,
+} = require("../../../shared/itemStockUnitGuard");
 
 const PackagingMixer = db.packagingMixer;
 const Item = db.item;
@@ -86,6 +89,13 @@ const adjustItemStock = async ({
     order: [["createdAt", "ASC"]],
   });
 
+  // Output is entered in the item's own unit (e.g. Kg); stock counts base
+  // units (Gram), so convert before touching the row.
+  assertUnitMatchesStockRow(stockRow, unit);
+  const base = toBaseStockPayload(unit, Math.abs(delta));
+  unit = base.unit;
+  delta = Math.sign(delta) * base.unitValue;
+
   if (!stockRow && delta > 0) {
     const created = await ItemMaster.create(
       {
@@ -104,6 +114,7 @@ const adjustItemStock = async ({
       sourceId,
       operation: "CREATE",
       stockType: "ItemStock",
+      stockRow: created,
       itemId,
       name,
       unit,
@@ -144,9 +155,10 @@ const adjustItemStock = async ({
     sourceId,
     operation: "UPDATE",
     stockType: "ItemStock",
+    stockRow: updated,
     itemId,
     name,
-    unit,
+    unit: updated.unit,
     date,
     quantityChange: delta,
     balanceBefore,
@@ -157,6 +169,7 @@ const adjustItemStock = async ({
 
 const adjustFactoryStock = async ({
   stockId,
+  unit,
   delta,
   transaction,
   date = null,
@@ -168,6 +181,10 @@ const adjustFactoryStock = async ({
     lock: transaction.LOCK.UPDATE,
   });
   if (!stockRow) throw new ApiError(404, "Packaging factory stock not found");
+  // A line entered in Kg/Liter draws Gram/Ml from the stock row.
+  const lineUnit = unit || stockRow.unit;
+  assertUnitMatchesStockRow(stockRow, lineUnit, "Packaging Factory Stock");
+  delta = Math.sign(delta) * toBaseStockPayload(lineUnit, Math.abs(delta)).unitValue;
 
   const current = toBaseStockPayload(stockRow.unit, stockRow.unitValue);
   const balanceBefore = current.unitValue;
@@ -178,7 +195,7 @@ const adjustFactoryStock = async ({
 
   const currentCost = toNumber(stockRow.cost);
   const currentUnitCost = current.unitValue > 0 ? currentCost / current.unitValue : 0;
-  await stockRow.update(
+  const updatedRow = await stockRow.update(
     {
       unitValue: nextQuantity,
       cost: Math.max(0, currentCost + delta * currentUnitCost),
@@ -191,6 +208,7 @@ const adjustFactoryStock = async ({
     sourceId,
     operation: "UPDATE",
     stockType: "PackagingFactoryStock",
+    stockRow: updatedRow,
     itemId: stockRow.packagingItemId,
     manufacturerId: stockRow.manufacturerId,
     name: stockRow.name,
@@ -271,6 +289,7 @@ const applyRecordEffects = async (data, recordId, transaction) => {
   for (const item of data.packagingItems || []) {
     const { consumedCost } = await adjustFactoryStock({
       stockId: item.packagingFactoryStockId,
+      unit: item.unit,
       delta: -toNumber(item.unitValue),
       transaction,
       sourceId: recordId,
@@ -298,6 +317,7 @@ const applyRecordEffects = async (data, recordId, transaction) => {
     cost: Math.round(producedCost * 100) / 100,
     delta: data.unitValue,
     transaction,
+    sourceId: recordId,
   });
 
   await createWageTransaction(
@@ -315,8 +335,10 @@ const reverseRecordEffects = async (record, transaction) => {
   for (const item of items) {
     await adjustFactoryStock({
       stockId: item.packagingFactoryStockId,
+      unit: item.unit,
       delta: toNumber(item.unitValue),
       transaction,
+      sourceId: record.Id,
     });
   }
 
@@ -328,6 +350,7 @@ const reverseRecordEffects = async (record, transaction) => {
     cost: record.unitValue * record.unitCost,
     delta: -toNumber(record.unitValue),
     transaction,
+    sourceId: record.Id,
   });
 
   if (toNumber(record.wageAmount) > 0) {

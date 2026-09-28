@@ -6,6 +6,10 @@ const {
   toNumber,
 } = require("../../../helpers/unitConversionHelper");
 const db = require("../../../models");
+const {
+  assertUnitMatchesStockRow,
+} = require("../../../shared/itemStockUnitGuard");
+
 const ApiError = require("../../../error/ApiError");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const {
@@ -171,6 +175,7 @@ const insertIntoDB = async (payload) => {
       );
     }
 
+    assertUnitMatchesStockRow(stockRow, unit || stockRow.unit, "Factory Stock");
     const normalizedPayload = toBaseStockPayload(
       unit || stockRow.unit,
       unitValue,
@@ -414,6 +419,11 @@ const updateOneFromDB = async (id, payload) => {
         );
   const totalUnitValue = normalizedPayload.unitValue;
   const nextStock = stock === "" || stock == null ? existing.stock : stock;
+  assertUnitMatchesStockRow(
+    await ManufactureStock.findOne({ where: { Id: existing.manufactureStockId } }),
+    unit === "" || unit == null ? existing.unit : unit,
+    "Factory Stock",
+  );
 
   const data = {
     unit: normalizedPayload.unit,

@@ -16,6 +16,16 @@ const calculateMixerPurchasePrice = async ({
     const quantity = toBaseStockPayload(stock.unit, stock.unitValue).unitValue;
     return quantity > 0 ? Number(stock.cost || 0) / quantity : null;
   };
+  // A pool that has run out keeps its last recorded average — an ingredient
+  // is never priced at ৳0 just because its stock is empty (e.g. editing an
+  // old mixer after its material was used up). Required lazily (runner loads
+  // models).
+  const lastAverageOf = async (stockType, stock) => {
+    if (!stock) return null;
+    const { lastAverageByStockRow } = require("./averageCostRunner");
+    const map = await lastAverageByStockRow(stockType, [stock.Id], transaction);
+    return map.get(Number(stock.Id)) ?? null;
+  };
   if (!(Number(combo) > 0)) throw new ApiError(400, "Combo quantity must be greater than 0");
   let total = Number(othersCost || 0);
   for (const [rows, idKey] of [[mixItems, "manufactureId"], [packagingItems, "itemMasterId"]]) {
@@ -29,13 +39,18 @@ const calculateMixerPurchasePrice = async ({
       if (String(stockUnit.unit).toLowerCase() !== String(recipeUnit.unit).toLowerCase()) {
         throw new ApiError(400, `Unit mismatch for Item Stock ${row[idKey]}: recipe ${row.unit || "Pcs"}, stock ${item.unit}`);
       }
-      let average = averageOf(item) ?? 0;
+      let average =
+        averageOf(item) ?? (await lastAverageOf("ItemStock", item)) ?? 0;
       if (idKey === "manufactureId" && manufacturerId && db.manufactureStock) {
         const factoryStock = await db.manufactureStock.findOne({
           where: { itemId: item.itemId, manufacturerId: Number(manufacturerId) },
           transaction,
         });
-        if (factoryStock && averageOf(factoryStock) != null) average = averageOf(factoryStock);
+        const factoryAverage = factoryStock
+          ? averageOf(factoryStock) ??
+            (await lastAverageOf("FactoryStock", factoryStock))
+          : null;
+        if (factoryAverage != null) average = factoryAverage;
       }
       total += quantity * unitCostOf(item.itemId, average);
     }

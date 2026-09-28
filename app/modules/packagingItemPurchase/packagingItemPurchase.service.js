@@ -11,6 +11,9 @@ const {
   PackagingItemPurchaseSearchableFields,
 } = require("./packagingItemPurchase.constants");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const {
+  assertUnitMatchesStockRow,
+} = require("../../../shared/itemStockUnitGuard");
 const pkgFifo = require("../../../shared/packagingFifoCostLayers");
 
 const PackagingItemPurchase = db.packagingItemPurchase;
@@ -188,6 +191,7 @@ const adjustStockBalance = async ({
         sourceId,
         operation: "CREATE",
         stockType: "PackagingItemStock",
+        stockRow: created,
         itemId: packagingItemId,
         name,
         unit,
@@ -202,6 +206,7 @@ const adjustStockBalance = async ({
     throw new ApiError(404, "Packaging item stock not found");
   }
 
+  assertUnitMatchesStockRow(stockRow, unit, "Packaging Item Stock");
   const currentPayload = toBaseStockPayload(stockRow.unit, stockRow.unitValue);
   const balanceBefore = currentPayload.unitValue;
   const nextQuantity = balanceBefore + delta;
@@ -234,9 +239,10 @@ const adjustStockBalance = async ({
     sourceId,
     operation: "UPDATE",
     stockType: "PackagingItemStock",
+    stockRow: updated,
     itemId: packagingItemId,
     name,
-    unit,
+    unit: updated.unit,
     date,
     quantityChange: delta,
     balanceBefore,

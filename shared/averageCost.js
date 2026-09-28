@@ -95,4 +95,22 @@ const revalue = (stockType, row, { average }) => {
   };
 };
 
-module.exports = { currentAverage, blendAverage, averageFields, inbound, outbound, revalue };
+// Total value of a stock row after its quantity moves from `quantityBefore`
+// to `quantityAfter` at its current average (an outflow, or an adjustment
+// "In" valued at the average) — the average itself doesn't change. For flows
+// that only set unitValue on Item / Packaging stock rows.
+const costAtCurrentAverage = (cost, quantityBefore, quantityAfter) => {
+  const before = Number(quantityBefore || 0);
+  if (before <= 0) return Number(cost || 0);
+  return round2((Number(cost || 0) * Math.max(Number(quantityAfter || 0), 0)) / before);
+};
+
+module.exports = {
+  currentAverage,
+  blendAverage,
+  averageFields,
+  inbound,
+  outbound,
+  revalue,
+  costAtCurrentAverage,
+};

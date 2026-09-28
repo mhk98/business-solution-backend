@@ -3,7 +3,10 @@ const paginationHelpers = require("../../../helpers/paginationHelper");
 const {
   formatStockForDisplay,
 } = require("../../../helpers/unitConversionHelper");
-const { isAverageCostLive } = require("../../../shared/averageCostRunner");
+const {
+  isAverageCostLive,
+  lastAverageByStockRow,
+} = require("../../../shared/averageCostRunner");
 const db = require("../../../models");
 const {
   PackagingItemStockSearchableFields,
@@ -23,16 +26,21 @@ const averageOfRow = (row) => {
 const attachLastUnitCost = async (rows) => {
   if (!rows.length) return rows;
   const averageLive = await isAverageCostLive();
-  const [lastUnitCostMap, receivedDateMap] = await Promise.all([
+  const [lastUnitCostMap, receivedDateMap, lastAverage] = await Promise.all([
     lastKnownUnitCostMap(rows.map((r) => r.packagingItemId)),
     lastReceivedDateMap(rows.map((r) => r.packagingItemId)),
+    averageLive
+      ? lastAverageByStockRow("PackagingItemStock", rows.map((r) => r.Id))
+      : new Map(),
   ]);
   return rows.map((row) => ({
     ...row,
-    // After weighted-average go-live: the row's average (cost ÷ quantity).
+    // After weighted-average go-live: the row's average (cost ÷ quantity);
+    // an empty row keeps its last average rather than dropping to ৳0.
     lastUnitCost: averageLive && averageOfRow(row) != null
       ? averageOfRow(row)
-      : lastUnitCostMap.get(Number(row.packagingItemId)) || 0,
+      : lastAverage.get(Number(row.Id)) ||
+        lastUnitCostMap.get(Number(row.packagingItemId)) || 0,
     lastReceivedDate:
       receivedDateMap.get(Number(row.packagingItemId)) || null,
   }));

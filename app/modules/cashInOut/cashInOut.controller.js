@@ -392,6 +392,8 @@ const insertIntoDB = catchAsync(async (req, res) => {
   const actor = req.user || {};
   const actorUserId = actor?.Id || null;
 
+  const result = await CashInOutService.insertIntoDB(data);
+
   const users = await User.findAll({
     attributes: ["Id", "role"],
     where: {
@@ -419,8 +421,6 @@ const insertIntoDB = catchAsync(async (req, res) => {
       ),
     );
   }
-
-  const result = await CashInOutService.insertIntoDB(data);
 
   sendResponse(res, {
     statusCode: 200,

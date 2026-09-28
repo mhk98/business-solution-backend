@@ -66,11 +66,12 @@ const purchaseMatches = (purchase, payload) =>
 
 // Received quantity joins the item's shared Item Stock row. Once anything has
 // gone out of that row after this receipt came in (Mixer, Factory, Stock
-// Adjustment…), the receipt's quantity/amount are locked: taking it back or
-// re-costing it would rewrite stock that has already been used.
+// Adjustment…), the receipt can't be un-received or deleted. Quantity, unit,
+// amount and item edits are still allowed when the stock row can cover them
+// (see assertStockCoversEdit).
 const ITEM_STOCK_TYPES = ["ItemStock", "PackagingStock"];
 const STOCK_USED_MESSAGE =
-  "This item's received stock has already been used (Mixer/Factory etc.) — quantity, amount and item can't be changed, and it can't be un-received or deleted. Other fields can still be edited.";
+  "This item's received stock has already been used (Mixer/Factory etc.) — it can't be un-received or deleted.";
 
 const isReceivedStockUsed = async (manufactureId, transaction) => {
   if (!manufactureId) return false;
@@ -93,12 +94,45 @@ const isReceivedStockUsed = async (manufactureId, transaction) => {
       stockType: { [Op.in]: ITEM_STOCK_TYPES },
       stockRowId: receipt.stockRowId,
       quantityChange: { [Op.lt]: 0 },
-      [Op.not]: { sourceType: "ItemPurchase", sourceId: manufactureId },
+      // Another purchase being edited down or deleted isn't this receipt's
+      // stock being used — only real outflows (Mixer, Factory, adjustments).
+      sourceType: { [Op.ne]: "ItemPurchase" },
     },
     attributes: ["Id"],
     transaction,
   });
   return Boolean(usage);
+};
+
+// Received stock that has since been partly used can still be edited as long
+// as the Item Stock row still holds whatever the edit takes back out (e.g.
+// 150 → 100 needs 50 in stock; a wrong item needs the full 150 in stock).
+const assertStockCoversEdit = async (purchase, payload, transaction) => {
+  const oldQty = toBaseStockPayload(purchase.unit || "Pcs", purchase.unitValue)
+    .unitValue;
+  const newQty = toBaseStockPayload(payload.unit || "Pcs", payload.unitValue)
+    .unitValue;
+  const sameItem = Number(purchase.itemId) === Number(payload.itemId);
+  const takeOut = sameItem ? oldQty - newQty : oldQty;
+  if (takeOut <= 0.0001) return;
+
+  const stockRow = await db.itemMaster.findOne({
+    where: {
+      itemId: purchase.itemId,
+      [Op.or]: [{ productId: null }, { productId: 0 }],
+    },
+    order: [["createdAt", "ASC"]],
+    transaction,
+  });
+  const available = stockRow
+    ? toBaseStockPayload(stockRow.unit, stockRow.unitValue).unitValue
+    : 0;
+  if (takeOut - available > 0.0001) {
+    throw new ApiError(
+      400,
+      `Not enough Item Stock for this edit: it takes ${takeOut} back out but only ${available} is in stock (the rest has been used in Mixer/Factory etc.).`,
+    );
+  }
 };
 
 const syncItemPurchase = async (requisition, received, transaction) => {
@@ -136,14 +170,15 @@ const syncItemPurchase = async (requisition, received, transaction) => {
     !sameQuantity(purchase, payload) ||
     Number(purchase.cost) !== Number(payload.cost);
 
-  if (!(await isReceivedStockUsed(purchase.Id, transaction))) {
+  if (stockChanged || !(await isReceivedStockUsed(purchase.Id, transaction))) {
+    await assertStockCoversEdit(purchase, payload, transaction);
     await ManufactureService.updateOneFromDB(purchase.Id, payload, options);
     return;
   }
-  if (stockChanged) throw new ApiError(400, STOCK_USED_MESSAGE);
 
-  // Stock already used: only the purchase's own details change (supplier,
-  // date) — its stock and cost stay exactly as received.
+  // Stock already used and nothing stock-related changed: only the
+  // purchase's own details change (supplier, date) — its cost layer stays
+  // exactly as received.
   await purchase.update(
     { supplierId: payload.supplierId, date: payload.date },
     { transaction },

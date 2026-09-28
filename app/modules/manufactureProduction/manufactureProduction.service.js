@@ -9,6 +9,9 @@ const ApiError = require("../../../error/ApiError");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const itemFifo = require("../../../shared/itemFifoCostLayers");
 const {
+  assertUnitMatchesItemStock,
+} = require("../../../shared/itemStockUnitGuard");
+const {
   ManufactureProductionSearchableFields,
 } = require("./manufactureProduction.constants");
 
@@ -232,6 +235,11 @@ const buildPayload = async (payload, existing = null, options = {}) => {
   if (!manufacturer) throw new ApiError(404, "Manufacturer not found");
 
   const unit = payload.unit === "" || payload.unit == null ? "Pcs" : payload.unit;
+  await assertUnitMatchesItemStock({
+    itemId: item.Id,
+    unit,
+    transaction: options.transaction,
+  });
   const unitValue =
     payload.unitValue === "" || payload.unitValue == null
       ? existing?.unitValue || 0

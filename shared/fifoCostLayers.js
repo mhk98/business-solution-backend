@@ -38,6 +38,26 @@ const asArray = (value) => {
 };
 const round2 = (value) => Math.round(n(value) * 100) / 100;
 const today = () => new Date().toISOString().slice(0, 10);
+
+// Weighted-average costing (live on every site since 2026-09-24/26) owns cost:
+// once it's live, layers are still drawn down/restored (history, restores)
+// but a consumption is priced at the product's average, never the layers.
+// Required lazily (the runner loads models).
+const averageCostLive = () =>
+  require("./averageCostRunner").isAverageCostLive();
+
+// Stock Product's weighted average for a product; null when unknown.
+const productAverage = async ({ transaction, productId }) => {
+  const row = await db.inventoryMaster.findOne({
+    where: { productId: Number(productId) },
+    attributes: ["averageCost", "purchase_price"],
+    order: [["Id", "ASC"]],
+    transaction,
+  });
+  if (!row) return null;
+  if (row.averageCost != null) return n(row.averageCost);
+  return row.purchase_price != null ? n(row.purchase_price) : null;
+};
 const parseVariants = require("./parseVariants");
 
 // "size__color" — matches mergeVariants/subtractVariants/reconciler.
@@ -268,6 +288,14 @@ const consumeFifo = async ({
 
   result.totalCost = round2(totalCost);
   result.unitCostConsumed = need > 0 ? round2(totalCost / need) : 0;
+  if (await averageCostLive()) {
+    const average = await productAverage({ transaction, productId });
+    if (average != null) {
+      result.totalCost = round2(need * average);
+      result.unitCostConsumed = round2(average);
+      result.costBasis = "average";
+    }
+  }
   return result;
 };
 

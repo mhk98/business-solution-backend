@@ -21,6 +21,36 @@ const round2 = (value) => Math.round(n(value) * 100) / 100;
 const round4 = (value) => Math.round(n(value) * 10000) / 10000;
 const today = () => new Date().toISOString().slice(0, 10);
 
+// Weighted-average costing (live on every site since 2026-09-24/26) owns cost:
+// once it's live, layers are still drawn down/restored (history, restores)
+// but every cost this module reports or writes comes from the stock row's
+// average, never from the layers. Required lazily (the runner loads models).
+const averageCostLive = () =>
+  require("./averageCostRunner").isAverageCostLive();
+
+// Packaging Item Stock's own average (cost ÷ base quantity); null when empty.
+const stockAverage = async ({ transaction, packagingItemId }) => {
+  const stockRow = await ItemStock().findOne({
+    where: { packagingItemId: Number(packagingItemId) },
+    order: [["createdAt", "ASC"]],
+    transaction,
+  });
+  if (!stockRow) return null;
+  const base = toBaseStockPayload(stockRow.unit, stockRow.unitValue).unitValue;
+  return base > 0 ? n(stockRow.cost) / base : null;
+};
+
+// Prices a finished consumption at the average once it's live.
+const priceAtAverage = async (result, need, averageOf) => {
+  if (need <= 0 || !(await averageCostLive())) return result;
+  const average = await averageOf();
+  if (average == null) return result;
+  result.totalCost = round2(need * average);
+  result.unitCostConsumed = round4(average);
+  result.costBasis = "average";
+  return result;
+};
+
 const asArray = (value) => {
   if (Array.isArray(value)) return value;
   if (typeof value === "string") {
@@ -128,7 +158,9 @@ const consumeFifo = async ({
 
   result.totalCost = round2(totalCost);
   result.unitCostConsumed = need > 0 ? round4(totalCost / need) : 0;
-  return result;
+  return priceAtAverage(result, need, () =>
+    stockAverage({ transaction, packagingItemId }),
+  );
 };
 
 // Reverse a consumption — add each named quantity back onto its layer.
@@ -207,6 +239,10 @@ const layerValue = async ({ transaction, packagingItemId }) => {
 
 // Weighted-average unit cost of a packaging item's open layers.
 const currentUnitCost = async ({ transaction, packagingItemId, fallback = 0 }) => {
+  if (await averageCostLive()) {
+    const average = await stockAverage({ transaction, packagingItemId });
+    return round4(average ?? fallback);
+  }
   const { value, qty } = await layerValue({ transaction, packagingItemId });
   return qty > 0 ? round4(value / qty) : round4(fallback);
 };
@@ -278,6 +314,8 @@ const lastReceivedDateMap = async (packagingItemIds) => {
 
 // Keep PackagingItemStock.cost in step with the layers (honest display).
 const syncItemStockCost = async ({ transaction, packagingItemId }) => {
+  // The average cost engine owns Packaging Item Stock's cost once it's live.
+  if (await averageCostLive()) return;
   const stockRow = await ItemStock().findOne({
     where: { packagingItemId: Number(packagingItemId) },
     transaction,

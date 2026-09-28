@@ -21,6 +21,7 @@ const {
 } = require("../../../helpers/unitConversionHelper");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const itemFifo = require("../../../shared/itemFifoCostLayers");
+const { costAtCurrentAverage } = require("../../../shared/averageCost");
 const productFifo = require("../../../shared/fifoCostLayers");
 const { calculateMixerPurchasePrice } = require("../../../shared/mixerPurchaseCost");
 const Mixer = db.mixer;
@@ -1126,6 +1127,7 @@ const reconcileItemMasterStock = async (
           ? currentStockPayload.unit
           : stockRow.unit,
         unitValue: availableStock + delta,
+        cost: costAtCurrentAverage(stockRow.cost, availableStock, availableStock + delta),
       },
       { transaction },
     );
@@ -1207,6 +1209,7 @@ const reconcilePackagingStock = async (
           ? currentStockPayload.unit
           : stockRow.unit,
         unitValue: availableStock + delta,
+        cost: costAtCurrentAverage(stockRow.cost, availableStock, availableStock + delta),
       },
       { transaction },
     );

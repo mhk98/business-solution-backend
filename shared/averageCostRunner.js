@@ -169,6 +169,33 @@ const registerAverageCostHooks = () => {
   }
 };
 
+// Last non-zero average the engine recorded per stock row (movement
+// averageCostAfter, seeds included). An outflow never changes the average,
+// so this survives the row running down to 0 — an empty row keeps showing
+// its last average instead of ৳0. Map stockRowId → average.
+const lastAverageByStockRow = async (stockType, rowIds, transaction) => {
+  const ids = [...new Set((rowIds || []).map(Number).filter((id) => id > 0))];
+  if (!ids.length) return new Map();
+  const rows = await db.stockMovement.findAll({
+    attributes: ["stockRowId", "averageCostAfter"],
+    where: {
+      stockType,
+      stockRowId: { [Op.in]: ids },
+      averageCostAfter: { [Op.gt]: 0 },
+    },
+    order: [["date", "DESC"], ["Id", "DESC"]],
+    raw: true,
+    transaction,
+  });
+  const map = new Map();
+  for (const row of rows) {
+    if (!map.has(Number(row.stockRowId))) {
+      map.set(Number(row.stockRowId), Number(row.averageCostAfter));
+    }
+  }
+  return map;
+};
+
 // Whether weighted-average costing has gone live (AVERAGE_SEED rows exist).
 // Stock screens switch from "last purchase price" to the average only then.
 let liveCache = { checkedAt: 0, live: false };
@@ -217,6 +244,7 @@ const autoGoLiveEmptyDatabase = async () =>
 module.exports = {
   autoGoLiveEmptyDatabase,
   isAverageCostLive,
+  lastAverageByStockRow,
   recomputeAverageCosts,
   scheduleAverageRecompute,
   registerAverageCostHooks,

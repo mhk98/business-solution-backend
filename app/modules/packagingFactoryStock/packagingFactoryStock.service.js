@@ -3,7 +3,10 @@ const paginationHelpers = require("../../../helpers/paginationHelper");
 const {
   formatStockForDisplay,
 } = require("../../../helpers/unitConversionHelper");
-const { isAverageCostLive } = require("../../../shared/averageCostRunner");
+const {
+  isAverageCostLive,
+  lastAverageByStockRow,
+} = require("../../../shared/averageCostRunner");
 const db = require("../../../models");
 const {
   PackagingFactoryStockSearchableFields,
@@ -21,13 +24,19 @@ const attachLastUnitCost = async (rows) => {
   if (!rows.length) return rows;
   const unitCostOf = await buildPackagingUnitCostResolver();
   const averageLive = await isAverageCostLive();
+  const lastAverage = averageLive
+    ? await lastAverageByStockRow("PackagingFactoryStock", rows.map((r) => r.Id))
+    : new Map();
   return rows.map((row) => {
-    // After weighted-average go-live: the row's average (cost ÷ quantity).
+    // After weighted-average go-live: the row's average (cost ÷ quantity);
+    // an empty row keeps its last average rather than dropping to ৳0.
     const quantity = toBaseStockPayload(row.unit, row.unitValue).unitValue;
     if (averageLive && quantity > 0) return { ...row, lastUnitCost: Number(row.cost || 0) / quantity };
     return {
       ...row,
-      lastUnitCost: row.packagingItemId ? unitCostOf(row.packagingItemId, 0) : 0,
+      lastUnitCost:
+        lastAverage.get(Number(row.Id)) ||
+        (row.packagingItemId ? unitCostOf(row.packagingItemId, 0) : 0),
     };
   });
 };

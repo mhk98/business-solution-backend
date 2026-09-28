@@ -8,6 +8,9 @@ const ApiError = require("../../../error/ApiError");
 const { ManufactureSearchableFields } = require("./manufacture.constants");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const itemFifo = require("../../../shared/itemFifoCostLayers");
+const {
+  assertUnitMatchesItemStock,
+} = require("../../../shared/itemStockUnitGuard");
 const Manufacture = db.manufacture;
 const Notification = db.notification;
 const User = db.user;
@@ -338,6 +341,11 @@ const insertIntoDB = async (payload, options = {}) => {
     transaction: options.transaction,
   });
   if (!itemData) throw new ApiError(404, "Item not found");
+  await assertUnitMatchesItemStock({
+    itemId,
+    unit,
+    transaction: options.transaction,
+  });
 
   const normalizedPayload = normalizeUnitPayload(unit, unitValue);
   const totalUnitValue = normalizedPayload.unitValue;
@@ -523,7 +531,18 @@ const getAllFromDB = async (filters, options) => {
   const itemNameFilter = String(otherFilters.name || "").trim();
   delete otherFilters.name;
 
+  // itemId may be a comma-separated list (multi-product filter)
+  const itemIdFilter = String(otherFilters.itemId || "")
+    .split(",")
+    .map((id) => Number(id.trim()))
+    .filter((id) => Number.isInteger(id) && id > 0);
+  delete otherFilters.itemId;
+
   const andConditions = [];
+
+  if (itemIdFilter.length) {
+    andConditions.push({ itemId: { [Op.in]: itemIdFilter } });
+  }
 
   // Search
   if (searchTerm && searchTerm.trim()) {
@@ -728,10 +747,12 @@ const deleteIdFromDB = async (id, options = {}) => {
       },
     });
 
-    await itemFifo.unwindInbound({
+    await itemFifo.removeInbound({
       transaction: t,
       itemId: existing.itemId,
       quantity: oldUnitValue,
+      sourceType: "ItemPurchase",
+      sourceId: existing.Id,
     });
     await itemFifo.syncItemStockCost({
       transaction: t,
@@ -778,6 +799,7 @@ const updateOneFromDB = async (id, payload, options = {}) => {
       "variant",
       "variantKey",
       "supplierId",
+      "date",
     ],
     transaction: options.transaction,
   });
@@ -805,6 +827,11 @@ const updateOneFromDB = async (id, payload, options = {}) => {
     transaction: options.transaction,
   });
   if (!nextItem) throw new ApiError(404, "Item not found");
+  await assertUnitMatchesItemStock({
+    itemId: nextItemId,
+    unit: nextUnitInput,
+    transaction: options.transaction,
+  });
 
   const nextProductId =
     productId === "" || productId == null ? existing.productId : productId;
@@ -925,29 +952,47 @@ const updateOneFromDB = async (id, payload, options = {}) => {
       });
     }
 
-    // FIFO: unwind the old purchase layer, open a fresh one for the edit —
-    // unconditionally, since productId no longer exempts a purchase from
-    // FIFO tracking (see buildStockWhere above).
-    await itemFifo.unwindInbound({
-      transaction: t,
-      itemId: oldItemId,
-      quantity: oldUnitValue,
-    });
-    await itemFifo.syncItemStockCost({ transaction: t, itemId: oldItemId });
+    // FIFO: only this purchase's own layer changes — unconditionally, since
+    // productId no longer exempts a purchase from FIFO tracking (see
+    // buildStockWhere above). Same item: resize/re-price that layer in place.
+    // Different item: take it out of the old item, open one on the new item.
+    const nextUnitCost =
+      totalUnitValue > 0 ? toNumber(nextTotalCost) / totalUnitValue : 0;
+    const nextReceivedDate =
+      String(date || "").slice(0, 10) ||
+      existing.date ||
+      new Date().toISOString().slice(0, 10);
 
-    await itemFifo.openLayer({
-      transaction: t,
-      itemId: nextItemId,
-      unitCost:
-        totalUnitValue > 0 ? toNumber(nextTotalCost) / totalUnitValue : 0,
-      quantity: totalUnitValue,
-      receivedDate:
-        String(date || "").slice(0, 10) ||
-        existing.date ||
-        new Date().toISOString().slice(0, 10),
-      sourceType: "ItemPurchase",
-      sourceMovementId: id,
-    });
+    if (String(oldItemId) === String(nextItemId)) {
+      await itemFifo.reviseInbound({
+        transaction: t,
+        itemId: nextItemId,
+        sourceType: "ItemPurchase",
+        sourceId: id,
+        oldQuantity: oldUnitValue,
+        quantity: totalUnitValue,
+        unitCost: nextUnitCost,
+        receivedDate: nextReceivedDate,
+      });
+    } else {
+      await itemFifo.removeInbound({
+        transaction: t,
+        itemId: oldItemId,
+        quantity: oldUnitValue,
+        sourceType: "ItemPurchase",
+        sourceId: id,
+      });
+      await itemFifo.syncItemStockCost({ transaction: t, itemId: oldItemId });
+      await itemFifo.openLayer({
+        transaction: t,
+        itemId: nextItemId,
+        unitCost: nextUnitCost,
+        quantity: totalUnitValue,
+        receivedDate: nextReceivedDate,
+        sourceType: "ItemPurchase",
+        sourceMovementId: id,
+      });
+    }
     await itemFifo.syncItemStockCost({ transaction: t, itemId: nextItemId });
 
     const [count] = await Manufacture.update(data, {

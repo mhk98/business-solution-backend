@@ -140,9 +140,17 @@ const formatStockForDisplay = (record) => {
   };
 };
 
+// True when `unit` can be counted in a stock row kept in `stockUnit` — same
+// base unit (Kg/Gram → Gram, Liter/Ml → Ml), or the same plain unit (Pcs…).
+// "Pcs" into a Gram row is NOT compatible: it would be counted as grams.
+const isCompatibleStockUnit = (stockUnit, unit) =>
+  toBaseStockPayload(stockUnit, 1).unit.toLowerCase() ===
+  toBaseStockPayload(unit, 1).unit.toLowerCase();
+
 module.exports = {
   toNumber,
   toBaseStockPayload,
+  isCompatibleStockUnit,
   formatStockForDisplay,
   formatUnitValue,
 };

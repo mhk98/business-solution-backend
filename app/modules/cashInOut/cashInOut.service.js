@@ -217,6 +217,18 @@ const loanSumAttributes = [
   ],
 ];
 
+// Match the Book table's Date, Category, Supplier, Payment Mode,
+// Payment Status, Note and Amount columns within the same book.
+const sameCashEntry = (left, right) => {
+  const ids = ["bookId", "supplierId"];
+  const texts = ["category", "paymentMode", "paymentStatus", "note"];
+  const text = (value) => String(value ?? "").trim();
+  return Number(left.amount).toFixed(2) === Number(right.amount).toFixed(2)
+    && toDateOnly(left.date) === toDateOnly(right.date)
+    && ids.every((key) => normalizeOptionalId(left[key]) === normalizeOptionalId(right[key]))
+    && texts.every((key) => text(left[key]) === text(right[key]));
+};
+
 const insertIntoDB = async (data) => {
   const {
     amount,
@@ -271,6 +283,14 @@ const insertIntoDB = async (data) => {
   //   String(employeeId) !== "";
 
   return db.sequelize.transaction(async (t) => {
+    // Serialize creates across server processes, including when the book is empty.
+    if (!finalBookId) throw new ApiError(400, "Book is required!");
+    const lockedBook = await Book.findByPk(finalBookId, {
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+    if (!lockedBook) throw new ApiError(404, "Book not found");
+
     if (hasOwnerId) {
       if (!finalBookId) throw new ApiError(400, "Book is required!");
       const [owner, book] = await Promise.all([
@@ -313,13 +333,26 @@ const insertIntoDB = async (data) => {
     const { date: normalizedDate } = getMonthRange(date);
     const { voucherPrefix: _voucherPrefix, ...cashInOutData } = data;
     const categoryFields = await resolveCategoryFields(cashInOutData, t);
-    const result = await CashInOut.create(
-      {
-        ...cashInOutData,
-        ...categoryFields,
-        date: date || normalizedDate,
-        voucherNo,
+    const entryData = {
+      ...cashInOutData,
+      ...categoryFields,
+      date: date || normalizedDate,
+      voucherNo,
+    };
+    const recentEntries = await CashInOut.findAll({
+      where: {
+        bookId: finalBookId,
+        createdAt: { [Op.gt]: new Date(Date.now() - 60_000) },
       },
+      transaction: t,
+      // A locking read sees commits made while waiting for the book lock.
+      lock: t.LOCK.UPDATE,
+    });
+    if (recentEntries.some((entry) => sameCashEntry(entry, entryData))) {
+      throw new ApiError(409, "Duplicate entry: the same transaction was already recorded within the last 1 minute.");
+    }
+    const result = await CashInOut.create(
+      entryData,
       { transaction: t },
     );
 

@@ -3,7 +3,10 @@ const paginationHelpers = require("../../../helpers/paginationHelper");
 const {
   toBaseStockPayload,
 } = require("../../../helpers/unitConversionHelper");
-const { isAverageCostLive } = require("../../../shared/averageCostRunner");
+const {
+  isAverageCostLive,
+  lastAverageByStockRow,
+} = require("../../../shared/averageCostRunner");
 const db = require("../../../models");
 const ApiError = require("../../../error/ApiError");
 const {
@@ -26,12 +29,20 @@ const attachLastUnitCost = async (rows) => {
   if (!rows.length) return rows;
   const unitCostOf = await buildItemUnitCostResolver();
   // After weighted-average go-live the row's own average (cost ÷ quantity) is
-  // the unit cost; the last purchase price only fills in for empty stock.
+  // the unit cost. An empty row keeps its last average (a price never drops
+  // to 0 just because the stock ran out); the last purchase price only fills
+  // in when no average was ever recorded.
   const averageLive = await isAverageCostLive();
+  const lastAverage = averageLive
+    ? await lastAverageByStockRow("ItemStock", rows.map((row) => row.Id))
+    : new Map();
   return rows.map((row) => {
     const quantity = baseOf(row.unit, row.unitValue);
     const average = quantity > 0 ? Number(row.cost) / quantity : 0;
-    const unitCost = averageLive && quantity > 0 ? average : unitCostOf(row.itemId, average);
+    const unitCost =
+      averageLive && quantity > 0
+        ? average
+        : lastAverage.get(Number(row.Id)) || unitCostOf(row.itemId, average);
     return { ...row, unitCost, lastUnitCost: unitCost };
   });
 };

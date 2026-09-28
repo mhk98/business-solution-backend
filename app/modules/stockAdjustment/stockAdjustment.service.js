@@ -5,9 +5,14 @@ const {
   toNumber,
 } = require("../../../helpers/unitConversionHelper");
 const db = require("../../../models");
+const {
+  assertUnitMatchesItemStock,
+} = require("../../../shared/itemStockUnitGuard");
+
 const ApiError = require("../../../error/ApiError");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
 const itemFifo = require("../../../shared/itemFifoCostLayers");
+const { costAtCurrentAverage } = require("../../../shared/averageCost");
 const {
   StockAdjustmentSearchableFields,
 } = require("./stockAdjustment.constants");
@@ -196,7 +201,14 @@ const reconcileItemMasterStockAdjustment = async (
     }
 
     const updatedStockRow = await stockRow.update(
-      { unitValue: nextUnitValue },
+      {
+        unitValue: nextUnitValue,
+        cost: costAtCurrentAverage(
+          stockRow.cost,
+          currentStockPayload.unitValue,
+          nextUnitValue,
+        ),
+      },
       { transaction },
     );
     await itemFifo.syncItemStockCost({
@@ -238,6 +250,7 @@ const insertIntoDB = async (payload) => {
 
   const itemData = await Item.findOne({ where: { Id: itemId } });
   if (!itemData) throw new ApiError(404, "Item not found");
+  await assertUnitMatchesItemStock({ itemId, unit });
 
   const normalizedPayload = toBaseStockPayload(unit, unitValue);
   const totalUnitValue = normalizedPayload.unitValue;
@@ -329,6 +342,11 @@ const insertIntoDB = async (payload) => {
           variant: normalizedVariant,
           variantKey: normalizedVariantKey,
           unitValue: stock === "In" ? plusQuantity : minusQuantity,
+          cost: costAtCurrentAverage(
+            stockRow.cost,
+            currentStockPayload.unitValue,
+            stock === "In" ? plusQuantity : minusQuantity,
+          ),
           unit: currentStockPayload.isConvertedUnit
             ? currentStockPayload.unit
             : normalizedPayload.unit,
@@ -591,6 +609,10 @@ const updateOneFromDB = async (id, payload) => {
         );
   const totalUnitValue = normalizedPayload.unitValue;
   const nextItemId = itemId || existing.itemId;
+  await assertUnitMatchesItemStock({
+    itemId: nextItemId,
+    unit: unit === "" || unit == null ? existing.unit : unit,
+  });
   const nextProductId =
     productId === "" || productId == null ? existing.productId : productId;
   const nextVariant =

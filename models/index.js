@@ -2544,6 +2544,16 @@ const ensureCourierNoEntryColumns = async () => {
   const tableName = db.courierNoEntry.getTableName();
   const tableDefinition = await queryInterface.describeTable(tableName);
 
+  // In the model since 2026-07-25 but never added here — Kafela's table was
+  // missing it, so every Courier No Entry query (and the inventory
+  // reconciler) failed with "Unknown column 'courierNo'".
+  if (!tableDefinition.courierNo) {
+    await queryInterface.addColumn(tableName, "courierNo", {
+      type: DataTypes.STRING,
+      allowNull: true,
+    });
+  }
+
   if (!tableDefinition.courierStatus) {
     await queryInterface.addColumn(tableName, "courierStatus", {
       type: DataTypes.STRING(32),
