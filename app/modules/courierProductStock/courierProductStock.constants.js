@@ -7,11 +7,9 @@ const CourierProductStockFilterAbleFileds = [
 
 const CourierProductStockSearchableFields = ["status"];
 
-const CourierProductStockStatusOptions = [
-  "Pending",
-  "Approval Pending",
-  "Return Request",
-];
+// "Approval Pending" is no longer offered (it stays in the model ENUM only so
+// any older rows still load).
+const CourierProductStockStatusOptions = ["Pending", "Return Request"];
 
 module.exports = {
   CourierProductStockFilterAbleFileds,

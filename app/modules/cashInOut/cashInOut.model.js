@@ -82,6 +82,15 @@ module.exports = (sequelize, DataTypes) => {
           notEmpty: true,
         },
       },
+      // Supplier discount recorded with a Book Cash Out entry. Non-cash: it
+      // never counts toward Cash In/Out totals (those sum `amount` only); it
+      // mirrors into a SupplierHistory "Discount" row that reduces the due.
+      // A discount-only entry has amount = 0.
+      discountAmount: {
+        type: DataTypes.DECIMAL(15, 2),
+        allowNull: false,
+        defaultValue: 0,
+      },
       voucherNo: {
         type: DataTypes.STRING,
         allowNull: true,

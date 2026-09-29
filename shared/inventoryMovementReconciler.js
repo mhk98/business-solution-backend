@@ -152,6 +152,16 @@ const calculateExpectedInventoryForProduct = async (
   );
   receivedRows.forEach((row) => applyMovement(state, row, 1));
 
+  // Hand corrections accepted from the Stock Audit ("Keep Current").
+  if (db.inventoryAuditAdjustment) {
+    const adjustmentRows = await fetchRows(
+      db.inventoryAuditAdjustment,
+      { productId },
+      transaction,
+    );
+    adjustmentRows.forEach((row) => applyMovement(state, row, 1));
+  }
+
   if (inventoryRefs.length) {
     const inventoryRefWhere = { productId: inventoryRefs };
     const [returnRows, inTransitRows, purchaseReturnRows, damageRows, courierRows] =

@@ -8,7 +8,19 @@ const Notification = db.notification;
 const User = db.user;
 const SupplierHistory = db.supplierHistory;
 const DollarSupplierHistory = db.dollarSupplierHistory;
+const { summarizeLoan, sumLoanBalances, transactionType, ledgerEntryType } = require("../loan/loan.accounting");
 const Loan = db.loan;
+const validateLoanEntry = async (payload, transaction) => {
+  if (!payload.loanId) return;
+  const loan = await Loan.findByPk(payload.loanId, { transaction, lock: transaction.LOCK.UPDATE });
+  if (!loan) throw new ApiError(400, "Loan account not found");
+  if (!["CashIn", "CashOut"].includes(payload.paymentStatus)) throw new ApiError(400, "Loan paymentStatus must be CashIn or CashOut");
+  if (!Number.isFinite(Number(payload.amount)) || Number(payload.amount) <= 0) throw new ApiError(400, "Loan principal must be a positive amount");
+  if (payload.loanTransactionType && payload.loanTransactionType !== transactionType(loan.loanType, payload.paymentStatus)) {
+    throw new ApiError(400, "Loan transaction type does not match account and cash direction");
+  }
+  payload.lender = loan.name;
+};
 const LenderHistory = db.lenderHistory;
 const Category = db.category;
 const Owner = db.owner;
@@ -224,6 +236,7 @@ const sameCashEntry = (left, right) => {
   const texts = ["category", "paymentMode", "paymentStatus", "note"];
   const text = (value) => String(value ?? "").trim();
   return Number(left.amount).toFixed(2) === Number(right.amount).toFixed(2)
+    && Number(left.discountAmount || 0).toFixed(2) === Number(right.discountAmount || 0).toFixed(2)
     && toDateOnly(left.date) === toDateOnly(right.date)
     && ids.every((key) => normalizeOptionalId(left[key]) === normalizeOptionalId(right[key]))
     && texts.every((key) => text(left[key]) === text(right[key]));
@@ -283,6 +296,7 @@ const insertIntoDB = async (data) => {
   //   String(employeeId) !== "";
 
   return db.sequelize.transaction(async (t) => {
+    await validateLoanEntry(data, t);
     // Serialize creates across server processes, including when the book is empty.
     if (!finalBookId) throw new ApiError(400, "Book is required!");
     const lockedBook = await Book.findByPk(finalBookId, {
@@ -357,17 +371,35 @@ const insertIntoDB = async (data) => {
     );
 
     if (hasSupplierId) {
-      const supplierData = {
-        supplierId,
-        bookId,
-        cashInOutId: result.Id,
-        amount,
-        status: "Paid",
-        date,
-        file,
-      };
-
-      await SupplierHistory.create(supplierData, { transaction: t });
+      // Cash part → "Paid" row; discount part (non-cash) → "Discount" row.
+      if (Number(amount || 0) > 0) {
+        await SupplierHistory.create(
+          {
+            supplierId,
+            bookId,
+            cashInOutId: result.Id,
+            amount,
+            status: "Paid",
+            date,
+            file,
+          },
+          { transaction: t },
+        );
+      }
+      if (Number(data.discountAmount || 0) > 0) {
+        await SupplierHistory.create(
+          {
+            supplierId,
+            bookId,
+            cashInOutId: result.Id,
+            amount: data.discountAmount,
+            status: "Discount",
+            date,
+            file,
+          },
+          { transaction: t },
+        );
+      }
     }
 
     // Dollar Supplier — CashOut only (controller nulls dollarSupplierId for
@@ -867,109 +899,103 @@ const getAllFromDB = async (filters, options) => {
   };
 };
 
+const groupedLoanBalances = async (where) => {
+  const groups = await LenderHistory.findAll({
+    attributes: ["loanId", ...loanSumAttributes, [db.Sequelize.fn("MAX", db.Sequelize.col("date")), "lastDate"]],
+    where, group: ["loanId"], raw: true,
+  });
+  const loans = groups.length ? await Loan.findAll({ where: { Id: { [Op.in]: groups.map((row) => row.loanId) } }, raw: true }) : [];
+  const byId = new Map(loans.map((loan) => [Number(loan.Id), loan]));
+  return groups.filter((row) => byId.has(Number(row.loanId))).map((row) => {
+    const loan = byId.get(Number(row.loanId));
+    return {
+      loanId: row.loanId, lender: loan.name, loanType: loan.loanType,
+      ...summarizeLoan(loan.loanType, row.totalLoanTaken, row.totalLoanGiven),
+      lastDate: row.lastDate,
+    };
+  });
+};
 const getLoanSummaries = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
-  const where = buildLenderHistoryWhere(filters);
-
-  const data = await LenderHistory.findAll({
-    attributes: [
-      "loanId",
-      "lender",
-      ...loanSumAttributes,
-      [db.Sequelize.fn("MAX", db.Sequelize.col("date")), "lastDate"],
-    ],
-    where,
-    include: [{ model: Loan, as: "loan", attributes: [], required: false }],
-    group: ["loanId", "lender"],
-    order: [[db.Sequelize.fn("MAX", db.Sequelize.col("date")), "DESC"]],
-    offset: skip,
-    limit,
-    raw: true,
-  });
-
-  const [count, totals] = await Promise.all([
-    LenderHistory.count({
-      where,
-      distinct: true,
-      col: "lender",
-    }),
-    LenderHistory.findOne({
-      attributes: loanSumAttributes,
-      where,
-      raw: true,
-    }),
-  ]);
-
-  const totalLoanTaken = Number(totals?.totalLoanTaken || 0);
-  const totalLoanGiven = Number(totals?.totalLoanGiven || 0);
-
+  const rows = await groupedLoanBalances(buildLenderHistoryWhere(filters));
+  rows.sort((a, b) => String(b.lastDate).localeCompare(String(a.lastDate)));
   return {
-    meta: {
-      count,
-      totalLoanTaken,
-      totalLoanGiven,
-      netBalance: totalLoanTaken - totalLoanGiven,
-      page,
-      limit,
-    },
-    data: data.map((row) => {
-      const taken = Number(row.totalLoanTaken || 0);
-      const given = Number(row.totalLoanGiven || 0);
-
-      return {
-        loanId: row.loanId,
-        lender: row.lender,
-        totalLoanTaken: taken,
-        totalLoanGiven: given,
-        netBalance: taken - given,
-        lastDate: row.lastDate,
-      };
-    }),
+    meta: { count: rows.length, page, limit, ...sumLoanBalances(rows) },
+    data: rows.slice(skip, skip + limit),
   };
 };
 
 const getLoanHistory = async (loanIdentifier, filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
   const identifier = String(loanIdentifier || "").trim();
-  const isNumericId = identifier && /^\d+$/.test(identifier);
   const where = buildLenderHistoryWhere({
     ...filters,
-    ...(isNumericId ? { loanId: Number(identifier) } : { lender: identifier }),
+    ...(/^\d+$/.test(identifier) ? { loanId: Number(identifier) } : { lender: identifier }),
   });
-
-  const [data, count, totals] = await Promise.all([
+  // The whole party ledger (unfiltered) drives the running balance so a
+  // search/date filter never changes a row's balance or entry type.
+  const ledgerWhere = buildLenderHistoryWhere(
+    /^\d+$/.test(identifier) ? { loanId: Number(identifier) } : { lender: identifier },
+  );
+  const [data, count, balances, ledgerRows] = await Promise.all([
     LenderHistory.findAll({
-      where,
-      include: [{ model: Loan, as: "loan", required: false }],
-      offset: skip,
-      limit,
-      paranoid: true,
-      order:
-        options.sortBy && options.sortOrder
-          ? [[options.sortBy, options.sortOrder.toUpperCase()]]
-          : [["date", "DESC"]],
+      where, include: [{ model: Loan, as: "loan", required: false }],
+      offset: skip, limit, paranoid: true,
+      order: options.sortBy && options.sortOrder ? [[options.sortBy, options.sortOrder.toUpperCase()]] : [["date", "DESC"], ["Id", "DESC"]],
     }),
     LenderHistory.count({ where }),
-    LenderHistory.findOne({
-      attributes: loanSumAttributes,
-      where,
+    groupedLoanBalances(where),
+    LenderHistory.findAll({
+      where: ledgerWhere,
+      attributes: ["Id", "date", "amount", "paymentStatus"],
+      order: [["date", "ASC"], ["Id", "ASC"]],
       raw: true,
     }),
   ]);
 
-  const totalLoanTaken = Number(totals?.totalLoanTaken || 0);
-  const totalLoanGiven = Number(totals?.totalLoanGiven || 0);
+  const { startDate, endDate } = filters;
+  const ledgerById = new Map();
+  let running = 0;
+  let openingBalance = 0;
+  let closingBalance = 0;
+  let periodCashIn = 0;
+  let periodCashOut = 0;
+  ledgerRows.forEach((row) => {
+    const amount = Number(row.amount || 0);
+    const delta = row.paymentStatus === "CashIn" ? amount : row.paymentStatus === "CashOut" ? -amount : 0;
+    const date = toDateOnly(row.date);
+    ledgerById.set(Number(row.Id), {
+      balanceBefore: running,
+      runningBalance: running + delta,
+      ledgerEntryType: ledgerEntryType(running, row.paymentStatus, amount),
+    });
+    running += delta;
+    const beforeRange = startDate && date < toDateOnly(startDate);
+    const inRange = !beforeRange && (!endDate || date <= toDateOnly(endDate));
+    if (beforeRange) openingBalance = running;
+    if (!endDate || date <= toDateOnly(endDate)) closingBalance = running;
+    if (inRange && delta > 0) periodCashIn += delta;
+    if (inRange && delta < 0) periodCashOut -= delta;
+  });
 
   return {
     meta: {
-      count,
-      totalLoanTaken,
-      totalLoanGiven,
-      netBalance: totalLoanTaken - totalLoanGiven,
-      page,
-      limit,
+      count, page, limit, ...sumLoanBalances(balances),
+      openingBalance,
+      closingBalance,
+      periodCashIn,
+      periodCashOut,
+      payable: Math.max(closingBalance, 0),
+      receivable: Math.max(-closingBalance, 0),
     },
-    data,
+    data: data.map((item) => {
+      const row = item.get ? item.get({ plain: true }) : item;
+      return {
+        ...row,
+        loanTransactionType: transactionType(row.loan?.loanType, row.paymentStatus),
+        ...ledgerById.get(Number(row.Id)),
+      };
+    }),
   };
 };
 
@@ -1073,6 +1099,7 @@ const updateOneFromDB = async (id, payload) => {
 
   console.log("supplierDetails", payload);
   return db.sequelize.transaction(async (t) => {
+    await validateLoanEntry(payload, t);
     if (hasOwnerId) {
       if (!finalBookId) throw new ApiError(400, "Book is required!");
       const [owner, book] = await Promise.all([
@@ -1118,41 +1145,49 @@ const updateOneFromDB = async (id, payload) => {
     // cashInOutId), same pattern as Dollar Supplier below, so editing the
     // Book entry updates the existing row instead of piling up duplicates,
     // and clearing the supplier removes the mirrored row.
-    const existingSupplierHistory = await SupplierHistory.findOne({
-      where: { cashInOutId: id },
+    // Cash part → one "Paid" row, discount part → one "Discount" row, each
+    // upserted by (cashInOutId, status) from the entry's saved values.
+    const savedEntry = await CashInOut.findByPk(id, {
+      attributes: ["amount", "discountAmount"],
       transaction: t,
-      paranoid: false,
     });
-
-    if (hasSupplierId) {
-      const supplierData = {
-        supplierId,
-        bookId,
-        cashInOutId: id,
-        status: "Paid",
-        date,
-        file,
-        ...(amount !== undefined && amount !== null && String(amount) !== ""
-          ? { amount }
-          : {}),
-      };
-
-      if (existingSupplierHistory) {
-        if (
-          existingSupplierHistory.deletedAt &&
-          typeof existingSupplierHistory.restore === "function"
-        ) {
-          await existingSupplierHistory.restore({ transaction: t });
+    const upsertSupplierRow = async (status, rowAmount) => {
+      const existingRow = await SupplierHistory.findOne({
+        where: {
+          cashInOutId: id,
+          status:
+            status === "Discount" ? "Discount" : { [Op.ne]: "Discount" },
+        },
+        transaction: t,
+        paranoid: false,
+      });
+      if (hasSupplierId && Number(rowAmount || 0) > 0) {
+        const rowData = {
+          supplierId,
+          bookId,
+          cashInOutId: id,
+          status,
+          date,
+          file,
+          amount: rowAmount,
+        };
+        if (existingRow) {
+          if (
+            existingRow.deletedAt &&
+            typeof existingRow.restore === "function"
+          ) {
+            await existingRow.restore({ transaction: t });
+          }
+          await existingRow.update(rowData, { transaction: t });
+        } else {
+          await SupplierHistory.create(rowData, { transaction: t });
         }
-        await existingSupplierHistory.update(supplierData, {
-          transaction: t,
-        });
-      } else {
-        await SupplierHistory.create(supplierData, { transaction: t });
+      } else if (existingRow && !existingRow.deletedAt) {
+        await existingRow.destroy({ transaction: t });
       }
-    } else if (existingSupplierHistory) {
-      await existingSupplierHistory.destroy({ transaction: t });
-    }
+    };
+    await upsertSupplierRow("Paid", savedEntry?.amount);
+    await upsertSupplierRow("Discount", savedEntry?.discountAmount);
 
     // Dollar Supplier — keep one history row per cash entry (upsert by
     // cashInOutId) so editing the Book entry doesn't pile up duplicates.

@@ -121,6 +121,20 @@ const fixStockMismatch = catchAsync(async (req, res) => {
   });
 });
 
+const acceptStockMismatch = catchAsync(async (req, res) => {
+  const result = await InventoryMasterService.acceptStockMismatchFromDB(
+    req.params.productId,
+    req.user?.Id,
+  );
+
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Current stock kept!!",
+    data: result,
+  });
+});
+
 const InventoryMasterController = {
   getAllFromDB,
   insertIntoDB,
@@ -131,6 +145,7 @@ const InventoryMasterController = {
   getAllFromDBWithoutQuery,
   getLowStockProducts,
   getStockMismatchAudit,
+  acceptStockMismatch,
   fixStockMismatch,
 };
 

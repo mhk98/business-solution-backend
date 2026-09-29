@@ -106,54 +106,47 @@ const getAllFromDBWithoutQuery = async () => {
   });
 };
 
-// Period ledger consumed by the shared "All Books" / Monthly Reporting Book
+// Courier product stock for the shared "All Books" / Monthly Reporting Book
 // statement PDF and the Dashboard's Print/Download Book action (see
-// inventoryOverview.service.js's getInventoryStockReport).
-// Summarised one row per status for the "All Books" / Monthly Reporting Book
-// statement PDF: `periodAmount` = that status's total inside [from, to],
-// `openingAmount` = its total dated strictly before `from`, `endingAmount` =
-// the two combined.
+// inventoryOverview.service.js's getInventoryStockReport). Each entry is a
+// stock snapshot, not a movement, so per status the balance is the amount of
+// the latest entry: `endingAmount` = latest dated <= `to`, `openingAmount` =
+// latest dated < `from`; `periodAmount` mirrors the ending snapshot (the
+// amount shown for the period) and `date` is that latest entry's date.
 const getCourierProductStockReport = async ({ from, to } = {}) => {
-  const { fn, col } = db.Sequelize;
-  const dateRange = {};
-  if (from) dateRange[Op.gte] = from;
-  if (to) dateRange[Op.lte] = to;
-  const periodWhere = from || to ? { date: dateRange } : {};
-
-  const sumByStatus = (where) =>
-    CourierProductStock.findAll({
-      where,
-      attributes: ["status", [fn("SUM", col("amount")), "total"]],
-      group: ["status"],
+  const latestByStatus = async (dateCondition) => {
+    const rows = await CourierProductStock.findAll({
+      where: dateCondition ? { date: dateCondition } : {},
+      attributes: ["Id", "status", "date", "amount"],
+      order: [["date", "DESC"], ["createdAt", "DESC"], ["Id", "DESC"]],
       raw: true,
     });
+    const latest = new Map();
+    rows.forEach((row) => {
+      if (!latest.has(row.status)) latest.set(row.status, row);
+    });
+    return latest;
+  };
 
-  const [periodRows, openingRows] = await Promise.all([
-    sumByStatus(periodWhere),
-    from
-      ? sumByStatus({ date: { [Op.lt]: from } })
-      : Promise.resolve([]),
+  const [endingByStatus, openingByStatus] = await Promise.all([
+    latestByStatus(to ? { [Op.lte]: to } : null),
+    from ? latestByStatus({ [Op.lt]: from }) : Promise.resolve(new Map()),
   ]);
 
-  const periodByStatus = new Map(
-    periodRows.map((row) => [row.status, Number(row.total) || 0]),
-  );
-  const openingByStatus = new Map(
-    openingRows.map((row) => [row.status, Number(row.total) || 0]),
-  );
-
   const data = [
-    ...new Set([...periodByStatus.keys(), ...openingByStatus.keys()]),
+    ...new Set([...endingByStatus.keys(), ...openingByStatus.keys()]),
   ]
     .sort()
     .map((status) => {
-      const openingAmount = openingByStatus.get(status) || 0;
-      const periodAmount = periodByStatus.get(status) || 0;
+      const ending = endingByStatus.get(status);
+      const openingAmount = Number(openingByStatus.get(status)?.amount || 0);
+      const endingAmount = Number(ending?.amount || 0);
       return {
         status,
+        date: ending?.date || null,
         openingAmount,
-        periodAmount,
-        endingAmount: openingAmount + periodAmount,
+        periodAmount: endingAmount,
+        endingAmount,
       };
     });
 

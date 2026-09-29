@@ -38,6 +38,12 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.DECIMAL(15, 4),
         allowNull: true,
       },
+      // Links a due row back to the DM Expense (Cash In) entry that created
+      // it, so editing/deleting that entry keeps the supplier balance in sync.
+      marketingExpenseId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       status: {
         type: DataTypes.ENUM("Paid", "Unpaid"),
         allowNull: true,

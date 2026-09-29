@@ -25,9 +25,11 @@ const STOCK_DELETE_SERVICES = [
   "packagingItemStockAdjustment", "packagingFactoryStockAdjustment",
 ];
 // Same idea for documents whose delete must also clear a linked ledger row
-// (Item Requisition → its supplier due), where the module folder name differs.
+// (Item Requisition → its supplier due; DM Expense Cash In → its dollar
+// supplier due).
 const LINKED_DELETE_SERVICE_PATHS = {
   itemRequisition: "../modules/itemRequision/itemRequision.service",
+  marketingExpense: "../modules/marketingExpense/marketingExpense.service",
 };
 const stockDeleteService = (modelKey) => {
   if (LINKED_DELETE_SERVICE_PATHS[modelKey]) {

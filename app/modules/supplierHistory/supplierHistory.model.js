@@ -41,8 +41,10 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      // "Discount" = supplier waived part of the due: reduces due like a
+      // payment but no cash moves, so no Book entry is created for it.
       status: {
-        type: DataTypes.ENUM("Paid", "Unpaid"),
+        type: DataTypes.ENUM("Paid", "Unpaid", "Discount"),
         allowNull: true,
         defaultValue: "Unpaid",
       },

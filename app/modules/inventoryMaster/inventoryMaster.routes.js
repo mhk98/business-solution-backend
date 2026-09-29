@@ -46,6 +46,12 @@ router.post(
   requireMenuPermission("inventory"),
   InventoryMasterController.fixStockMismatch,
 );
+router.post(
+  "/audit/accept/:productId",
+  auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
+  requireMenuPermission("inventory"),
+  InventoryMasterController.acceptStockMismatch,
+);
 router.get(
   "/:id",
   auth(),

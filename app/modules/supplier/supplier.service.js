@@ -7,10 +7,10 @@ const { SupplierSearchableFields } = require("./supplier.constants");
 const Supplier = db.supplier;
 const SupplierHistory = db.supplierHistory;
 
-// A supplier's balance is one running number: total paid minus total owed
-// (gross due). Every SupplierHistory row is either "Paid" or "Unpaid" — never
-// both — so this is a plain aggregate, not a per-row guess. A positive net
-// balance is an advance (they've been overpaid); a negative one is due.
+// A supplier's balance is one running number: total paid plus discounts
+// received minus total owed (gross due). Every SupplierHistory row is exactly
+// one of "Paid", "Unpaid" or "Discount", so this is a plain aggregate. A
+// positive net balance is an advance (they've been overpaid); a negative one is due.
 const getHistoryDateWhere = ({ startDate, endDate } = {}) => {
   for (const value of [startDate, endDate]) {
     if (!value) continue;
@@ -47,6 +47,15 @@ const getBalanceMap = async (supplierIds, dateWhere = {}) => {
         db.Sequelize.fn(
           "SUM",
           db.Sequelize.literal(
+            "CASE WHEN status = 'Discount' THEN amount ELSE 0 END",
+          ),
+        ),
+        "totalDiscount",
+      ],
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.literal(
             "CASE WHEN status = 'Unpaid' THEN amount ELSE 0 END",
           ),
         ),
@@ -64,6 +73,7 @@ const getBalanceMap = async (supplierIds, dateWhere = {}) => {
   return balanceRows.reduce((acc, row) => {
     acc[row.supplierId] = {
       totalPaid: Number(row.totalPaid || 0),
+      totalDiscount: Number(row.totalDiscount || 0),
       grossDue: Number(row.grossDue || 0),
     };
     return acc;
@@ -85,14 +95,16 @@ const addBalancesToSuppliers = async (suppliers, dateWhere = {}) => {
   return plainSuppliers.map((supplier) => {
     const balance = balanceMap[supplier.Id] || {};
     const totalPaid = Number(balance.totalPaid || 0);
+    const totalDiscount = Number(balance.totalDiscount || 0);
     const grossDue = Number(balance.grossDue || 0);
-    const netBalance = totalPaid - grossDue;
+    const netBalance = totalPaid + totalDiscount - grossDue;
     const totalAdvance = Math.max(netBalance, 0);
     const totalUnpaid = Math.max(-netBalance, 0);
 
     return {
       ...supplier,
       totalPaid,
+      totalDiscount,
       totalAdvance,
       totalUnpaid,
       totalDue: totalUnpaid,
@@ -116,7 +128,7 @@ const getSupplierReceivableReport = async ({ from, to } = {}) => {
           db.Sequelize.fn(
             "SUM",
             db.Sequelize.literal(
-              "CASE WHEN status = 'Paid' THEN amount ELSE 0 END",
+              "CASE WHEN status IN ('Paid', 'Discount') THEN amount ELSE 0 END",
             ),
           ),
           "totalPaid",
@@ -214,7 +226,7 @@ const getSupplierDueReport = async ({ from, to } = {}) => {
           db.Sequelize.fn(
             "SUM",
             db.Sequelize.literal(
-              "CASE WHEN status = 'Paid' THEN amount ELSE 0 END",
+              "CASE WHEN status IN ('Paid', 'Discount') THEN amount ELSE 0 END",
             ),
           ),
           "totalPaid",

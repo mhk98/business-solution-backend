@@ -9,6 +9,7 @@ const ReturnProductRoutes = require("../modules/returnProduct/returnProduct.rout
 const InTransitProductRoutes = require("../modules/inTransitProduct/inTransitProduct.routes");
 const CourierNoEntryRoutes = require("../modules/courierNoEntry/courierNoEntry.routes");
 const CourierProductStockRoutes = require("../modules/courierProductStock/courierProductStock.routes");
+const CourierBalanceRoutes = require("../modules/courierBalance/courierBalance.routes");
 const SalesDueRoutes = require("../modules/salesDue/salesDue.routes");
 const SalaryAdvanceRoutes = require("../modules/salaryAdvance/salaryAdvance.routes");
 const MetaRoutes = require("../modules/meta/meta.routes");
@@ -296,6 +297,10 @@ const moduleRoutes = [
   {
     path: "/courier-product-stock",
     route: CourierProductStockRoutes,
+  },
+  {
+    path: "/courier-balance",
+    route: CourierBalanceRoutes,
   },
   {
     path: "/sales-due",

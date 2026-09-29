@@ -10,6 +10,9 @@ const {
   getCourierProductStockReport,
 } = require("../courierProductStock/courierProductStock.service");
 const {
+  getCourierBalanceReport,
+} = require("../courierBalance/courierBalance.service");
+const {
   getSupplierReceivableReport,
   getSupplierDueReport,
 } = require("../supplier/supplier.service");
@@ -1610,6 +1613,7 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     packagingManufacturerDue,
     lenderPayable,
     directorInvestment,
+    courierBalance,
     cashOpeningBalance,
     cashOpeningBalanceByPaymentMode,
     cashEndingBalance,
@@ -1637,6 +1641,7 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     getPackagingManufacturerDueReport({ from, to }),
     getLenderPayableReport({ from, to }),
     getDirectorInvestmentReport(),
+    getCourierBalanceReport({ from, to }),
     getCashOpeningBalance(from),
     getCashOpeningBalanceByPaymentMode(from),
     getCashEndingBalance(to),
@@ -1735,6 +1740,7 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     packagingManufacturerDue,
     lenderPayable,
     directorInvestment,
+    courierBalance,
   };
 };
 

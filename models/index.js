@@ -150,6 +150,11 @@ db.inventoryMaster =
     db.sequelize,
     DataTypes,
   );
+db.inventoryAuditAdjustment =
+  require("../app/modules/inventoryMaster/inventoryAuditAdjustment.model")(
+    db.sequelize,
+    DataTypes,
+  );
 
 db.inTransitProduct =
   require("../app/modules/inTransitProduct/inTransitProduct.model")(
@@ -163,6 +168,11 @@ db.courierNoEntry =
   );
 db.courierProductStock =
   require("../app/modules/courierProductStock/courierProductStock.model")(
+    db.sequelize,
+    DataTypes,
+  );
+db.courierBalance =
+  require("../app/modules/courierBalance/courierBalance.model")(
     db.sequelize,
     DataTypes,
   );
@@ -4126,11 +4136,33 @@ const ensureCashInOutRefNoColumn = async () => {
       allowNull: true,
     });
   }
+
+  if (!tableDefinition.discountAmount) {
+    await queryInterface.addColumn(tableName, "discountAmount", {
+      type: DataTypes.DECIMAL(15, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
 };
 
 // SupplierHistory gained a manufactureId link back to the Item Purchase
 // record it was created from, so editing that purchase can find and adjust
 // the matching due/paid row instead of leaving it stale.
+// CourierBalances was first created with a required `courierName`; the field
+// was dropped from the form, so keep the column but let it be empty.
+const ensureCourierBalanceColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.courierBalance.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+  if (tableDefinition.courierName && !tableDefinition.courierName.allowNull) {
+    await queryInterface.changeColumn(tableName, "courierName", {
+      type: DataTypes.STRING,
+      allowNull: true,
+    });
+  }
+};
+
 const ensureSupplierHistoryManufactureColumn = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.supplierHistory.getTableName();
@@ -4159,6 +4191,15 @@ const ensureSupplierHistoryManufactureColumn = async () => {
     await queryInterface.addColumn(tableName, "itemRequisitionId", {
       type: DataTypes.INTEGER(10),
       allowNull: true,
+    });
+  }
+
+  // Supplier discount rows (status "Discount") reduce due without a cash entry.
+  if (!String(tableDefinition.status?.type || "").includes("'Discount'")) {
+    await queryInterface.changeColumn(tableName, "status", {
+      type: DataTypes.ENUM("Paid", "Unpaid", "Discount"),
+      allowNull: true,
+      defaultValue: "Unpaid",
     });
   }
 };
@@ -4227,6 +4268,58 @@ const ensureDollarSupplierHistoryColumns = async () => {
       allowNull: true,
     });
   }
+  if (!tableDefinition.marketingExpenseId) {
+    await queryInterface.addColumn(tableName, "marketingExpenseId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+};
+
+// Due rows created from DM Expense before `marketingExpenseId` existed carry
+// no link. Link each unlinked due to the DM Expense Cash In with the same
+// dollar supplier, date and amount — only when exactly one of each matches,
+// so an ambiguous pair is left alone. Idempotent.
+const linkDollarSupplierDuesToMarketingExpenses = async () => {
+  const expenses = await db.marketingExpense.findAll({
+    where: { dollarSupplierId: { [Op.ne]: null }, paymentStatus: "CashIn" },
+    attributes: ["Id", "dollarSupplierId", "date", "amount"],
+    raw: true,
+  });
+  if (!expenses.length) return;
+  const linkedIds = new Set(
+    (
+      await db.dollarSupplierHistory.findAll({
+        where: { marketingExpenseId: { [Op.ne]: null } },
+        attributes: ["marketingExpenseId"],
+        paranoid: false,
+        raw: true,
+      })
+    ).map((row) => Number(row.marketingExpenseId)),
+  );
+  const dues = await db.dollarSupplierHistory.findAll({
+    where: { marketingExpenseId: null, cashInOutId: null, status: "Unpaid" },
+    attributes: ["Id", "dollarSupplierId", "date", "amount"],
+    raw: true,
+  });
+  const keyOf = (row) =>
+    `${row.dollarSupplierId}|${String(row.date).slice(0, 10)}|${Math.round(Number(row.amount || 0))}`;
+  const group = (rows) => {
+    const map = new Map();
+    rows.forEach((row) => map.set(keyOf(row), [...(map.get(keyOf(row)) || []), row]));
+    return map;
+  };
+  const expenseGroups = group(expenses.filter((row) => !linkedIds.has(Number(row.Id))));
+  const dueGroups = group(dues);
+  for (const [key, expenseRows] of expenseGroups) {
+    const dueRows = dueGroups.get(key) || [];
+    if (expenseRows.length === 1 && dueRows.length === 1) {
+      await db.dollarSupplierHistory.update(
+        { marketingExpenseId: expenseRows[0].Id },
+        { where: { Id: dueRows[0].Id } },
+      );
+    }
+  }
 };
 
 // MarketingExpense gained dollar-supplier / USD purchase columns.
@@ -4258,11 +4351,20 @@ const ensureMarketingExpenseColumns = async () => {
 db.sequelize
   .sync({ force: false })
   .then(async () => {
+    const loanTable = db.loan.getTableName();
+    const loanColumns = await db.sequelize.getQueryInterface().describeTable(loanTable);
+    if (!loanColumns.loanType) {
+      await db.sequelize.getQueryInterface().addColumn(loanTable, "loanType", {
+        type: DataTypes.STRING(16), allowNull: false, defaultValue: "BORROWED",
+      });
+    }
     await ensureCashInOutRefNoColumn();
     await ensureSupplierHistoryManufactureColumn();
+    await ensureCourierBalanceColumns();
     await ensureManufacturerTransactionCashInOutColumns();
     await ensureDollarSupplierHistoryColumns();
     await ensureMarketingExpenseColumns();
+    await linkDollarSupplierDuesToMarketingExpenses();
     await ensureHolidayRangeColumns();
     await ensurePerformanceTrackerEntryColumns();
     await ensureAttendanceDeviceApiKeyColumn();

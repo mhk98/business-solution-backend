@@ -13,12 +13,13 @@ const Book = db.book;
 
 const toPlain = (row) => (row?.get ? row.get({ plain: true }) : row);
 
-// A SupplierHistory row's own status ("Paid"/"Unpaid") is authoritative —
-// it's a strict enum, never guessed from note text or which module wrote
-// it. "Due" is just the display label for "Unpaid".
+// A SupplierHistory row's own status ("Paid"/"Unpaid"/"Discount") is
+// authoritative — it's a strict enum, never guessed from note text or which
+// module wrote it. "Due" is just the display label for "Unpaid".
 const addComputedStatus = (rows) =>
   rows.map(toPlain).map((row) => {
-    const computedStatus = row.status === "Paid" ? "Paid" : "Due";
+    const computedStatus =
+      row.status === "Paid" || row.status === "Discount" ? row.status : "Due";
 
     return {
       ...row,
@@ -32,19 +33,22 @@ const addComputedStatus = (rows) =>
 // property — see addComputedStatus above for why a single row is only ever
 // Paid or Due.
 const getComputedSummary = async (where) => {
-  const [total, totalPaid, totalUnpaid] = await Promise.all([
+  const [total, totalPaid, totalDiscount, totalUnpaid] = await Promise.all([
     SupplierHistory.count({ where }),
     SupplierHistory.sum("amount", { where: { ...where, status: "Paid" } }),
+    SupplierHistory.sum("amount", { where: { ...where, status: "Discount" } }),
     SupplierHistory.sum("amount", { where: { ...where, status: "Unpaid" } }),
   ]);
 
   const paid = Number(totalPaid || 0);
+  const discount = Number(totalDiscount || 0);
   const grossDue = Number(totalUnpaid || 0);
-  const netBalance = paid - grossDue;
+  const netBalance = paid + discount - grossDue;
 
   return {
     total,
     totalPaid: paid,
+    totalDiscount: discount,
     totalAdvance: Math.max(netBalance, 0),
     grossDue,
     totalDue: Math.max(-netBalance, 0),

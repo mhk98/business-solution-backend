@@ -55,6 +55,7 @@ const MENU_PERMISSIONS = {
   INTRANSIT_PRODUCT: "intransit_product",
   COURIER_NO_ENTRY: "courier_no_entry",
   COURIER_PRODUCT_STOCK: "courier_product_stock",
+  COURIER_BALANCE: "courier_balance",
   SALES_RETURN: "sales_return",
   DAMAGE_MANAGEMENT: "damage_management",
   DAMAGE_STOCK: "damage_stock",

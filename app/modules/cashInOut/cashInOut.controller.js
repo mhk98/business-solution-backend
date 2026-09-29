@@ -185,6 +185,29 @@ const resolveLoanFields = async ({ category, partyType, loanId, lender }) => {
 //   });
 // });
 
+// A supplier entry with no cash but a discount is stored as "Discount" (not
+// Cash In/Out); once it carries cash it is a normal Cash Out again.
+const supplierEntryStatus = (paymentStatus, amount, discount) => {
+  if (paymentStatus !== "CashOut" && paymentStatus !== "Discount") {
+    return paymentStatus;
+  }
+  return Number(amount || 0) === 0 && Number(discount || 0) > 0
+    ? "Discount"
+    : "CashOut";
+};
+
+// Supplier discount (non-cash). undefined = not sent; otherwise a number >= 0.
+const parseDiscountAmount = (value) => {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return undefined;
+  }
+  const n = Number(value);
+  if (Number.isNaN(n) || n < 0) {
+    throw new ApiError(400, "Discount must be 0 or more");
+  }
+  return n;
+};
+
 const insertIntoDB = catchAsync(async (req, res) => {
   const {
     name,
@@ -213,12 +236,15 @@ const insertIntoDB = catchAsync(async (req, res) => {
     refNo,
     fromParty,
     receiverName,
+    discountAmount,
   } = req.body;
 
   const file = req.file?.path ? getUploadedFilePath(req.file) : null;
 
   const isBank = paymentMode === "Bank";
-  const isCashOut = paymentStatus === "CashOut";
+  // "Discount" = supplier discount-only Book entry: neither Cash In nor Cash
+  // Out, but it keeps the supplier link like a Cash Out.
+  const isCashOut = paymentStatus === "CashOut" || paymentStatus === "Discount";
   const isOwnerParty =
     String(partyType || "").trim().toLowerCase() === "owner";
   const isDirectorParty =
@@ -247,7 +273,22 @@ const insertIntoDB = catchAsync(async (req, res) => {
       ? Number(amount)
       : 0;
 
-  if (!amountNumber || Number.isNaN(amountNumber) || amountNumber <= 0) {
+  const discountNumber = parseDiscountAmount(discountAmount) ?? 0;
+  const isSupplierCashOut =
+    isCashOut &&
+    supplierId !== undefined &&
+    supplierId !== null &&
+    String(supplierId).trim() !== "";
+  if (discountNumber > 0 && !isSupplierCashOut) {
+    throw new ApiError(400, "Discount is only allowed on a supplier Cash Out");
+  }
+
+  // A supplier discount-only entry carries no cash (amount 0).
+  if (
+    Number.isNaN(amountNumber) ||
+    amountNumber < 0 ||
+    (amountNumber === 0 && discountNumber <= 0)
+  ) {
     throw new ApiError(400, "Amount must be greater than 0");
   }
 
@@ -363,10 +404,11 @@ const insertIntoDB = catchAsync(async (req, res) => {
   const data = {
     name: name || null,
     paymentMode,
-    paymentStatus,
     bankName: isBank ? bankName || "" : "",
     bankAccount: isBank ? bankAccountNumber : null,
     amount: amountNumber,
+    discountAmount: discountNumber,
+    paymentStatus: supplierEntryStatus(paymentStatus, amountNumber, discountNumber),
     remarks: remarks || "",
     status: finalStatus || "---",
     note: normalizedNote,
@@ -549,6 +591,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     refNo,
     fromParty,
     receiverName,
+    discountAmount,
   } = req.body;
 
   // ✅ file optional safe (new file না দিলে আগেরটা থাকবে - service এ handle করা ভাল)
@@ -575,9 +618,27 @@ const updateOneFromDB = catchAsync(async (req, res) => {
       ? Number(amount)
       : undefined;
 
+  const discountNumber = parseDiscountAmount(discountAmount);
+  const hasSupplier =
+    supplierId !== undefined &&
+    supplierId !== null &&
+    String(supplierId).trim() !== "";
+  // Discount only lives on supplier Cash Out entries; clearing the supplier
+  // clears the discount too.
+  const finalDiscount =
+    paymentStatus !== undefined &&
+    paymentStatus !== "CashOut" &&
+    paymentStatus !== "Discount"
+      ? 0
+      : supplierId !== undefined && !hasSupplier
+        ? 0
+        : discountNumber;
+
   if (
     amountNumber !== undefined &&
-    (Number.isNaN(amountNumber) || amountNumber <= 0)
+    (Number.isNaN(amountNumber) ||
+      amountNumber < 0 ||
+      (amountNumber === 0 && !(finalDiscount > 0)))
   ) {
     throw new ApiError(400, "Amount must be greater than 0");
   }
@@ -641,7 +702,10 @@ const updateOneFromDB = catchAsync(async (req, res) => {
   const data = {
     name: name ?? undefined,
     paymentMode: paymentMode ?? undefined,
-    paymentStatus: paymentStatus ?? undefined,
+    paymentStatus:
+      paymentStatus !== undefined && amountNumber !== undefined
+        ? supplierEntryStatus(paymentStatus, amountNumber, finalDiscount)
+        : paymentStatus ?? undefined,
     bankName: isBank ? bankName || "" : "", // ✅ Bank না হলে blank
     bankAccount: isBank ? bankAccountNumber : null, // ✅ Bank না হলে NULL
     remarks: remarks ?? undefined,
@@ -672,6 +736,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     ownerId: ownerId !== undefined ? finalOwnerId : undefined,
     directorId: directorId !== undefined ? finalDirectorId : undefined,
     ...(amountNumber !== undefined ? { amount: amountNumber } : {}),
+    ...(finalDiscount !== undefined ? { discountAmount: finalDiscount } : {}),
 
     // ✅ file only include if uploaded
     ...(file !== undefined ? { file } : {}),

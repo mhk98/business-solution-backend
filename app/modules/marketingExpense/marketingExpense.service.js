@@ -19,6 +19,7 @@ const insertIntoDB = async (data) => {
       await DollarSupplierHistory.create(
         {
           dollarSupplierId: data.dollarSupplierId,
+          marketingExpenseId: result.Id,
           amount: data.amount,
           usdAmount: data.usdAmount,
           usdRate: data.usdRate,
@@ -208,8 +209,19 @@ const getAllFromDB = async (filters, options) => {
   };
 };
 
-const getTotalsByBookIds = async (bookIds) => {
+const getTotalsByBookIds = async (bookIds, { from, to } = {}) => {
   if (!bookIds.length) return {};
+
+  // Optional date range (YYYY-MM-DD, inclusive) — same as the DM summary cards.
+  const dateWhere =
+    from || to
+      ? {
+          date: {
+            ...(from ? { [Op.gte]: from } : {}),
+            ...(to ? { [Op.lte]: to } : {}),
+          },
+        }
+      : {};
 
   const rows = await MarketingExpense.findAll({
     attributes: [
@@ -220,6 +232,7 @@ const getTotalsByBookIds = async (bookIds) => {
     where: {
       bookId: { [Op.in]: bookIds },
       deletedAt: { [Op.is]: null },
+      ...dateWhere,
     },
     group: ["bookId", "paymentStatus"],
     raw: true,
@@ -256,23 +269,61 @@ const getDataById = async (id) => {
   return result;
 };
 
-const deleteIdFromDB = async (id) => {
-  const result = await MarketingExpense.destroy({
-    where: {
-      Id: id,
-    },
+const deleteIdFromDB = async (id) =>
+  db.sequelize.transaction(async (transaction) => {
+    const result = await MarketingExpense.destroy({
+      where: { Id: id },
+      transaction,
+    });
+    // The dollar supplier due this entry created goes with it.
+    await DollarSupplierHistory.destroy({
+      where: { marketingExpenseId: id },
+      transaction,
+    });
+    return result;
   });
 
-  return result;
+// Keep the dollar supplier due mirrored from a DM Expense Cash In in step with
+// the (just saved) entry: update it, create it, or remove it when the entry
+// no longer has a dollar supplier or is no longer a Cash In.
+const syncDollarSupplierDue = async (expenseId, transaction) => {
+  const expense = await MarketingExpense.findByPk(expenseId, { transaction });
+  const due = await DollarSupplierHistory.findOne({
+    where: { marketingExpenseId: expenseId },
+    transaction,
+  });
+  const wantsDue =
+    expense && expense.dollarSupplierId && expense.paymentStatus === "CashIn";
+
+  if (!wantsDue) {
+    if (due) await due.destroy({ transaction });
+    return;
+  }
+
+  const dueData = {
+    dollarSupplierId: expense.dollarSupplierId,
+    marketingExpenseId: expense.Id,
+    amount: expense.amount,
+    usdAmount: expense.usdAmount,
+    usdRate: expense.usdRate,
+    status: "Unpaid",
+    date: expense.date,
+    note: expense.remarks || expense.note || null,
+  };
+  if (due) await due.update(dueData, { transaction });
+  else await DollarSupplierHistory.create(dueData, { transaction });
 };
 
 const updateOneFromDB = async (id, payload) => {
   const { note, status, userId, bookId } = payload;
 
-  const [updatedCount] = await MarketingExpense.update(payload, {
-    where: {
-      Id: id,
-    },
+  const [updatedCount] = await db.sequelize.transaction(async (transaction) => {
+    const updateResult = await MarketingExpense.update(payload, {
+      where: { Id: id },
+      transaction,
+    });
+    await syncDollarSupplierDue(id, transaction);
+    return updateResult;
   });
 
   const users = await User.findAll({

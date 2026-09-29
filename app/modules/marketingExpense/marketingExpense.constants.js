@@ -20,9 +20,10 @@ const MarketingExpenseSearchableFields = [
 
 const MarketingExpenseOverviewFilterAbleFileds = ["from", "to"];
 
-module.exports = { MarketingExpenseOverviewFilterAbleFileds };
-
+// One export object — a second `module.exports =` used to overwrite this, so
+// the summary's from/to were dropped and the DM cards ignored the date filter.
 module.exports = {
   MarketingExpenseFilterAbleFields,
   MarketingExpenseSearchableFields,
+  MarketingExpenseOverviewFilterAbleFileds,
 };

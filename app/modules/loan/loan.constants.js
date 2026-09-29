@@ -1,3 +1,3 @@
-const LoanFilterAbleFields = ["searchTerm", "status", "startDate", "endDate"];
+const LoanFilterAbleFields = ["loanType", "searchTerm", "status", "startDate", "endDate", "balanceStatus"];
 
 module.exports = { LoanFilterAbleFields };

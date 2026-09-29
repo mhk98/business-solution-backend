@@ -215,7 +215,18 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     bookId,
     userId,
     actorRole,
+    dollarSupplierId,
+    usdAmount,
+    usdRate,
   } = req.body;
+
+  // Dollar supplier / USD fields are only touched when the form sends them.
+  const optionalNumber = (value) =>
+    value === undefined
+      ? undefined
+      : value === null || String(value).trim() === ""
+        ? null
+        : Number(value);
 
   // ✅ file optional safe (new file না দিলে আগেরটা থাকবে - service এ handle করা ভাল)
   const file = req.file?.path ? getUploadedFilePath(req.file) : undefined;
@@ -301,6 +312,11 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     category,
     bookId: bookId,
     ...(amountNumber !== undefined ? { amount: amountNumber } : {}),
+    ...(dollarSupplierId !== undefined
+      ? { dollarSupplierId: optionalNumber(dollarSupplierId) }
+      : {}),
+    ...(usdAmount !== undefined ? { usdAmount: optionalNumber(usdAmount) } : {}),
+    ...(usdRate !== undefined ? { usdRate: optionalNumber(usdRate) } : {}),
 
     // ✅ file only include if uploaded
     ...(file !== undefined ? { file } : {}),
@@ -370,7 +386,11 @@ const getTotalsByBookIds = catchAsync(async (req, res) => {
     .map((id) => Number(id.trim()))
     .filter((id) => Number.isInteger(id) && id > 0);
 
-  const result = await MarketingExpenseService.getTotalsByBookIds(bookIds);
+  const isDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+  const result = await MarketingExpenseService.getTotalsByBookIds(bookIds, {
+    from: isDate(req.query.from) ? req.query.from : undefined,
+    to: isDate(req.query.to) ? req.query.to : undefined,
+  });
 
   sendResponse(res, {
     statusCode: 200,

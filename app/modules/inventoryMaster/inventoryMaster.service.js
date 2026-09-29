@@ -73,6 +73,8 @@ const productVariationInclude = {
 };
 
 const n = (value) => Number(value || 0);
+// Quantities are DECIMAL; compare at 4 places so float noise isn't a mismatch.
+const round4 = (value) => Math.round(Number(value || 0) * 10000) / 10000;
 
 const variantKey = (variant = {}) =>
   `${String(variant.size || "")}__${String(variant.color || "")}`;
@@ -115,7 +117,7 @@ const normalizeVariantDiffRows = (currentVariants, expectedVariants) => {
     )
     .map((row) => ({
       ...row,
-      diff: row.currentQuantity - row.expectedQuantity,
+      diff: round4(row.currentQuantity - row.expectedQuantity),
     }));
 };
 
@@ -136,14 +138,14 @@ const buildAuditRow = async (inventoryRow) => {
   const expectedVariants = parseVariants(expected.variants);
   const variantDiffs = normalizeVariantDiffRows(currentVariants, expectedVariants);
   const hasVariantMismatch = variantDiffs.some((variant) => variant.diff !== 0);
-  const quantityDiff = currentQuantity - expectedQuantity;
+  const quantityDiff = round4(currentQuantity - expectedQuantity);
 
   return {
     productId,
     inventoryId: row.Id,
     name: row.name || expected.product.name,
-    currentQuantity,
-    expectedQuantity,
+    currentQuantity: round4(currentQuantity),
+    expectedQuantity: round4(expectedQuantity),
     diff: quantityDiff,
     currentVariants,
     expectedVariants,
@@ -425,6 +427,55 @@ const fixStockMismatchFromDB = async (productId) => {
   return buildAuditRow(inventory);
 };
 
+// "Keep Current": accept the Stock Product quantity as it is now (e.g. after
+// a hand correction in the DB) by recording its difference from the
+// movement-derived quantity, so the audit stops flagging it and later
+// reconciles build on the edited quantity instead of overwriting it.
+const acceptStockMismatchFromDB = async (productId, userId) => {
+  if (!Number(productId)) {
+    throw new ApiError(400, "productId is required");
+  }
+
+  return db.sequelize.transaction(async (transaction) => {
+    const inventory = await InventoryMaster.findOne({
+      where: { productId: Number(productId) },
+      include: [productVariationInclude],
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!inventory) throw new ApiError(404, "Stock product not found");
+
+    const audit = await buildAuditRow(inventory);
+    if (!audit?.hasMismatch) return audit;
+
+    const variantDeltas = (audit.variantDiffs || [])
+      .map((variant) => ({
+        size: variant.size || "",
+        color: variant.color || "",
+        quantity: n(variant.currentQuantity) - n(variant.expectedQuantity),
+      }))
+      .filter((variant) => variant.quantity !== 0);
+
+    await db.inventoryAuditAdjustment.create(
+      {
+        productId: Number(productId),
+        quantity: variantDeltas.length ? 0 : audit.diff,
+        variants: variantDeltas.length ? variantDeltas : null,
+        note: `Keep current stock: ${audit.expectedQuantity} → ${audit.currentQuantity}`,
+        userId: userId || null,
+      },
+      { transaction },
+    );
+
+    return {
+      ...audit,
+      expectedQuantity: audit.currentQuantity,
+      diff: 0,
+      hasMismatch: false,
+    };
+  });
+};
+
 const InventoryMasterService = {
   getAllFromDB,
   insertIntoDB,
@@ -436,6 +487,7 @@ const InventoryMasterService = {
   getLowStockProductsFromDB,
   getStockMismatchAuditFromDB,
   fixStockMismatchFromDB,
+  acceptStockMismatchFromDB,
 };
 
 module.exports = InventoryMasterService;

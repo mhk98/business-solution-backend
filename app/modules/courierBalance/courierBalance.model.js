@@ -1,6 +1,8 @@
+// Courier Balance — courier balance amount entered by date. A simple ledger
+// shown on the Courier Balance page.
 module.exports = (sequelize, DataTypes) => {
-  const Loan = sequelize.define(
-    "Loan",
+  const CourierBalance = sequelize.define(
+    "CourierBalance",
     {
       Id: {
         type: DataTypes.INTEGER(10),
@@ -8,27 +10,18 @@ module.exports = (sequelize, DataTypes) => {
         autoIncrement: true,
         allowNull: false,
       },
-      name: {
-        type: DataTypes.STRING,
+      date: {
+        type: DataTypes.DATEONLY,
         allowNull: false,
-        validate: {
-          notEmpty: true,
-        },
       },
-      loanType: {
-        type: DataTypes.STRING(16),
+      amount: {
+        type: DataTypes.DECIMAL(15, 2),
         allowNull: false,
-        defaultValue: "BORROWED",
-        validate: { isIn: [["BORROWED", "LENT"]] },
+        defaultValue: 0,
       },
       note: {
         type: DataTypes.STRING,
         allowNull: true,
-      },
-      status: {
-        type: DataTypes.STRING(32),
-        allowNull: true,
-        defaultValue: "Active",
       },
       deletedAt: {
         type: DataTypes.DATE,
@@ -41,5 +34,5 @@ module.exports = (sequelize, DataTypes) => {
     },
   );
 
-  return Loan;
+  return CourierBalance;
 };

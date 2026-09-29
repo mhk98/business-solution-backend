@@ -2,6 +2,12 @@ const { Op } = require("sequelize");
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const db = require("../../../models");
 
+const ApiError = require("../../../error/ApiError");
+const { summarizeLoan, sumLoanBalances } = require("./loan.accounting");
+const validateLoanType = (value) => {
+  if (!["BORROWED", "LENT"].includes(value)) throw new ApiError(400, "loanType must be BORROWED or LENT");
+  return value;
+};
 const Loan = db.loan;
 const LenderHistory = db.lenderHistory;
 
@@ -14,6 +20,17 @@ const buildDateCondition = ({ startDate, endDate } = {}) => {
   return null;
 };
 
+// Each Loan is a two-way running account with one party: the company may both
+// borrow from and lend to the same party. Balance = CashIn - CashOut;
+// positive -> company owes the party (দেনা / payable),
+// negative -> party owes the company (পাওনা / receivable).
+// Balances are cumulative (opening as of < startDate, closing as of <= endDate);
+// the date range only scopes the period movement columns.
+const ledgerSplit = (balance) => ({
+  payable: Math.max(balance, 0),
+  receivable: Math.max(-balance, 0),
+});
+
 const addBalancesToLoans = async (loans, filters = {}) => {
   const plainLoans = loans.map((loan) =>
     loan.get ? loan.get({ plain: true }) : loan,
@@ -22,34 +39,26 @@ const addBalancesToLoans = async (loans, filters = {}) => {
 
   if (!loanIds.length) return plainLoans;
 
-  const dateCondition = buildDateCondition(filters);
-  const where = {
-    loanId: { [Op.in]: loanIds },
-  };
+  const { startDate, endDate } = filters;
+  const where = { loanId: { [Op.in]: loanIds } };
+  if (endDate) where.date = { [Op.lte]: endDate };
 
-  if (dateCondition) where.date = dateCondition;
+  const beforeStart = startDate
+    ? `date < ${db.sequelize.escape(startDate)}`
+    : "1 = 0";
+  const sumWhen = (condition) =>
+    db.Sequelize.fn(
+      "SUM",
+      db.Sequelize.literal(`CASE WHEN ${condition} THEN amount ELSE 0 END`),
+    );
 
   const rows = await LenderHistory.findAll({
     attributes: [
       "loanId",
-      [
-        db.Sequelize.fn(
-          "SUM",
-          db.Sequelize.literal(
-            "CASE WHEN paymentStatus = 'CashIn' THEN amount ELSE 0 END",
-          ),
-        ),
-        "totalLoanTaken",
-      ],
-      [
-        db.Sequelize.fn(
-          "SUM",
-          db.Sequelize.literal(
-            "CASE WHEN paymentStatus = 'CashOut' THEN amount ELSE 0 END",
-          ),
-        ),
-        "totalLoanPaid",
-      ],
+      [sumWhen(`paymentStatus = 'CashIn' AND ${beforeStart}`), "openingCashIn"],
+      [sumWhen(`paymentStatus = 'CashOut' AND ${beforeStart}`), "openingCashOut"],
+      [sumWhen(`paymentStatus = 'CashIn' AND NOT (${beforeStart})`), "periodCashIn"],
+      [sumWhen(`paymentStatus = 'CashOut' AND NOT (${beforeStart})`), "periodCashOut"],
       [db.Sequelize.fn("MAX", db.Sequelize.col("date")), "lastDate"],
     ],
     where,
@@ -57,39 +66,59 @@ const addBalancesToLoans = async (loans, filters = {}) => {
     raw: true,
   });
 
-  const balanceMap = rows.reduce((acc, row) => {
-    const totalLoanTaken = normalizeAmount(row.totalLoanTaken);
-    const totalLoanPaid = normalizeAmount(row.totalLoanPaid);
-    acc[row.loanId] = {
-      totalLoanTaken,
-      totalLoanPaid,
-      totalLoanGiven: totalLoanPaid,
-      netBalance: totalLoanTaken - totalLoanPaid,
-      lastDate: row.lastDate,
+  const balanceMap = new Map(rows.map((row) => [Number(row.loanId), row]));
+  return plainLoans.map((loan) => {
+    const row = balanceMap.get(Number(loan.Id)) || {};
+    const periodCashIn = normalizeAmount(row.periodCashIn);
+    const periodCashOut = normalizeAmount(row.periodCashOut);
+    const openingBalance =
+      normalizeAmount(row.openingCashIn) - normalizeAmount(row.openingCashOut);
+    const closingBalance = openingBalance + periodCashIn - periodCashOut;
+    return {
+      ...loan,
+      ...summarizeLoan(loan.loanType, periodCashIn, periodCashOut),
+      periodCashIn,
+      periodCashOut,
+      openingBalance,
+      closingBalance,
+      ...ledgerSplit(closingBalance),
+      lastDate: row.lastDate || null,
     };
-    return acc;
-  }, {});
-
-  return plainLoans.map((loan) => ({
-    ...loan,
-    totalLoanTaken: balanceMap[loan.Id]?.totalLoanTaken || 0,
-    totalLoanPaid: balanceMap[loan.Id]?.totalLoanPaid || 0,
-    totalLoanGiven: balanceMap[loan.Id]?.totalLoanGiven || 0,
-    netBalance: balanceMap[loan.Id]?.netBalance || 0,
-    lastDate: balanceMap[loan.Id]?.lastDate || null,
-  }));
+  });
 };
 
-const insertIntoDB = async (payload) =>
-  Loan.create({
-    name: String(payload.name || "").trim(),
-    note: payload.note || null,
-    status: payload.status || "Active",
-  });
+const sumLedgerTotals = (rows) => {
+  const sum = (key) => rows.reduce((acc, row) => acc + Number(row[key] || 0), 0);
+  return {
+    periodCashIn: sum("periodCashIn"),
+    periodCashOut: sum("periodCashOut"),
+    totalPayable: sum("payable"),
+    totalReceivable: sum("receivable"),
+    payableCount: rows.filter((row) => row.closingBalance > 0).length,
+    receivableCount: rows.filter((row) => row.closingBalance < 0).length,
+  };
+};
+
+// balanceStatus: "payable" | "receivable" | "open" (either side) | "settled"
+const matchesBalanceStatus = (row, balanceStatus) => {
+  if (balanceStatus === "payable") return row.closingBalance > 0;
+  if (balanceStatus === "receivable") return row.closingBalance < 0;
+  if (balanceStatus === "open") return row.closingBalance !== 0;
+  if (balanceStatus === "settled") return row.closingBalance === 0;
+  return true;
+};
+
+const insertIntoDB = async (payload) => Loan.create({
+  name: String(payload.name || "").trim(),
+  loanType: validateLoanType(payload.loanType ?? "BORROWED"),
+  note: payload.note || null,
+  status: payload.status || "Active",
+});
 
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
-  const { searchTerm, startDate, endDate, ...filterData } = filters;
+  const { searchTerm, startDate, endDate, balanceStatus, ...filterData } =
+    filters;
   const andConditions = [];
   const balanceFilters = { startDate, endDate };
 
@@ -108,60 +137,66 @@ const getAllFromDB = async (filters, options) => {
   andConditions.push({ deletedAt: { [Op.is]: null } });
   const where = andConditions.length ? { [Op.and]: andConditions } : {};
 
-  const [rows, count, allRows] = await Promise.all([
-    Loan.findAll({
-      where,
-      offset: skip,
-      limit,
-      paranoid: true,
-      order:
-        options.sortBy && options.sortOrder
-          ? [[options.sortBy, options.sortOrder.toUpperCase()]]
-          : [["createdAt", "DESC"]],
-    }),
-    Loan.count({ where }),
-    Loan.findAll({ where, paranoid: true }),
-  ]);
+  // Balance filtering needs every account's balance, so paginate in memory.
+  const allRows = await Loan.findAll({
+    where,
+    paranoid: true,
+    order:
+      options.sortBy && options.sortOrder
+        ? [[options.sortBy, options.sortOrder.toUpperCase()]]
+        : [["createdAt", "DESC"]],
+  });
   const allLoansWithBalances = await addBalancesToLoans(
     allRows,
     balanceFilters,
   );
-  const totalLoanTaken = allLoansWithBalances.reduce(
-    (sum, loan) => sum + normalizeAmount(loan.totalLoanTaken),
-    0,
-  );
-  const totalLoanPaid = allLoansWithBalances.reduce(
-    (sum, loan) => sum + normalizeAmount(loan.totalLoanPaid),
-    0,
+  // Totals cover every account so the summary cards stay stable across tabs.
+  const totals = sumLedgerTotals(allLoansWithBalances);
+  const filtered = allLoansWithBalances.filter((row) =>
+    matchesBalanceStatus(row, balanceStatus),
   );
 
   return {
     meta: {
-      count,
+      count: filtered.length,
       page,
       limit,
-      totalLoanTaken,
-      totalLoanPaid,
-      totalLoanGiven: totalLoanPaid,
-      netBalance: totalLoanTaken - totalLoanPaid,
+      ...sumLoanBalances(allLoansWithBalances),
+      ...totals,
+      netPosition: totals.totalReceivable - totals.totalPayable,
     },
-    data: await addBalancesToLoans(rows, balanceFilters),
+    data: filtered.slice(skip, skip + limit),
   };
 };
 
 const getDataById = async (id) => Loan.findOne({ where: { Id: id } });
 
-const updateOneFromDB = async (id, payload) =>
-  Loan.update(
-    {
-      name: String(payload.name || "").trim(),
-      note: payload.note || null,
-      status: payload.status || "Active",
-    },
-    { where: { Id: id } },
-  );
+const updateOneFromDB = async (id, payload) => db.sequelize.transaction(async (transaction) => {
+  const loan = await Loan.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
+  if (!loan) throw new ApiError(404, "Loan not found");
+  if (payload.loanType !== undefined) {
+    validateLoanType(payload.loanType);
+    if (payload.loanType !== loan.loanType && await LenderHistory.count({ where: { loanId: id }, transaction, paranoid: false })) {
+      throw new ApiError(400, "Loan type cannot change after transactions. Create a separate loan account.");
+    }
+  }
+  const changes = {};
+  for (const key of ["name", "note", "status", "loanType"]) {
+    if (payload[key] !== undefined) changes[key] = key === "name" ? String(payload[key]).trim() : payload[key];
+  }
+  await loan.update(changes, { transaction });
+  return [1];
+});
 
-const deleteIdFromDB = async (id) => Loan.destroy({ where: { Id: id } });
+const deleteIdFromDB = async (id) => db.sequelize.transaction(async (transaction) => {
+  const loan = await Loan.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
+  if (!loan) throw new ApiError(404, "Loan not found");
+  if (await LenderHistory.count({ where: { loanId: id }, transaction })) {
+    throw new ApiError(400, "A loan with transactions cannot be deleted. Mark it Inactive instead.");
+  }
+  await loan.destroy({ transaction });
+  return 1;
+});
 
 const getAllFromDBWithoutQuery = async () => {
   const rows = await Loan.findAll({
