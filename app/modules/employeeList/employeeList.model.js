@@ -69,6 +69,21 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.DATEONLY,
         allowNull: true,
       },
+      // Attendance: device PIN (falls back to employee_id / employeeCode),
+      // excluded from attendance, last working day.
+      attendancePin: {
+        type: DataTypes.STRING(64),
+        allowNull: true,
+      },
+      attendanceExempt: {
+        type: DataTypes.BOOLEAN,
+        allowNull: true,
+        defaultValue: false,
+      },
+      exitDate: {
+        type: DataTypes.DATEONLY,
+        allowNull: true,
+      },
       salary: {
         type: DataTypes.INTEGER,
         allowNull: false,

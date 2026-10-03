@@ -28,6 +28,11 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING(64),
         allowNull: true,
       },
+      // Departments the holiday applies to; empty/null = everyone.
+      departmentIds: {
+        type: DataTypes.JSON,
+        allowNull: true,
+      },
       note: {
         type: DataTypes.STRING,
         allowNull: true,

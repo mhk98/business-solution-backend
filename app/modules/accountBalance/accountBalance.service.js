@@ -4,10 +4,12 @@ const BankAccountService = require("../bankAccount/bankAccount.service");
 const BookService = require("../book/book.service");
 
 const CashInOut = db.cashInOut;
+const FundTransfer = db.fundTransfer;
 
-// Bkash/Nagad/Rocket/Card etc. have no dedicated account table (unlike Bank),
-// so each payment mode's balance is a single aggregate across all CashInOut
-// entries tagged with that mode.
+// Per payment mode (Bkash/Nagad/Rocket/Card…) aggregate across all CashInOut
+// entries tagged with that mode — including entries recorded before wallet
+// accounts existed, which carry no account number. Per-account wallet
+// balances are returned separately as `walletAccounts`.
 const getWalletBalances = async () => {
   const rows = await CashInOut.findAll({
     attributes: [
@@ -29,12 +31,44 @@ const getWalletBalances = async () => {
     raw: true,
   });
 
-  return rows
-    .filter((row) => row.paymentMode)
-    .map((row) => ({
-      paymentMode: row.paymentMode,
-      balance: Number(row.net || 0),
-    }));
+  // Fund transfers move money into/out of a wallet mode too (e.g. Bank →
+  // Bkash), so fold them in per mode.
+  const [transfersOut, transfersIn] = FundTransfer
+    ? await Promise.all([
+        FundTransfer.findAll({
+          attributes: [
+            "fromPaymentMode",
+            [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "total"],
+          ],
+          where: { fromPaymentMode: { [Op.notIn]: ["Bank", "Cash"], [Op.ne]: null } },
+          group: ["fromPaymentMode"],
+          raw: true,
+        }),
+        FundTransfer.findAll({
+          attributes: [
+            "toPaymentMode",
+            [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "total"],
+          ],
+          where: { toPaymentMode: { [Op.notIn]: ["Bank", "Cash"], [Op.ne]: null } },
+          group: ["toPaymentMode"],
+          raw: true,
+        }),
+      ])
+    : [[], []];
+
+  const byMode = new Map();
+  const add = (mode, value) => {
+    if (!mode) return;
+    byMode.set(mode, (byMode.get(mode) || 0) + Number(value || 0));
+  };
+  rows.forEach((row) => add(row.paymentMode, row.net));
+  transfersIn.forEach((row) => add(row.toPaymentMode, row.total));
+  transfersOut.forEach((row) => add(row.fromPaymentMode, -Number(row.total || 0)));
+
+  return [...byMode.entries()].map(([paymentMode, balance]) => ({
+    paymentMode,
+    balance,
+  }));
 };
 
 const getSummary = async () => {
@@ -54,12 +88,19 @@ const getSummary = async () => {
     };
   });
 
-  const bankAccountRows = bankAccounts.map((account) => ({
+  const toRow = (account) => ({
     Id: account.Id,
+    accountType: account.accountType || "Bank",
     bankName: account.bankName,
     accountNumber: account.accountNumber,
     balance: account.balance,
-  }));
+  });
+  const bankAccountRows = bankAccounts
+    .filter((account) => (account.accountType || "Bank") === "Bank")
+    .map(toRow);
+  const walletAccountRows = bankAccounts
+    .filter((account) => (account.accountType || "Bank") !== "Bank")
+    .map(toRow);
 
   return {
     bankAccounts: bankAccountRows,
@@ -67,6 +108,7 @@ const getSummary = async () => {
     cashByBook,
     totalCash: cashByBook.reduce((sum, row) => sum + row.balance, 0),
     wallets,
+    walletAccounts: walletAccountRows,
   };
 };
 

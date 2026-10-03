@@ -23,8 +23,10 @@ const dateDiffInclusive = (startDate, endDate) => {
 };
 
 const sanitizePayload = (payload = {}) => {
+  const isHalfDay = payload.isHalfDay === true || payload.isHalfDay === "true";
   const startDate = payload.startDate;
-  const endDate = payload.endDate || payload.startDate;
+  // A half-day leave is always a single date.
+  const endDate = isHalfDay ? payload.startDate : payload.endDate || payload.startDate;
   if (!startDate || !endDate) throw new ApiError(400, "startDate and endDate are required");
   const approvalStatus = payload.approvalStatus || "Pending";
 
@@ -40,6 +42,8 @@ const sanitizePayload = (payload = {}) => {
     approvedByUserId: payload.approvedByUserId ? Number(payload.approvedByUserId) : null,
     approvedAt: payload.approvedAt || null,
     note: approvalStatus === "Approved" ? null : payload.note || null,
+    isHalfDay,
+    halfDaySession: isHalfDay ? payload.halfDaySession || "First Half" : null,
   };
 };
 

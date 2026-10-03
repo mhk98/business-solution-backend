@@ -10,6 +10,9 @@ const SupplierHistory = db.supplierHistory;
 const Supplier = db.supplier;
 const Warehouse = db.warehouse;
 const Book = db.book;
+const ItemRequisition = db.itemRequisition;
+const Item = db.item;
+const Manufacture = db.manufacture;
 
 const toPlain = (row) => (row?.get ? row.get({ plain: true }) : row);
 
@@ -221,6 +224,31 @@ const getAllFromDB = async (filters, options) => {
         as: "book",
         attributes: ["Id", "name"],
       },
+      // Due rows posted by Item Requisition "Item Received" / Item Purchase:
+      // bring the item so the ledger shows what the due is for.
+      {
+        model: ItemRequisition,
+        as: "itemRequisition",
+        attributes: ["Id", "quantity", "unit", "entryType", "name", "amount", "othersCost"],
+        required: false,
+        paranoid: false,
+        include: [
+          {
+            model: Item,
+            as: "item",
+            attributes: ["Id", "name"],
+            required: false,
+            paranoid: false,
+          },
+        ],
+      },
+      {
+        model: Manufacture,
+        as: "manufacture",
+        attributes: ["Id", "name", "unit", "unitValue"],
+        required: false,
+        paranoid: false,
+      },
     ],
     paranoid: true,
     order:
@@ -239,6 +267,7 @@ const getAllFromDB = async (filters, options) => {
     meta: {
       total: totalCount,
       totalPaid: computedSummary.totalPaid,
+      totalDiscount: computedSummary.totalDiscount,
       totalAdvance: computedSummary.totalAdvance,
       totalDue: computedSummary.totalDue,
       totalUnpaid: computedSummary.totalDue,

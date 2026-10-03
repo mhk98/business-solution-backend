@@ -108,7 +108,7 @@ const AttendanceEnrollmentRoutes = require("../modules/attendanceEnrollment/atte
 const AttendanceLogRoutes = require("../modules/attendanceLog/attendanceLog.routes");
 const AttendanceSummaryRoutes = require("../modules/attendanceSummary/attendanceSummary.routes");
 const AttendanceRegularizationRoutes = require("../modules/attendanceRegularization/attendanceRegularization.routes");
-const StellarAttendanceRoutes = require("../modules/stellarAttendance/stellarAttendance.routes");
+const AttendanceRoutes = require("../modules/attendance/attendance.routes");
 const LeaveTypeRoutes = require("../modules/leaveType/leaveType.routes");
 const LeaveRequestRoutes = require("../modules/leaveRequest/leaveRequest.routes");
 const PayrollRunRoutes = require("../modules/payrollRun/payrollRun.routes");
@@ -559,8 +559,8 @@ const moduleRoutes = [
     route: AttendanceRegularizationRoutes,
   },
   {
-    path: "/stellar-attendance",
-    route: StellarAttendanceRoutes,
+    path: "/attendance",
+    route: AttendanceRoutes,
   },
   {
     path: "/leave-type",

@@ -2,6 +2,7 @@ const { Op } = require("sequelize");
 const paginationHelpers = require("../../../helpers/paginationHelper");
 const {
   formatStockForDisplay,
+  toBaseStockPayload,
 } = require("../../../helpers/unitConversionHelper");
 const {
   isAverageCostLive,

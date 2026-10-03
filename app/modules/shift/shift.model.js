@@ -37,6 +37,30 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
         defaultValue: [],
       },
+      // Attendance engine rules (app/modules/attendance/attendance.rules.js).
+      // Deducted from a stay at least 4h longer than it.
+      breakMinutes: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      // Worked less than this = Half Day (0/null = off).
+      fullDayMinutes: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      // Worked less than this = Absent (0/null = off).
+      halfDayMinutes: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      overtimeStartAfterMinutes: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
+      minimumOvertimeMinutes: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+      },
       note: {
         type: DataTypes.STRING,
         allowNull: true,

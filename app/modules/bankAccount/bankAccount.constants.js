@@ -1,4 +1,11 @@
-const BankAccountFilterAbleFields = ["searchTerm"];
+const BankAccountFilterAbleFields = ["searchTerm", "accountType"];
 const BankAccountSearchableFields = ["bankName", "accountNumber"];
 
-module.exports = { BankAccountFilterAbleFields, BankAccountSearchableFields };
+// Payment modes that are backed by a BankAccount row (Cash is not).
+const ACCOUNT_TYPES = ["Bank", "Bkash", "Nagad", "Rocket"];
+
+module.exports = {
+  BankAccountFilterAbleFields,
+  BankAccountSearchableFields,
+  ACCOUNT_TYPES,
+};

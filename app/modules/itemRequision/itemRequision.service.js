@@ -29,6 +29,12 @@ const SupplierHistory = db.supplierHistory;
 // Only lines with supplierDueTracked (created after this change) do this;
 // older ones were handled through Item Purchase.
 const RECEIVED_STATUSES = new Set(["Item Received", "Completed"]);
+// Other costs (transport, labour, …) ride on the item's own line in
+// `othersCost`: they add to that line's supplier due but never to the Item
+// Stock unit cost (amount ÷ qty). An "Others Cost" line is the same thing
+// with no item — product cost 0, only its supplier due.
+const OTHERS_COST = "Others Cost";
+const isOthersCost = (row) => String(row?.entryType || "") === OTHERS_COST;
 // Only an explicit move back to one of these un-receives a line. Workflow
 // statuses set around it (e.g. "Pending Delete" while a delete awaits
 // approval) must not pull the received stock back out.
@@ -192,7 +198,9 @@ const syncSupplierDue = async (requisition, received, transaction) => {
     lock: transaction.LOCK.UPDATE,
   });
   const supplierId = normalizeOptionalId(requisition.supplierId);
-  const amount = Number(requisition.amount || 0);
+  // One due row for the line: product cost + other cost.
+  const amount =
+    Number(requisition.amount || 0) + Number(requisition.othersCost || 0);
 
   if (!received || !supplierId || amount <= 0) {
     if (existing) await existing.destroy({ transaction });
@@ -219,7 +227,9 @@ const syncReceipt = async (requisition, transaction) => {
   const received =
     RECEIVED_STATUSES.has(status) ||
     (Boolean(requisition.manufactureId) && !PRE_RECEIPT_STATUSES.has(status));
-  await syncItemPurchase(requisition, received, transaction);
+  if (!isOthersCost(requisition)) {
+    await syncItemPurchase(requisition, received, transaction);
+  }
   await syncSupplierDue(requisition, received, transaction);
 };
 
@@ -257,7 +267,44 @@ const resolveItem = async (itemId, options = {}) => {
   return item;
 };
 
+const buildOthersCostPayload = (data = {}, existing = null) => {
+  const pick = (key, fallback = null) =>
+    data[key] !== undefined ? data[key] || fallback : existing?.[key] ?? fallback;
+  // The cost may come in as othersCost or (older form) amount.
+  const amount = Number(
+    (data.othersCost !== undefined ? data.othersCost : undefined) ??
+      (data.amount !== undefined ? data.amount : undefined) ??
+      existing?.othersCost ??
+      0,
+  ) || 0;
+  const supplierId = normalizeOptionalId(pick("supplierId"));
+
+  if (!supplierId) throw new ApiError(400, "Supplier is required for Others Cost");
+  if (amount <= 0) throw new ApiError(400, "Others Cost amount must be greater than 0");
+
+  return {
+    entryType: OTHERS_COST,
+    name: OTHERS_COST,
+    itemId: null,
+    quantity: 0,
+    unit: null,
+    amount: 0,
+    othersCost: amount,
+    supplierId,
+    procurement: pick("procurement"),
+    status: data.status !== undefined ? data.status || "Pending" : existing?.status,
+    remarks: pick("remarks"),
+    note: pick("note"),
+    date: pick("date"),
+    file: pick("file"),
+  };
+};
+
 const buildPayload = async (data = {}, existing = null, options = {}) => {
+  const entryType =
+    data.entryType !== undefined ? data.entryType : existing?.entryType;
+  if (entryType === OTHERS_COST) return buildOthersCostPayload(data, existing);
+
   const item = await resolveItem(
     data.itemId !== undefined ? data.itemId : existing?.itemId,
     options,
@@ -268,9 +315,16 @@ const buildPayload = async (data = {}, existing = null, options = {}) => {
       : existing.quantity;
   const amount =
     data.amount !== undefined ? Number(data.amount || 0) : existing.amount;
+  const othersCost =
+    data.othersCost !== undefined
+      ? Number(data.othersCost || 0)
+      : Number(existing?.othersCost || 0);
 
   if (Number(quantity) <= 0) {
     throw new ApiError(400, "Quantity must be greater than 0");
+  }
+  if (othersCost < 0) {
+    throw new ApiError(400, "Other cost cannot be negative");
   }
 
   return {
@@ -284,6 +338,7 @@ const buildPayload = async (data = {}, existing = null, options = {}) => {
     unit:
       data.unit !== undefined ? data.unit || "Pcs" : existing?.unit || "Pcs",
     amount,
+    othersCost,
     status:
       data.status !== undefined ? data.status || "Pending" : existing?.status,
     remarks:
@@ -348,6 +403,26 @@ const insertIntoDB = async (data = {}) => {
     items = data.items;
   }
 
+  // Standalone "Others Cost" ({ supplierId, amount }) — only for a
+  // requisition with no items; with items, each line carries its own
+  // othersCost.
+  let othersCost = data.othersCost;
+  if (typeof othersCost === "string") {
+    try {
+      othersCost = JSON.parse(othersCost);
+    } catch (e) {
+      othersCost = null;
+    }
+  }
+  const hasOthersCost =
+    othersCost && typeof othersCost === "object" && Number(othersCost.amount || 0) > 0;
+  if (hasOthersCost) {
+    if (items.length) {
+      throw new ApiError(400, "Items-এর সাথে Other Cost item-এর সারিতেই দিন");
+    }
+    items = [{ supplierId: othersCost.supplierId, othersCost: othersCost.amount, entryType: OTHERS_COST }];
+  }
+
   if (!items.length) {
     items = [data];
   }
@@ -356,12 +431,14 @@ const insertIntoDB = async (data = {}) => {
     const createdRecords = [];
 
     for (const itemData of items) {
+      // The top-level othersCost is the standalone block (handled above);
+      // each line's own othersCost comes from itemData.
+      const { items: _items, othersCost: _othersCost, entryType: _entryType, ...shared } = data;
       const mergedData = {
-        ...data,
+        ...shared,
         ...itemData,
         status: finalStatus,
       };
-      delete mergedData.items;
 
       const payload = await buildPayload(mergedData, null, { transaction: t });
       const result = await ItemRequisition.create(

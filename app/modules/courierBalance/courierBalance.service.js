@@ -79,28 +79,34 @@ const deleteIdFromDB = async (id) => CourierBalance.destroy({ where: { Id: id } 
 // Courier balance entries inside the report range, for the shared "All
 // Books" / Monthly Reporting Book statement PDF (see inventoryOverview's
 // getInventoryStockReport). `totalAmount` = sum of the entries in [from, to].
+// A Courier Balance entry is a snapshot of what the courier holds on that
+// date, not a movement — so the report shows the balance as of the filter's
+// END date: the entries of the latest date on or before `to` (several entries
+// on that date, e.g. one per courier, are added). `from` doesn't limit it —
+// the last snapshot before the range is still the balance on `to`.
 const getCourierBalanceReport = async ({ from, to } = {}) => {
-  const where =
-    from || to
-      ? {
-          date: {
-            ...(from ? { [Op.gte]: from } : {}),
-            ...(to ? { [Op.lte]: to } : {}),
-          },
-        }
-      : {};
-  const rows = await CourierBalance.findAll({
+  const where = to ? { date: { [Op.lte]: to } } : {};
+  const latest = await CourierBalance.findOne({
     where,
-    attributes: ["Id", "date", "amount", "note"],
-    order: [["date", "ASC"], ["Id", "ASC"]],
+    attributes: ["date"],
+    order: [["date", "DESC"]],
     raw: true,
   });
+  const rows = latest
+    ? await CourierBalance.findAll({
+        where: { date: latest.date },
+        attributes: ["Id", "date", "amount", "note"],
+        order: [["Id", "ASC"]],
+        raw: true,
+      })
+    : [];
   const data = rows.map((row) => ({ ...row, amount: Number(row.amount || 0) }));
 
   return {
     meta: {
       from: from || null,
       to: to || null,
+      balanceDate: latest?.date || null,
       count: data.length,
       totalAmount: data.reduce((sum, row) => sum + row.amount, 0),
     },

@@ -38,11 +38,6 @@ const DeliveryAdvance = db.deliveryAdvance;
 const ShippingCharge = db.shippingCharge;
 
 const UserLogHistory = db.userLogHistory;
-const StellarAttendanceLog = db.stellarAttendanceLog;
-const EmployeeList = db.employeeList;
-const Shift = db.shift;
-const Holiday = db.holiday;
-const LeaveRequest = db.leaveRequest;
 const Employee = db.employee;
 const PayrollRun = db.payrollRun;
 const PayrollItem = db.payrollItem;
@@ -343,10 +338,7 @@ const getStockLayerValue = async () => {
   const row = await db.inventoryCostLayer.findOne({
     attributes: [
       [
-        db.Sequelize.fn(
-          "SUM",
-          db.Sequelize.literal("remainingQty * unitCost"),
-        ),
+        db.Sequelize.fn("SUM", db.Sequelize.literal("remainingQty * unitCost")),
         "value",
       ],
     ],
@@ -499,15 +491,25 @@ const sumInventoryDisplayQuantityValue = async (
   // Weighted-average costing: once a row carries its exact averageCost, the
   // stock value is display quantity × that average (one average per product,
   // not per variant). Rows without it keep the per-variant purchase prices.
-  const useAverage = priceField === "purchase_price" && Model.rawAttributes?.averageCost;
+  const useAverage =
+    priceField === "purchase_price" && Model.rawAttributes?.averageCost;
   const rows = await Model.findAll({
     where: activeWhere(Model, where),
     paranoid: true,
-    attributes: ["quantity", "variants", priceField, ...(useAverage ? ["averageCost"] : [])],
+    attributes: [
+      "quantity",
+      "variants",
+      priceField,
+      ...(useAverage ? ["averageCost"] : []),
+    ],
   });
 
   return rows.reduce((total, row) => {
-    if (useAverage && row.averageCost !== null && row.averageCost !== undefined) {
+    if (
+      useAverage &&
+      row.averageCost !== null &&
+      row.averageCost !== undefined
+    ) {
       return total + n(getInventoryDisplayQuantity(row)) * n(row.averageCost);
     }
     return (
@@ -1042,9 +1044,9 @@ const getOverviewSummaryFromDB = async (filters = {}) => {
   );
   const netRevenue = n(
     netSalesBeforeCharges -
-      n(totalCodCharge) -
-      n(totalCodChange) -
-      n(totalDeliveryCharge) +
+      //  - n(totalCodCharge)
+      n(totalCodChange) +
+      // - n(totalDeliveryCharge)
       n(totalDeliveryAdvance) +
       n(totalShippingCharge) +
       n(offlineSalesAmount),
@@ -1133,176 +1135,6 @@ const getCurrentMonthKey = () => {
   return `${year}-${month}`;
 };
 
-const getCurrentCalendarMonthRange = () => {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-
-  return {
-    month: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`,
-    from: formatDateOnly(start),
-    to: formatDateOnly(end),
-  };
-};
-
-const getAttendancePayrollMonthRange = (value) => {
-  const parsed = parseBoundaryDateTime(value || new Date(), "start");
-  if (parsed.getDate() <= 25) {
-    parsed.setMonth(parsed.getMonth() - 1);
-  }
-
-  const start = new Date(parsed.getFullYear(), parsed.getMonth() - 1, 26);
-  const end = new Date(parsed.getFullYear(), parsed.getMonth(), 25);
-
-  return {
-    from: formatDateOnly(start),
-    to: formatDateOnly(end),
-  };
-};
-
-const dateFromParts = (year, month, day) =>
-  `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-
-const getDateRangeList = (from, to) => {
-  const dates = [];
-  const cursor = parseBoundaryDateTime(from, "start");
-  const end = parseBoundaryDateTime(to, "start");
-
-  while (cursor <= end) {
-    dates.push(
-      dateFromParts(
-        cursor.getFullYear(),
-        cursor.getMonth() + 1,
-        cursor.getDate(),
-      ),
-    );
-    cursor.setDate(cursor.getDate() + 1);
-  }
-
-  return dates;
-};
-
-const getOverlapDates = (start, end, range) => {
-  const overlapStart = start > range.from ? start : range.from;
-  const overlapEnd = end < range.to ? end : range.to;
-  if (!overlapStart || !overlapEnd || overlapStart > overlapEnd) return [];
-  return getDateRangeList(overlapStart, overlapEnd);
-};
-
-const isActiveStatus = (value) =>
-  ["active", "approved"].includes(String(value || "").toLowerCase());
-
-const normalizeDateOnlyValue = (value) => String(value || "").slice(0, 10);
-
-const getHolidayDates = (holidays, range) => {
-  const dates = new Set();
-
-  holidays.forEach((holiday) => {
-    if (!isActiveStatus(holiday.status)) return;
-    const start = normalizeDateOnlyValue(
-      holiday.startDate || holiday.holidayDate,
-    );
-    const end = normalizeDateOnlyValue(holiday.endDate || start);
-    getOverlapDates(start, end, range).forEach((date) => dates.add(date));
-  });
-
-  return dates;
-};
-
-const getWeekdayName = (date) =>
-  new Date(`${date}T00:00:00`).toLocaleDateString("en-US", {
-    weekday: "long",
-  });
-
-const getWeeklyOffDates = (shift, range) => {
-  const weeklyOffDays = Array.isArray(shift?.weeklyOffDays)
-    ? shift.weeklyOffDays.map((item) => String(item).toLowerCase())
-    : [];
-
-  if (!weeklyOffDays.length) return new Set();
-
-  return new Set(
-    getDateRangeList(range.from, range.to).filter((date) =>
-      weeklyOffDays.includes(getWeekdayName(date).toLowerCase()),
-    ),
-  );
-};
-
-const countLeaveDates = ({
-  leaveRequests,
-  employeeId,
-  range,
-  excludedDates,
-}) => {
-  const dates = new Set();
-
-  leaveRequests.forEach((leave) => {
-    if (String(leave.employeeId) !== String(employeeId)) return;
-    if (String(leave.approvalStatus || "").toLowerCase() !== "approved") return;
-
-    const start = normalizeDateOnlyValue(leave.startDate);
-    const end = normalizeDateOnlyValue(leave.endDate || start);
-    getOverlapDates(start, end, range).forEach((date) => {
-      if (!excludedDates.has(date)) dates.add(date);
-    });
-  });
-
-  return dates.size;
-};
-
-const getEmployeeRegistrationId = (employee) =>
-  employee?.employee_id || employee?.employeeCode || "";
-
-const buildStellarAttendanceRows = ({
-  logs,
-  employees,
-  holidays,
-  leaveRequests,
-  range,
-}) => {
-  const holidayDates = getHolidayDates(holidays, range);
-  const totalDays = getInclusiveDayCount(range.from, range.to);
-  const logsByEmployeeAndDate = logs.reduce((acc, log) => {
-    const registrationId = String(log.registrationId || "");
-    if (!registrationId || !log.logDate) return acc;
-    if (!acc.has(registrationId)) acc.set(registrationId, new Set());
-    acc.get(registrationId).add(log.logDate);
-    return acc;
-  }, new Map());
-
-  return employees
-    .map((employee) => {
-      const registrationId = String(getEmployeeRegistrationId(employee));
-      const logsByDate = logsByEmployeeAndDate.get(registrationId) || new Set();
-      const weeklyOffDates = getWeeklyOffDates(employee.shift, range);
-      const offDates = new Set([...holidayDates, ...weeklyOffDates]);
-      const workDays = Math.max(0, totalDays - offDates.size);
-      const present = Array.from(logsByDate).filter(
-        (date) => !offDates.has(date),
-      ).length;
-      const leave = countLeaveDates({
-        leaveRequests,
-        employeeId: employee.Id,
-        range,
-        excludedDates: offDates,
-      });
-      const absent = Math.max(0, workDays - present - leave);
-      const presentPercent = workDays
-        ? Math.round((present / workDays) * 100)
-        : 0;
-
-      return {
-        registrationId,
-        workDays,
-        present,
-        absent,
-        leave,
-        presentPercent,
-      };
-    })
-    .filter((row) => row.registrationId);
-};
-
 const getAccountsManagementSummary = async (dateWhere = {}) => {
   const [cashIn, cashOut] = await Promise.all([
     sumField(CashInOut, "amount", {
@@ -1322,11 +1154,21 @@ const getAccountsManagementSummary = async (dateWhere = {}) => {
   };
 };
 
-// Live, company-wide net balance (CashIn − CashOut) per payment mode — no
-// date filter, matching the per-book statement's "বর্তমান ব্যালেন্স" semantics
-// (the book report's own payment-mode section is date-filtered/per-book; this
-// is the always-current, all-books figure shown on the dashboard).
-const getPaymentModeCurrentBalance = async () => {
+// Stock value as of the report's `to` date — the same "মোট স্টক" closing
+// total the Book statement PDF shows (all 7 stock pools at their weighted
+// average + courier product stock), so the dashboard card matches the report.
+const getReportStockValue = (report) =>
+  n(
+    n(report?.meta?.totalPurchaseCost) +
+      n(report?.itemFactoryStock?.meta?.totalPurchaseCost) +
+      n(report?.packagingStock?.meta?.totalPurchaseCost) +
+      n(report?.courierProductStock?.meta?.totalEndingAmount),
+  );
+
+// Company-wide net (CashIn − CashOut) per payment mode for the dashboard's
+// selected date range (same `date` filter as Accounts Management), so the
+// modes add up to that card's Net Balance.
+const getPaymentModeCurrentBalance = async (dateWhere = {}) => {
   const rows = await CashInOut.findAll({
     attributes: [
       "paymentMode",
@@ -1334,6 +1176,7 @@ const getPaymentModeCurrentBalance = async () => {
       [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "total"],
     ],
     where: activeWhere(CashInOut, {
+      ...dateWhere,
       paymentStatus: { [Op.in]: ["CashIn", "CashOut"] },
     }),
     group: ["paymentMode", "paymentStatus"],
@@ -1353,106 +1196,50 @@ const getPaymentModeCurrentBalance = async () => {
     balanceByMode[mode] = (balanceByMode[mode] || 0) + signed;
   });
 
+  // Fund transfers move money between modes (e.g. Bank → Cash) without a
+  // CashInOut row, so fold them in — same as the Account Balance summary.
+  if (db.fundTransfer) {
+    const transfers = await db.fundTransfer.findAll({
+      attributes: [
+        "fromPaymentMode",
+        "toPaymentMode",
+        [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "total"],
+      ],
+      where: dateWhere,
+      group: ["fromPaymentMode", "toPaymentMode"],
+      paranoid: true,
+      raw: true,
+    });
+    transfers.forEach((row) => {
+      const amount = n(row.total);
+      const from = row.fromPaymentMode && String(row.fromPaymentMode).trim();
+      const to = row.toPaymentMode && String(row.toPaymentMode).trim();
+      if (from) balanceByMode[from] = (balanceByMode[from] || 0) - amount;
+      if (to) balanceByMode[to] = (balanceByMode[to] || 0) + amount;
+    });
+  }
+
   return Object.entries(balanceByMode)
     .map(([mode, balance]) => ({ mode, balance: n(balance) }))
     .sort((a, b) => b.balance - a.balance);
 };
 
-const getEmployeeManagementSummary = async ({ from, to }) => {
-  const today = formatDateOnly(new Date());
-  const selectedRange = { from, to };
-  const monthRange = getAttendancePayrollMonthRange(to);
-  const todayRange = { from: today, to: today };
-  const minFrom = [
-    selectedRange.from,
-    monthRange.from,
-    todayRange.from,
-  ].sort()[0];
-  const maxTo = [selectedRange.to, monthRange.to, todayRange.to].sort().at(-1);
-
-  const [employeesRows, logs, holidays, leaveRequests] = await Promise.all([
-    EmployeeList.findAll({
-      where: activeWhere(EmployeeList, { status: "Active" }),
-      include: [
-        {
-          model: Shift,
-          as: "shift",
-          required: false,
-        },
-      ],
-      paranoid: true,
-    }),
-    StellarAttendanceLog.findAll({
-      where: activeWhere(StellarAttendanceLog, {
-        logDate: { [Op.between]: [minFrom, maxTo] },
-      }),
-      attributes: ["registrationId", "logDate"],
-      paranoid: true,
-      raw: true,
-    }),
-    Holiday.findAll({
-      where: activeWhere(Holiday, {
-        status: { [Op.in]: ["Active", "Approved"] },
-      }),
-      paranoid: true,
-      raw: true,
-    }),
-    LeaveRequest.findAll({
-      where: activeWhere(LeaveRequest, {
-        approvalStatus: "Approved",
-        startDate: { [Op.lte]: maxTo },
-        endDate: { [Op.gte]: minFrom },
-      }),
-      paranoid: true,
-      raw: true,
-    }),
-  ]);
-
-  const employees = employeesRows.map((employee) =>
-    employee.get ? employee.get({ plain: true }) : employee,
-  );
-  const logsForRange = (range) =>
-    logs.filter((log) => log.logDate >= range.from && log.logDate <= range.to);
-  const selectedRows = buildStellarAttendanceRows({
-    logs: logsForRange(selectedRange),
-    employees,
-    holidays,
-    leaveRequests,
-    range: selectedRange,
-  });
-  const monthlyRows = buildStellarAttendanceRows({
-    logs: logsForRange(monthRange),
-    employees,
-    holidays,
-    leaveRequests,
-    range: monthRange,
-  });
-  const todayRows = buildStellarAttendanceRows({
-    logs: logsForRange(todayRange),
-    employees,
-    holidays,
-    leaveRequests,
-    range: todayRange,
-  });
-
-  const totalEmployees = selectedRows.length;
-  const activeEmployees = monthlyRows.filter(
-    (employee) => employee.presentPercent >= 80,
-  ).length;
-  const presentToday = todayRows.filter(
-    (employee) => employee.present > 0,
-  ).length;
-  const absentToday = todayRows.filter(
-    (employee) => employee.absent > 0,
-  ).length;
-
+// Attendance counts come from the attendance engine's AttendanceDays
+// (app/modules/attendance), as of the range end (or today).
+const getEmployeeManagementSummary = async ({ to }) => {
+  const AttendanceService = require("../attendance/attendance.service");
+  const { bdToday } = require("../attendance/attendance.time");
+  const today = bdToday();
+  const date = to && String(to).slice(0, 10) < today ? String(to).slice(0, 10) : today;
+  const dashboard = await AttendanceService.getDashboard({ date });
   return {
-    totalEmployees,
-    activeEmployees,
-    inactiveEmployees: Math.max(monthlyRows.length - activeEmployees, 0),
-    presentToday,
-    absentToday,
-    lateToday: 0,
+    totalEmployees: dashboard.totalEmployees,
+    activeEmployees: dashboard.activeEmployees,
+    inactiveEmployees: dashboard.inactiveEmployees,
+    presentToday: dashboard.presentToday,
+    absentToday: dashboard.absentToday,
+    lateToday: dashboard.lateToday,
+    onLeaveToday: dashboard.onLeaveToday,
   };
 };
 
@@ -1492,17 +1279,19 @@ const getAssetManagementSummary = async (dateWhere = {}) => {
   };
 };
 
-const getPayrollManagementSummary = async () => {
-  const { month, from, to } = getCurrentCalendarMonthRange();
+const getPayrollManagementSummary = async ({ from = null, to = null } = {}) => {
+  const month =
+    from && to && from.slice(0, 7) === to.slice(0, 7)
+      ? from.slice(0, 7)
+      : null;
   const payrollRows = Employee
     ? await Employee.findAll({
-        where: activeWhere(Employee, {
-          date: { [Op.between]: [from, to] },
-        }),
+        where: activeWhere(Employee, buildDateWhere(from, to, "date")),
         attributes: [
           "basic_salary",
           "holiday_payment",
           "festival_bonus",
+          "bonus",
           "total_salary",
           "net_salary",
         ],
@@ -1513,8 +1302,14 @@ const getPayrollManagementSummary = async () => {
 
   const totals = payrollRows.reduce(
     (acc, row) => {
+      // Same Gross as the Payroll page (EmployeeTable getGrossSalaryAmount):
+      // total salary (incl. incentive) + holiday pay + festival bonus + bonus.
       const holidaySalary = (n(row.basic_salary) / 30) * n(row.holiday_payment);
-      const gross = n(row.total_salary) + holidaySalary + n(row.festival_bonus);
+      const gross =
+        n(row.total_salary) +
+        holidaySalary +
+        n(row.festival_bonus) +
+        n(row.bonus);
       const net = n(row.net_salary);
 
       acc.grossAmount += gross;
@@ -1527,7 +1322,13 @@ const getPayrollManagementSummary = async () => {
 
   return {
     month,
-    status: payrollRows.length ? "Last Month" : "No Payroll",
+    from,
+    to,
+    status: payrollRows.length
+      ? from || to
+        ? "Selected Period"
+        : "All Data"
+      : "No Payroll",
     totalEmployees: payrollRows.length,
     grossAmount: n(totals.grossAmount),
     deductionAmount: n(totals.deductionAmount),
@@ -1605,8 +1406,8 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
     getAccountsManagementSummary(currentDateWhere),
     getEmployeeManagementSummary({ from, to }),
     getAssetManagementSummary(currentDateWhere),
-    getPayrollManagementSummary(),
-    getPaymentModeCurrentBalance(),
+    getPayrollManagementSummary({ from, to }),
+    getPaymentModeCurrentBalance(currentDateWhere),
   ]);
 
   return {
@@ -1633,7 +1434,7 @@ const getOverviewDashboardFromDB = async (filters = {}) => {
         ),
       },
       lowStockItems: makeSnapshotMetric(inventorySnapshot.lowStock.count),
-      stockValue: makeSnapshotMetric(currentSummary.totalInventoryOverview),
+      stockValue: makeSnapshotMetric(getReportStockValue(inventoryStockReport)),
     },
     salesOverview,
     inventorySummary: {

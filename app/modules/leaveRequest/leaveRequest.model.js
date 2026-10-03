@@ -29,6 +29,16 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
         defaultValue: 1,
       },
+      // Half-day leave (startDate = endDate): First Half | Second Half.
+      isHalfDay: {
+        type: DataTypes.BOOLEAN,
+        allowNull: true,
+        defaultValue: false,
+      },
+      halfDaySession: {
+        type: DataTypes.STRING(16),
+        allowNull: true,
+      },
       reason: {
         type: DataTypes.STRING,
         allowNull: false,

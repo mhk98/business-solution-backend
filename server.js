@@ -13,9 +13,9 @@ const ApiError = require("./error/ApiError");
 const userLogHistory = require("./app/middlewares/userLogHistory");
 const { initializeChatSocket } = require("./app/realtime/socket");
 const {
-  startStellarAttendanceSync,
-  stopStellarAttendanceSync,
-} = require("./app/jobs/stellarAttendanceSync.job");
+  startAttendanceJobs,
+  stopAttendanceJobs,
+} = require("./app/jobs/attendance.job");
 const {
   startStockLedgerIntegrityCheck,
   stopStockLedgerIntegrityCheck,
@@ -111,6 +111,13 @@ app.use("/api/v1/user/register", authLimiter);
 app.use("/api/v1", apiLimiter);
 
 /* ========================
+   ZKTECO ADMS (attendance device push)
+======================== */
+
+// Must stay before the body parsers below — see zktecoAdms.routes.js.
+app.use("/iclock", require("./app/modules/zktecoAdms/zktecoAdms.routes"));
+
+/* ========================
    MIDDLEWARE
 ======================== */
 
@@ -195,7 +202,7 @@ const startServer = async () => {
       console.log(`🚀 Server running on port ${PORT}`);
     });
 
-    startStellarAttendanceSync();
+    startAttendanceJobs();
     startStockLedgerIntegrityCheck();
   } catch (error) {
     console.error("❌ Failed to connect to database:", error.message);
@@ -216,7 +223,7 @@ startServer();
 
 process.on("SIGTERM", async () => {
   console.log("SIGTERM received. Shutting down gracefully...");
-  stopStellarAttendanceSync();
+  stopAttendanceJobs();
   stopStockLedgerIntegrityCheck();
   await db.sequelize.close();
   server.close(() => {
@@ -227,7 +234,7 @@ process.on("SIGTERM", async () => {
 
 process.on("SIGINT", async () => {
   console.log("SIGINT received. Shutting down gracefully...");
-  stopStellarAttendanceSync();
+  stopAttendanceJobs();
   stopStockLedgerIntegrityCheck();
   await db.sequelize.close();
   server.close(() => {

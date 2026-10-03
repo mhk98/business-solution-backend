@@ -4,21 +4,42 @@ const db = require("../../../models");
 const BankAccount = db.bankAccount;
 const CashInOut = db.cashInOut;
 const FundTransfer = db.fundTransfer;
+const ApiError = require("../../../error/ApiError");
+const { ACCOUNT_TYPES } = require("./bankAccount.constants");
+
+const normalizeAccountType = (value, fallback = "Bank") => {
+  if (value === undefined || value === null || value === "") return fallback;
+  const match = ACCOUNT_TYPES.find(
+    (type) => type.toLowerCase() === String(value).trim().toLowerCase(),
+  );
+  if (!match) {
+    throw new ApiError(
+      400,
+      `Account type must be one of: ${ACCOUNT_TYPES.join(", ")}`,
+    );
+  }
+  return match;
+};
 
 const insertIntoDB = async (data) => {
-  const result = await BankAccount.create(data);
+  const result = await BankAccount.create({
+    ...data,
+    accountType: normalizeAccountType(data.accountType),
+  });
   return result;
 };
 
 // Balance is computed on the fly (no stored running balance) so it can never
 // drift out of sync with the underlying CashInOut / FundTransfer rows.
 // CashInOut's `bankAccount` column historically stores the account NUMBER
-// (not the BankAccount.Id), so it is matched by accountNumber here; FundTransfer
+// (not the BankAccount.Id), so it is matched by payment mode + accountNumber
+// here (a Bkash wallet and a bank account may share a number); FundTransfer
 // uses a proper bankAccount.Id foreign key.
 const getBalancesByAccountNumberAndId = async () => {
   const [cashInOutRows, transferOutRows, transferInRows] = await Promise.all([
     CashInOut.findAll({
       attributes: [
+        "paymentMode",
         "bankAccount",
         [
           db.Sequelize.fn(
@@ -30,8 +51,11 @@ const getBalancesByAccountNumberAndId = async () => {
           "net",
         ],
       ],
-      where: { paymentMode: "Bank", bankAccount: { [Op.ne]: null } },
-      group: ["bankAccount"],
+      where: {
+        paymentMode: { [Op.in]: ACCOUNT_TYPES },
+        bankAccount: { [Op.ne]: null },
+      },
+      group: ["paymentMode", "bankAccount"],
       raw: true,
     }),
     FundTransfer
@@ -40,7 +64,10 @@ const getBalancesByAccountNumberAndId = async () => {
             "fromBankAccount",
             [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "totalOut"],
           ],
-          where: { fromPaymentMode: "Bank", fromBankAccount: { [Op.ne]: null } },
+          where: {
+            fromPaymentMode: { [Op.in]: ACCOUNT_TYPES },
+            fromBankAccount: { [Op.ne]: null },
+          },
           group: ["fromBankAccount"],
           raw: true,
         })
@@ -51,16 +78,25 @@ const getBalancesByAccountNumberAndId = async () => {
             "toBankAccount",
             [db.Sequelize.fn("SUM", db.Sequelize.col("amount")), "totalIn"],
           ],
-          where: { toPaymentMode: "Bank", toBankAccount: { [Op.ne]: null } },
+          where: {
+            toPaymentMode: { [Op.in]: ACCOUNT_TYPES },
+            toBankAccount: { [Op.ne]: null },
+          },
           group: ["toBankAccount"],
           raw: true,
         })
       : [],
   ]);
 
+  const cashKey = (mode, number) =>
+    `${String(mode || "").toLowerCase()}|${String(number)}`;
   const netByAccountNumber = new Map();
   cashInOutRows.forEach((row) => {
-    netByAccountNumber.set(String(row.bankAccount), Number(row.net || 0));
+    const key = cashKey(row.paymentMode, row.bankAccount);
+    netByAccountNumber.set(
+      key,
+      (netByAccountNumber.get(key) || 0) + Number(row.net || 0),
+    );
   });
 
   const outById = new Map();
@@ -73,16 +109,19 @@ const getBalancesByAccountNumberAndId = async () => {
     inById.set(String(row.toBankAccount), Number(row.totalIn || 0));
   });
 
-  return { netByAccountNumber, outById, inById };
+  return { netByAccountNumber, outById, inById, cashKey };
 };
 
 const attachBalances = async (bankAccounts) => {
-  const { netByAccountNumber, outById, inById } =
+  const { netByAccountNumber, outById, inById, cashKey } =
     await getBalancesByAccountNumberAndId();
 
   return bankAccounts.map((account) => {
     const plain = account.get ? account.get({ plain: true }) : account;
-    const fromCashInOut = netByAccountNumber.get(String(plain.accountNumber)) || 0;
+    const fromCashInOut =
+      netByAccountNumber.get(
+        cashKey(plain.accountType || "Bank", plain.accountNumber),
+      ) || 0;
     const fromTransfersIn = inById.get(String(plain.Id)) || 0;
     const fromTransfersOut = outById.get(String(plain.Id)) || 0;
 
@@ -158,14 +197,23 @@ const deleteIdFromDB = async (id) => {
 };
 
 const updateOneFromDB = async (id, payload) => {
-  const result = await BankAccount.update(payload, {
+  const data = { ...payload };
+  if (data.accountType !== undefined) {
+    data.accountType = normalizeAccountType(data.accountType);
+  }
+  const result = await BankAccount.update(data, {
     where: { Id: id },
   });
   return result;
 };
 
-const getAllFromDBWithoutQuery = async () => {
+const getAllFromDBWithoutQuery = async (filters = {}) => {
+  const where = {};
+  if (filters.accountType) {
+    where.accountType = normalizeAccountType(filters.accountType);
+  }
   const result = await BankAccount.findAll({
+    where,
     paranoid: true,
     order: [["createdAt", "DESC"]],
   });

@@ -27,8 +27,10 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      // Account number (bank) or wallet number (Bkash/Nagad/Rocket). The DB
+      // column is VARCHAR; STRING keeps a wallet's leading 0.
       bankAccount: {
-        type: DataTypes.INTEGER,
+        type: DataTypes.STRING,
         allowNull: true,
       },
       lender: {

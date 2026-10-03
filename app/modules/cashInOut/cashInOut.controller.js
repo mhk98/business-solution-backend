@@ -1,3 +1,5 @@
+const { ACCOUNT_TYPES } = require("../bankAccount/bankAccount.constants");
+const WALLET_MODES = ACCOUNT_TYPES.filter((type) => type !== "Bank");
 const { getUploadedFilePath } = require("../../config/uploads");
 const catchAsync = require("../../../shared/catchAsync");
 const sendResponse = require("../../../shared/sendResponse");
@@ -242,6 +244,8 @@ const insertIntoDB = catchAsync(async (req, res) => {
   const file = req.file?.path ? getUploadedFilePath(req.file) : null;
 
   const isBank = paymentMode === "Bank";
+  const isWalletMode = WALLET_MODES.includes(paymentMode);
+  const isAccountMode = isBank || isWalletMode;
   // "Discount" = supplier discount-only Book entry: neither Cash In nor Cash
   // Out, but it keeps the supplier link like a Cash Out.
   const isCashOut = paymentStatus === "CashOut" || paymentStatus === "Discount";
@@ -255,13 +259,19 @@ const insertIntoDB = catchAsync(async (req, res) => {
     String(partyType || "").trim().toLowerCase() === "packaging manufacturer";
 
   // ✅ bankAccount sanitize
-  const bankAccountNumber =
-    isBank &&
+  const hasBankAccountValue =
     bankAccount !== undefined &&
     bankAccount !== null &&
-    String(bankAccount).trim() !== ""
+    String(bankAccount).trim() !== "";
+  // Bank keeps its historical numeric form; Bkash/Nagad/Rocket wallet
+  // numbers stay text so the leading 0 (017…) survives.
+  const bankAccountNumber = !hasBankAccountValue
+    ? null
+    : isBank
       ? Number(bankAccount)
-      : null;
+      : isWalletMode
+        ? String(bankAccount).trim()
+        : null;
 
   if (isBank && bankAccountNumber !== null && Number.isNaN(bankAccountNumber)) {
     throw new ApiError(400, "Bank Account must be a valid number");
@@ -404,8 +414,8 @@ const insertIntoDB = catchAsync(async (req, res) => {
   const data = {
     name: name || null,
     paymentMode,
-    bankName: isBank ? bankName || "" : "",
-    bankAccount: isBank ? bankAccountNumber : null,
+    bankName: isAccountMode ? bankName || "" : "",
+    bankAccount: isAccountMode ? bankAccountNumber : null,
     amount: amountNumber,
     discountAmount: discountNumber,
     paymentStatus: supplierEntryStatus(paymentStatus, amountNumber, discountNumber),
@@ -598,15 +608,23 @@ const updateOneFromDB = catchAsync(async (req, res) => {
   const file = req.file?.path ? getUploadedFilePath(req.file) : undefined;
 
   const isBank = paymentMode === "Bank";
+  const isWalletMode = WALLET_MODES.includes(paymentMode);
+  const isAccountMode = isBank || isWalletMode;
 
   // ✅ bankAccount sanitize
-  const bankAccountNumber =
-    isBank &&
+  const hasBankAccountValue =
     bankAccount !== undefined &&
     bankAccount !== null &&
-    String(bankAccount).trim() !== ""
+    String(bankAccount).trim() !== "";
+  // Bank keeps its historical numeric form; Bkash/Nagad/Rocket wallet
+  // numbers stay text so the leading 0 (017…) survives.
+  const bankAccountNumber = !hasBankAccountValue
+    ? null
+    : isBank
       ? Number(bankAccount)
-      : null;
+      : isWalletMode
+        ? String(bankAccount).trim()
+        : null;
 
   if (isBank && bankAccountNumber !== null && Number.isNaN(bankAccountNumber)) {
     throw new ApiError(400, "Bank Account must be a valid number");
@@ -706,8 +724,8 @@ const updateOneFromDB = catchAsync(async (req, res) => {
       paymentStatus !== undefined && amountNumber !== undefined
         ? supplierEntryStatus(paymentStatus, amountNumber, finalDiscount)
         : paymentStatus ?? undefined,
-    bankName: isBank ? bankName || "" : "", // ✅ Bank না হলে blank
-    bankAccount: isBank ? bankAccountNumber : null, // ✅ Bank না হলে NULL
+    bankName: isAccountMode ? bankName || "" : "", // ✅ Bank/wallet না হলে blank
+    bankAccount: isAccountMode ? bankAccountNumber : null, // ✅ Bank/wallet না হলে NULL
     remarks: remarks ?? undefined,
     note: finalStatus === "Approved" ? null : newNote,
     status: finalStatus,

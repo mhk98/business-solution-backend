@@ -523,14 +523,37 @@ db.attendanceLog = require("../app/modules/attendanceLog/attendanceLog.model")(
   DataTypes,
 );
 
-db.stellarAttendanceLog =
-  require("../app/modules/stellarAttendance/stellarAttendanceLog.model")(
+db.attendancePunch =
+  require("../app/modules/attendance/attendancePunch.model")(
     db.sequelize,
     DataTypes,
   );
 
-db.stellarAttendanceSyncState =
-  require("../app/modules/stellarAttendance/stellarAttendanceSyncState.model")(
+db.attendanceDay = require("../app/modules/attendance/attendanceDay.model")(
+  db.sequelize,
+  DataTypes,
+);
+
+db.attendancePolicy =
+  require("../app/modules/attendance/attendancePolicy.model")(
+    db.sequelize,
+    DataTypes,
+  );
+
+db.employeeShiftAssignment =
+  require("../app/modules/attendance/employeeShiftAssignment.model")(
+    db.sequelize,
+    DataTypes,
+  );
+
+db.zktecoDeviceUser =
+  require("../app/modules/zktecoAdms/zktecoDeviceUser.model")(
+    db.sequelize,
+    DataTypes,
+  );
+
+db.zktecoAdmsTrace =
+  require("../app/modules/zktecoAdms/zktecoAdmsTrace.model")(
     db.sequelize,
     DataTypes,
   );
@@ -1531,6 +1554,32 @@ db.leaveRequest.belongsTo(db.user, {
   as: "approvedBy",
 });
 
+// Attendance (punch → day engine, app/modules/attendance)
+db.employeeList.hasMany(db.attendanceDay, {
+  foreignKey: "employeeId",
+  as: "attendanceDays",
+});
+db.attendanceDay.belongsTo(db.employeeList, {
+  foreignKey: "employeeId",
+  as: "employee",
+});
+db.employeeList.hasMany(db.employeeShiftAssignment, {
+  foreignKey: "employeeId",
+  as: "shiftAssignments",
+});
+db.employeeShiftAssignment.belongsTo(db.employeeList, {
+  foreignKey: "employeeId",
+  as: "employee",
+});
+db.shift.hasMany(db.employeeShiftAssignment, {
+  foreignKey: "shiftId",
+  as: "assignments",
+});
+db.employeeShiftAssignment.belongsTo(db.shift, {
+  foreignKey: "shiftId",
+  as: "shift",
+});
+
 db.payrollRun.hasMany(db.payrollItem, {
   foreignKey: "payrollRunId",
   as: "items",
@@ -1629,6 +1678,15 @@ db.item.hasMany(db.itemRequisition, { foreignKey: "itemId" });
 db.itemRequisition.belongsTo(db.item, {
   foreignKey: "itemId",
   as: "item",
+});
+
+db.itemRequisition.hasOne(db.supplierHistory, {
+  foreignKey: "itemRequisitionId",
+  as: "supplierHistory",
+});
+db.supplierHistory.belongsTo(db.itemRequisition, {
+  foreignKey: "itemRequisitionId",
+  as: "itemRequisition",
 });
 
 db.supplier.hasMany(db.itemRequisition, { foreignKey: "supplierId" });
@@ -1803,6 +1861,70 @@ db.payable.belongsTo(db.supplier, { foreignKey: "supplierId", as: "supplier" });
 // Sync
 // NOTE: production এ force:true দিবেন না
 // =====================
+
+// Columns the attendance engine reads on the shared HR tables.
+const ensureAttendanceColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const addMissing = async (model, columns) => {
+    const tableName = model.getTableName();
+    const definition = await queryInterface.describeTable(tableName);
+    for (const [columnName, column] of Object.entries(columns)) {
+      if (!definition[columnName]) {
+        await queryInterface.addColumn(tableName, columnName, column);
+      }
+    }
+  };
+
+  await addMissing(db.shift, {
+    breakMinutes: { type: DataTypes.INTEGER, allowNull: true },
+    fullDayMinutes: { type: DataTypes.INTEGER, allowNull: true },
+    halfDayMinutes: { type: DataTypes.INTEGER, allowNull: true },
+    overtimeStartAfterMinutes: { type: DataTypes.INTEGER, allowNull: true },
+    minimumOvertimeMinutes: { type: DataTypes.INTEGER, allowNull: true },
+  });
+  await addMissing(db.holiday, {
+    departmentIds: { type: DataTypes.JSON, allowNull: true },
+  });
+  await addMissing(db.leaveRequest, {
+    isHalfDay: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: false },
+    halfDaySession: { type: DataTypes.STRING(16), allowNull: true },
+  });
+  await addMissing(db.employeeShiftAssignment, {
+    startTime: { type: DataTypes.STRING(16), allowNull: true },
+    endTime: { type: DataTypes.STRING(16), allowNull: true },
+    graceInMinutes: { type: DataTypes.INTEGER, allowNull: true },
+    graceOutMinutes: { type: DataTypes.INTEGER, allowNull: true },
+  });
+  await addMissing(db.attendancePolicy, {
+    holidayWorkPaid: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    weeklyOffWorkPaid: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  });
+  await addMissing(db.employeeList, {
+    attendancePin: { type: DataTypes.STRING(64), allowNull: true },
+    attendanceExempt: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: false },
+    exitDate: { type: DataTypes.DATEONLY, allowNull: true },
+  });
+};
+
+// ZKTeco punches used to be stored in the old StellarAttendanceLogs table
+// (negative accessId). Copy them into AttendancePunches once; the punchKey
+// is the same sha1 the ADMS service computes, so re-runs and re-sent punches
+// never duplicate. The old table itself is left untouched.
+const migrateLegacyDevicePunches = async () => {
+  const [tables] = await db.sequelize.query("SHOW TABLES LIKE 'StellarAttendanceLogs'");
+  if (!tables.length) return;
+  const punchTable = db.attendancePunch.getTableName();
+  await db.sequelize.query(
+    `INSERT IGNORE INTO \`${punchTable}\`
+       (punchKey, employeePin, punchDate, punchClock, punchAt, source,
+        deviceSerial, deviceName, rawPayload, createdAt, updatedAt)
+     SELECT SHA1(CONCAT(deviceId, '|', registrationId, '|', logDate, ' ', logTime)),
+            registrationId, logDate, LEFT(logTime, 8), logDateTime, 'device',
+            deviceId, deviceName, rawPayload, NOW(), NOW()
+       FROM StellarAttendanceLogs
+      WHERE accessId < 0 AND deviceId IS NOT NULL AND registrationId IS NOT NULL`,
+  );
+};
 
 const ensureHolidayRangeColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
@@ -2626,6 +2748,29 @@ const ensureItemRequisitionUnitColumn = async () => {
 
   if (!tableDefinition.manufactureId) {
     await queryInterface.addColumn(tableName, "manufactureId", {
+      type: DataTypes.INTEGER(10),
+      allowNull: true,
+    });
+  }
+
+  if (!tableDefinition.othersCost) {
+    await queryInterface.addColumn(tableName, "othersCost", {
+      type: DataTypes.DECIMAL(15, 2),
+      allowNull: false,
+      defaultValue: 0,
+    });
+  }
+
+  // "Others Cost" lines carry no item.
+  if (!tableDefinition.entryType) {
+    await queryInterface.addColumn(tableName, "entryType", {
+      type: DataTypes.STRING(32),
+      allowNull: false,
+      defaultValue: "Item",
+    });
+  }
+  if (tableDefinition.itemId && tableDefinition.itemId.allowNull === false) {
+    await queryInterface.changeColumn(tableName, "itemId", {
       type: DataTypes.INTEGER(10),
       allowNull: true,
     });
@@ -4163,6 +4308,33 @@ const ensureCourierBalanceColumns = async () => {
   }
 };
 
+const ensureBankAccountTypeColumn = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.bankAccount.getTableName();
+  const tableDefinition = await queryInterface.describeTable(tableName);
+  if (!tableDefinition.accountType) {
+    await queryInterface.addColumn(tableName, "accountType", {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: "Bank",
+    });
+  }
+
+  // Wallet numbers (017…) are stored in CashInOuts.bankAccount; an INT column
+  // would drop the leading 0. INT → VARCHAR is lossless.
+  const cashTable = db.cashInOut.getTableName();
+  const cashDefinition = await queryInterface.describeTable(cashTable);
+  if (
+    cashDefinition.bankAccount &&
+    /int/i.test(String(cashDefinition.bankAccount.type))
+  ) {
+    await queryInterface.changeColumn(cashTable, "bankAccount", {
+      type: DataTypes.STRING,
+      allowNull: true,
+    });
+  }
+};
+
 const ensureSupplierHistoryManufactureColumn = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
   const tableName = db.supplierHistory.getTableName();
@@ -4359,6 +4531,7 @@ db.sequelize
       });
     }
     await ensureCashInOutRefNoColumn();
+    await ensureBankAccountTypeColumn();
     await ensureSupplierHistoryManufactureColumn();
     await ensureCourierBalanceColumns();
     await ensureManufacturerTransactionCashInOutColumns();
@@ -4366,6 +4539,8 @@ db.sequelize
     await ensureMarketingExpenseColumns();
     await linkDollarSupplierDuesToMarketingExpenses();
     await ensureHolidayRangeColumns();
+    await ensureAttendanceColumns();
+    await migrateLegacyDevicePunches();
     await ensurePerformanceTrackerEntryColumns();
     await ensureAttendanceDeviceApiKeyColumn();
     await ensureEmployeeListColumns();

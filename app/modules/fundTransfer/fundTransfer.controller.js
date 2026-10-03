@@ -6,6 +6,7 @@ const db = require("../../../models");
 const { Op } = require("sequelize");
 const FundTransferService = require("./fundTransfer.service");
 const { FundTransferFilterAbleFields } = require("./fundTransfer.constants");
+const { ACCOUNT_TYPES } = require("../bankAccount/bankAccount.constants");
 const {
   resolveApprovalNotificationMessage,
 } = require("../../../shared/approvalNotification");
@@ -21,19 +22,19 @@ const normalizeOptionalText = (value) => {
 };
 
 const sanitizeBankAccount = (paymentMode, bankAccount, label) => {
-  if (paymentMode !== "Bank") return null;
+  if (!ACCOUNT_TYPES.includes(paymentMode)) return null;
 
   const hasValue =
     bankAccount !== undefined &&
     bankAccount !== null &&
     String(bankAccount).trim() !== "";
   if (!hasValue) {
-    throw new ApiError(400, `${label} bank account is required`);
+    throw new ApiError(400, `${label} account is required`);
   }
 
   const numberValue = Number(bankAccount);
   if (Number.isNaN(numberValue)) {
-    throw new ApiError(400, `${label} bank account must be a valid number`);
+    throw new ApiError(400, `${label} account must be a valid number`);
   }
 
   return numberValue;

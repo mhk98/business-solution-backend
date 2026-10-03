@@ -10,7 +10,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
   sendResponse(res, {
     statusCode: 200,
     success: true,
-    message: "Bank account created!!",
+    message: "Account created!!",
     data: result,
   });
 });
@@ -45,7 +45,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
   sendResponse(res, {
     statusCode: 200,
     success: true,
-    message: "Bank account updated!!",
+    message: "Account updated!!",
     data: result,
   });
 });
@@ -55,13 +55,15 @@ const deleteIdFromDB = catchAsync(async (req, res) => {
   sendResponse(res, {
     statusCode: 200,
     success: true,
-    message: "Bank account deleted!!",
+    message: "Account deleted!!",
     data: result,
   });
 });
 
 const getAllFromDBWithoutQuery = catchAsync(async (req, res) => {
-  const result = await BankAccountService.getAllFromDBWithoutQuery();
+  const result = await BankAccountService.getAllFromDBWithoutQuery(
+    pick(req.query, ["accountType"]),
+  );
   sendResponse(res, {
     statusCode: 200,
     success: true,

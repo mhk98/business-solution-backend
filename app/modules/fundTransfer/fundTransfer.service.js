@@ -6,6 +6,22 @@ const ApiError = require("../../../error/ApiError");
 const FundTransfer = db.fundTransfer;
 const Book = db.book;
 const BankAccount = db.bankAccount;
+const { ACCOUNT_TYPES } = require("../bankAccount/bankAccount.constants");
+
+// Bank and mobile wallets (Bkash/Nagad/Rocket) are all BankAccount rows,
+// picked by Id; Cash has no account.
+const isAccountMode = (mode) => ACCOUNT_TYPES.includes(mode);
+
+const assertAccountForMode = async (mode, accountId, side, transaction) => {
+  const account = await BankAccount.findByPk(accountId, { transaction });
+  if (!account) throw new ApiError(404, `${side} account not found`);
+  if ((account.accountType || "Bank") !== mode) {
+    throw new ApiError(
+      400,
+      `${side} account is a ${account.accountType || "Bank"} account, not ${mode}`,
+    );
+  }
+};
 
 const toDateOnly = (value) => {
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
@@ -77,23 +93,17 @@ const insertIntoDB = async (data) => {
     const book = await Book.findByPk(bookId, { transaction: t });
     if (!book) throw new ApiError(404, "Book not found");
 
-    if (fromPaymentMode === "Bank") {
-      const bank = await BankAccount.findByPk(fromBankAccount, {
-        transaction: t,
-      });
-      if (!bank) throw new ApiError(404, "From bank account not found");
+    if (isAccountMode(fromPaymentMode)) {
+      await assertAccountForMode(fromPaymentMode, fromBankAccount, "From", t);
     }
 
-    if (toPaymentMode === "Bank") {
-      const bank = await BankAccount.findByPk(toBankAccount, {
-        transaction: t,
-      });
-      if (!bank) throw new ApiError(404, "To bank account not found");
+    if (isAccountMode(toPaymentMode)) {
+      await assertAccountForMode(toPaymentMode, toBankAccount, "To", t);
     }
 
     const isSameAccount =
       fromPaymentMode === toPaymentMode &&
-      (fromPaymentMode !== "Bank" ||
+      (!isAccountMode(fromPaymentMode) ||
         Number(fromBankAccount) === Number(toBankAccount));
     if (isSameAccount) {
       throw new ApiError(400, "From and To account cannot be the same");
@@ -107,11 +117,11 @@ const insertIntoDB = async (data) => {
         bookId,
         date: date || normalizedDate,
         fromPaymentMode,
-        fromBankAccount: fromPaymentMode === "Bank" ? fromBankAccount : null,
-        fromBankName: fromPaymentMode === "Bank" ? fromBankName || "" : "",
+        fromBankAccount: isAccountMode(fromPaymentMode) ? fromBankAccount : null,
+        fromBankName: isAccountMode(fromPaymentMode) ? fromBankName || "" : "",
         toPaymentMode,
-        toBankAccount: toPaymentMode === "Bank" ? toBankAccount : null,
-        toBankName: toPaymentMode === "Bank" ? toBankName || "" : "",
+        toBankAccount: isAccountMode(toPaymentMode) ? toBankAccount : null,
+        toBankName: isAccountMode(toPaymentMode) ? toBankName || "" : "",
         amount,
         voucherNo,
         note: note || null,
@@ -266,19 +276,17 @@ const updateOneFromDB = async (id, payload) => {
       if (!book) throw new ApiError(404, "Book not found");
     }
 
-    if (finalFromMode === "Bank" && finalFromBank) {
-      const bank = await BankAccount.findByPk(finalFromBank, { transaction: t });
-      if (!bank) throw new ApiError(404, "From bank account not found");
+    if (isAccountMode(finalFromMode) && finalFromBank) {
+      await assertAccountForMode(finalFromMode, finalFromBank, "From", t);
     }
 
-    if (finalToMode === "Bank" && finalToBank) {
-      const bank = await BankAccount.findByPk(finalToBank, { transaction: t });
-      if (!bank) throw new ApiError(404, "To bank account not found");
+    if (isAccountMode(finalToMode) && finalToBank) {
+      await assertAccountForMode(finalToMode, finalToBank, "To", t);
     }
 
     const isSameAccount =
       finalFromMode === finalToMode &&
-      (finalFromMode !== "Bank" || Number(finalFromBank) === Number(finalToBank));
+      (!isAccountMode(finalFromMode) || Number(finalFromBank) === Number(finalToBank));
     if (isSameAccount) {
       throw new ApiError(400, "From and To account cannot be the same");
     }
@@ -290,26 +298,26 @@ const updateOneFromDB = async (id, payload) => {
         fromPaymentMode: fromPaymentMode ?? undefined,
         fromBankAccount:
           fromPaymentMode !== undefined
-            ? finalFromMode === "Bank"
+            ? isAccountMode(finalFromMode)
               ? finalFromBank
               : null
             : undefined,
         fromBankName:
           fromPaymentMode !== undefined
-            ? finalFromMode === "Bank"
+            ? isAccountMode(finalFromMode)
               ? fromBankName || ""
               : ""
             : undefined,
         toPaymentMode: toPaymentMode ?? undefined,
         toBankAccount:
           toPaymentMode !== undefined
-            ? finalToMode === "Bank"
+            ? isAccountMode(finalToMode)
               ? finalToBank
               : null
             : undefined,
         toBankName:
           toPaymentMode !== undefined
-            ? finalToMode === "Bank"
+            ? isAccountMode(finalToMode)
               ? toBankName || ""
               : ""
             : undefined,

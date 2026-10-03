@@ -15,9 +15,19 @@ module.exports = (sequelize, DataTypes) => {
           notEmpty: true,
         },
       },
+      // Null for an "Others Cost" line (see entryType).
       itemId: {
         type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
+      // "Item" (default) or "Others Cost": a supplier charge with no item —
+      // it posts only a supplier due on receipt, never Item Stock.
+      // `amount` is the product cost (Item Stock unit cost = amount ÷ qty);
+      // `othersCost` (transport, labour, …) is added only to the supplier due.
+      entryType: {
+        type: DataTypes.STRING(32),
         allowNull: false,
+        defaultValue: "Item",
       },
       bookId: {
         type: DataTypes.INTEGER(10),
@@ -49,6 +59,11 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         defaultValue: 0,
         allowNull: true,
+      },
+      othersCost: {
+        type: DataTypes.DECIMAL(15, 2),
+        allowNull: false,
+        defaultValue: 0,
       },
       procurement: {
         type: DataTypes.STRING,

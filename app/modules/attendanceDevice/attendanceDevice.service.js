@@ -25,6 +25,22 @@ const slugify = (value = "") =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
+// The serial number is how a ZKTeco ADMS device identifies itself (see
+// zktecoAdms), so it must be unique among active devices.
+const assertUniqueSerial = async (serialNumber, exceptId) => {
+  if (!serialNumber) return;
+  const clash = await AttendanceDevice.findOne({
+    where: {
+      serialNumber,
+      ...(exceptId ? { Id: { [Op.ne]: exceptId } } : {}),
+    },
+    paranoid: true,
+  });
+  if (clash) {
+    throw new ApiError(400, `Serial number ${serialNumber} is already used by "${clash.name}"`);
+  }
+};
+
 const buildDevicePayload = (data = {}, existing = {}) => {
   const code = String(data.code || existing.code || "").trim();
   const name = String(data.name || existing.name || "").trim();
@@ -40,6 +56,11 @@ const buildDevicePayload = (data = {}, existing = {}) => {
     code: code || null,
     brand: data.brand || existing.brand || "ZKTeco",
     model: data.model || existing.model || "SpeedFace-V5L",
+    serialNumber:
+      data.serialNumber !== undefined
+        ? String(data.serialNumber || "").trim() || null
+        : existing.serialNumber,
+    syncMethod: data.syncMethod || existing.syncMethod || "ADMS",
     deviceIdentifier:
       String(data.deviceIdentifier || "").trim() ||
       existing.deviceIdentifier ||
@@ -52,8 +73,10 @@ const buildDevicePayload = (data = {}, existing = {}) => {
 };
 
 const insertIntoDB = async (data, user) => {
+  const payload = buildDevicePayload(data);
+  await assertUniqueSerial(payload.serialNumber);
   const result = await AttendanceDevice.create(
-    applyCreateWorkflow(buildDevicePayload(data), user),
+    applyCreateWorkflow(payload, user),
   );
   return getDataById(result.Id);
 };
@@ -125,6 +148,7 @@ const updateOneFromDB = async (id, payload, user) => {
     throw new ApiError(404, "Attendance device not found");
   }
   const data = buildDevicePayload(payload, existing || {});
+  await assertUniqueSerial(data.serialNumber, Number(id));
 
   await AttendanceDevice.update(applyUpdateWorkflow(data, user), {
     where: { Id: id },
