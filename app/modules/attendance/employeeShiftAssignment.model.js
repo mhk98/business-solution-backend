@@ -12,7 +12,7 @@ module.exports = (sequelize, DataTypes) => {
         autoIncrement: true,
         allowNull: false,
       },
-      employeeId: {
+      userId: {
         type: DataTypes.INTEGER(10),
         allowNull: false,
       },
@@ -68,7 +68,7 @@ module.exports = (sequelize, DataTypes) => {
     {
       timestamps: true,
       paranoid: true,
-      indexes: [{ fields: ["employeeId", "effectiveFrom"] }],
+      indexes: [{ fields: ["userId", "effectiveFrom"] }],
     },
   );
   return EmployeeShiftAssignment;

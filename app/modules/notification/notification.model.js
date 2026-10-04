@@ -75,6 +75,7 @@ const NOTIFICATION_URL_PERMISSION_MAP = [
   ["/owner", "owner"],
   ["/tasks", "tasks"],
   ["/notifications", "notifications"],
+  ["/leave-request", "leave_management"],
 ];
 
 const isNotificationEmailEnabled = () =>

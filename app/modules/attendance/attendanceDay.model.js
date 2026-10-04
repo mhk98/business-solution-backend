@@ -14,7 +14,7 @@ module.exports = (sequelize, DataTypes) => {
         autoIncrement: true,
         allowNull: false,
       },
-      employeeId: {
+      userId: {
         type: DataTypes.INTEGER(10),
         allowNull: false,
       },
@@ -157,7 +157,7 @@ module.exports = (sequelize, DataTypes) => {
     {
       timestamps: true,
       indexes: [
-        { unique: true, fields: ["employeeId", "attendanceDate"] },
+        { unique: true, fields: ["userId", "attendanceDate"] },
         { fields: ["attendanceDate"] },
       ],
     },

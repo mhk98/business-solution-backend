@@ -10,6 +10,9 @@ const LeaveRequestController = require("./leaveRequest.controller");
 router.post("/create", auth(), requireMenuPermission("leave_management"), LeaveRequestController.insertIntoDB);
 router.get("/", auth(), requireMenuPermission("leave_management"), LeaveRequestController.getAllFromDB);
 router.get("/all", auth(), requireMenuPermission("leave_management"), LeaveRequestController.getAllFromDBWithoutQuery);
+// The assigned approver (team leader) needs no Leave Management permission.
+router.get("/approvals", auth(), LeaveRequestController.getMyApprovals);
+router.post("/:id/decide", auth(), LeaveRequestController.decideLeave);
 router.get("/me", auth(), requireAnyPermission(["employee_profile", "leave_management"]), LeaveRequestController.getMyLeaveRequests);
 router.get("/:id", auth(), requireMenuPermission("leave_management"), LeaveRequestController.getDataById);
 router.put("/:id", auth(), requireMenuPermission("leave_management"), LeaveRequestController.updateOneFromDB);

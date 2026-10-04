@@ -10,7 +10,12 @@ module.exports = (sequelize, DataTypes) => {
       },
       employeeId: {
         type: DataTypes.INTEGER(10),
-        allowNull: false,
+        allowNull: true,
+      },
+      // The attendance person (Users.Id) the correction is for.
+      userId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
       },
       attendanceDate: {
         type: DataTypes.DATEONLY,

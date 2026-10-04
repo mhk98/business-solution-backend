@@ -51,11 +51,13 @@ const WRITE_FIELDS = [
   "computedAt",
 ];
 
+// People come from Users (login accounts) — each user's Id is unique, so it
+// doubles as the device PIN unless attendancePin overrides it.
 const EMPLOYEE_ATTRIBUTES = [
   "Id",
-  "name",
-  "employee_id",
-  "employeeCode",
+  "FirstName",
+  "LastName",
+  "role",
   "attendancePin",
   "attendanceExempt",
   "joiningDate",
@@ -65,9 +67,9 @@ const EMPLOYEE_ATTRIBUTES = [
   "departmentId",
 ];
 
-// The PIN an employee punches with on the device.
+// The PIN a user punches with on the device: attendancePin, else their Id.
 const employeePin = (employee) =>
-  String(employee?.attendancePin || employee?.employee_id || employee?.employeeCode || "").trim();
+  String(employee?.attendancePin || employee?.Id || "").trim();
 
 const isTrackedEmployee = (employee) =>
   !employee.attendanceExempt && !INACTIVE_STATUS_RE.test(String(employee.status || ""));
@@ -96,11 +98,11 @@ const holidayAppliesTo = (holiday, employee) => {
 const loadContext = async ({ ctxFrom, ctxTo, employeeIds }) => {
   const employeeWhere = employeeIds ? { Id: { [Op.in]: employeeIds } } : {};
   const [employees, shifts, assignments, holidays, leaves, punches] = await Promise.all([
-    db.employeeList.findAll({ where: employeeWhere, attributes: EMPLOYEE_ATTRIBUTES, raw: true }),
+    db.user.findAll({ where: employeeWhere, attributes: EMPLOYEE_ATTRIBUTES, raw: true }),
     db.shift.findAll({ raw: true, paranoid: false }),
     db.employeeShiftAssignment.findAll({
       where: {
-        ...(employeeIds ? { employeeId: { [Op.in]: employeeIds } } : {}),
+        ...(employeeIds ? { userId: { [Op.in]: employeeIds } } : {}),
         effectiveFrom: { [Op.lte]: ctxTo },
         [Op.or]: [{ effectiveTo: null }, { effectiveTo: { [Op.gte]: ctxFrom } }],
       },
@@ -110,7 +112,7 @@ const loadContext = async ({ ctxFrom, ctxTo, employeeIds }) => {
     db.holiday.findAll({ raw: true }),
     db.leaveRequest.findAll({
       where: {
-        ...(employeeIds ? { employeeId: { [Op.in]: employeeIds } } : {}),
+        ...(employeeIds ? { userId: { [Op.in]: employeeIds } } : {}),
         approvalStatus: "Approved",
         startDate: { [Op.lte]: ctxTo },
         endDate: { [Op.gte]: ctxFrom },
@@ -120,7 +122,7 @@ const loadContext = async ({ ctxFrom, ctxTo, employeeIds }) => {
     }),
     db.attendancePunch.findAll({
       where: { punchDate: { [Op.between]: [addDays(ctxFrom, -1), addDays(ctxTo, 1)] } },
-      attributes: ["employeePin", "employeeId", "punchDate", "punchClock"],
+      attributes: ["employeePin", "userId", "punchDate", "punchClock"],
       raw: true,
     }),
   ]);
@@ -145,8 +147,8 @@ const collectPunches = (employee, pinOwners, punches, base) => {
   return punches
     .filter(
       (punch) =>
-        (punch.employeeId && Number(punch.employeeId) === Number(employee.Id)) ||
-        (!punch.employeeId && ownsPin && String(punch.employeePin || "").trim() === pin),
+        (punch.userId && Number(punch.userId) === Number(employee.Id)) ||
+        (!punch.userId && ownsPin && String(punch.employeePin || "").trim() === pin),
     )
     .map((punch) => {
       const clock = String(punch.punchClock || "");
@@ -162,7 +164,7 @@ const collectPunches = (employee, pinOwners, punches, base) => {
 const resolveShift = ({ employee, date, assignments, shiftById, policy }) => {
   const assignment = assignments.find(
     (row) =>
-      Number(row.employeeId) === Number(employee.Id) &&
+      Number(row.userId) === Number(employee.Id) &&
       row.effectiveFrom <= date &&
       (!row.effectiveTo || row.effectiveTo >= date),
   );
@@ -187,7 +189,7 @@ const resolveShift = ({ employee, date, assignments, shiftById, policy }) => {
 const findLeave = (leaves, employee, date) => {
   const matches = leaves.filter(
     (leave) =>
-      Number(leave.employeeId) === Number(employee.Id) &&
+      Number(leave.userId) === Number(employee.Id) &&
       String(leave.startDate).slice(0, 10) <= date &&
       String(leave.endDate).slice(0, 10) >= date,
   );
@@ -239,7 +241,7 @@ const evaluateEmployee = ({ employee, context, policy, ctxFrom, ctxTo, today, no
   return policy.sandwichRule ? applySandwichRule(days) : days;
 };
 
-// pin → [employeeId] for tracked employees (a PIN shared by two employees
+// pin → [userId] for tracked employees (a PIN shared by two employees
 // is credited to both and flagged on the Attendance Setup page).
 const buildPinOwners = (employees) => {
   const owners = new Map();
@@ -277,12 +279,12 @@ const computeRange = async ({ from, to, employeeIds = null } = {}) => {
     where: {
       attendanceDate: { [Op.between]: [start, end] },
       isLocked: true,
-      ...(ids ? { employeeId: { [Op.in]: ids } } : {}),
+      ...(ids ? { userId: { [Op.in]: ids } } : {}),
     },
-    attributes: ["employeeId", "attendanceDate"],
+    attributes: ["userId", "attendanceDate"],
     raw: true,
   });
-  const locked = new Set(lockedRows.map((row) => `${row.employeeId}|${row.attendanceDate}`));
+  const locked = new Set(lockedRows.map((row) => `${row.userId}|${row.attendanceDate}`));
 
   const nowMinutes = bdNowMinutes();
   const computedAt = new Date();
@@ -294,10 +296,10 @@ const computeRange = async ({ from, to, employeeIds = null } = {}) => {
     days.forEach(({ date, result }) => {
       if (date < start || date > end || locked.has(`${employee.Id}|${date}`)) return;
       if (!result) {
-        removals.push({ employeeId: employee.Id, attendanceDate: date });
+        removals.push({ userId: employee.Id, attendanceDate: date });
         return;
       }
-      upserts.push({ employeeId: employee.Id, attendanceDate: date, ...result, source: "auto", computedAt });
+      upserts.push({ userId: employee.Id, attendanceDate: date, ...result, source: "auto", computedAt });
     });
   });
 
@@ -310,12 +312,12 @@ const computeRange = async ({ from, to, employeeIds = null } = {}) => {
     }
     if (removals.length) {
       const byEmployee = removals.reduce((acc, row) => {
-        (acc[row.employeeId] = acc[row.employeeId] || []).push(row.attendanceDate);
+        (acc[row.userId] = acc[row.userId] || []).push(row.attendanceDate);
         return acc;
       }, {});
-      for (const [employeeId, dates] of Object.entries(byEmployee)) {
+      for (const [userId, dates] of Object.entries(byEmployee)) {
         await db.attendanceDay.destroy({
-          where: { employeeId, attendanceDate: { [Op.in]: dates }, isLocked: false },
+          where: { userId, attendanceDate: { [Op.in]: dates }, isLocked: false },
           transaction,
         });
       }
@@ -323,7 +325,7 @@ const computeRange = async ({ from, to, employeeIds = null } = {}) => {
     if (exempt.length) {
       await db.attendanceDay.destroy({
         where: {
-          employeeId: { [Op.in]: exempt },
+          userId: { [Op.in]: exempt },
           attendanceDate: { [Op.between]: [start, end] },
           isLocked: false,
         },

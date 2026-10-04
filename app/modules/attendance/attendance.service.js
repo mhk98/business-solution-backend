@@ -34,55 +34,71 @@ const requireMonth = (month) => {
   return bounds;
 };
 
-const loadEmployees = async ({ departmentId, searchTerm, employeeId } = {}) => {
+// Attendance people = Users (login accounts). Name, department and default
+// shift come from the user's own attendance fields.
+const USER_ATTRIBUTES = [
+  "Id",
+  "FirstName",
+  "LastName",
+  "Email",
+  "role",
+  "status",
+  "attendancePin",
+  "attendanceExempt",
+  "joiningDate",
+  "exitDate",
+  "shiftId",
+  "departmentId",
+];
+
+const userName = (user) => [user.FirstName, user.LastName].filter(Boolean).join(" ").trim() || user.Email || `User #${user.Id}`;
+
+const loadEmployees = async ({ departmentId, searchTerm, userId } = {}) => {
   const where = {};
   if (departmentId) where.departmentId = departmentId;
-  if (employeeId) where.Id = employeeId;
+  if (userId) where.Id = userId;
   if (searchTerm && String(searchTerm).trim()) {
-    const term = `%${String(searchTerm).trim()}%`;
+    const raw = String(searchTerm).trim();
+    const term = `%${raw}%`;
     where[Op.or] = [
-      { name: { [Op.like]: term } },
-      { employee_id: { [Op.like]: term } },
-      { employeeCode: { [Op.like]: term } },
+      { FirstName: { [Op.like]: term } },
+      { LastName: { [Op.like]: term } },
+      { Email: { [Op.like]: term } },
       { attendancePin: { [Op.like]: term } },
+      ...(/^\d+$/.test(raw) ? [{ Id: Number(raw) }] : []),
     ];
   }
-  const rows = await db.employeeList.findAll({
+  const rows = await db.user.findAll({
     where,
-    attributes: [
-      "Id",
-      "name",
-      "employee_id",
-      "employeeCode",
-      "attendancePin",
-      "attendanceExempt",
-      "joiningDate",
-      "exitDate",
-      "status",
-      "shiftId",
-      "departmentId",
-      "designationId",
-    ],
+    attributes: USER_ATTRIBUTES,
     include: [
-      { model: db.department, as: "department", attributes: ["Id", "name"], required: false },
-      { model: db.shift, as: "shift", attributes: ["Id", "name", "startTime", "endTime"], required: false },
+      { model: db.department, as: "attendanceDepartment", attributes: ["Id", "name", "teamLeaderUserId"], required: false },
+      { model: db.shift, as: "attendanceShift", attributes: ["Id", "name", "startTime", "endTime"], required: false },
     ],
-    order: [["name", "ASC"]],
+    order: [["FirstName", "ASC"], ["LastName", "ASC"]],
   });
-  return rows.map((row) => row.get({ plain: true }));
+  return rows.map((row) => {
+    const user = row.get({ plain: true });
+    return { ...user, name: userName(user), department: user.attendanceDepartment, shift: user.attendanceShift };
+  });
 };
 
 const employeeInfo = (employee) => ({
   Id: employee.Id,
   name: employee.name,
   pin: employeePin(employee),
-  employeeCode: employee.employee_id || employee.employeeCode || null,
+  role: employee.role || null,
   department: employee.department?.name || null,
   departmentId: employee.departmentId || null,
 });
 
+// Rows from before the move to Users carry no userId and are skipped.
 const loadDays = (where) =>
-  db.attendanceDay.findAll({ where, raw: true, order: [["attendanceDate", "ASC"]] });
+  db.attendanceDay.findAll({
+    where: { userId: { [Op.ne]: null }, ...where },
+    raw: true,
+    order: [["attendanceDate", "ASC"]],
+  });
 
 // Totals over a set of AttendanceDays (one employee).
 const summarize = (days, policy) => {
@@ -175,8 +191,8 @@ const getDaily = async ({ date, departmentId, status, searchTerm } = {}) => {
   const day = date ? requireYmd(date, "date") : bdToday();
   const [policy, employees] = await Promise.all([getPolicy(), loadEmployees({ departmentId, searchTerm })]);
   const ids = employees.map((employee) => employee.Id);
-  const rows = ids.length ? await loadDays({ attendanceDate: day, employeeId: { [Op.in]: ids } }) : [];
-  const byEmployee = new Map(rows.map((row) => [Number(row.employeeId), row]));
+  const rows = ids.length ? await loadDays({ attendanceDate: day, userId: { [Op.in]: ids } }) : [];
+  const byEmployee = new Map(rows.map((row) => [Number(row.userId), row]));
 
   const employedOn = (employee) =>
     (!employee.joiningDate || String(employee.joiningDate).slice(0, 10) <= day) &&
@@ -219,10 +235,10 @@ const getMonthly = async ({ month, from, to, departmentId, searchTerm } = {}) =>
   const [policy, employees] = await Promise.all([getPolicy(), loadEmployees({ departmentId, searchTerm })]);
   const ids = employees.map((employee) => employee.Id);
   const rows = ids.length
-    ? await loadDays({ attendanceDate: { [Op.between]: [range.from, range.to] }, employeeId: { [Op.in]: ids } })
+    ? await loadDays({ attendanceDate: { [Op.between]: [range.from, range.to] }, userId: { [Op.in]: ids } })
     : [];
   const byEmployee = rows.reduce((acc, row) => {
-    (acc[row.employeeId] = acc[row.employeeId] || []).push(row);
+    (acc[row.userId] = acc[row.userId] || []).push(row);
     return acc;
   }, {});
 
@@ -244,15 +260,15 @@ const getMonthly = async ({ month, from, to, departmentId, searchTerm } = {}) =>
   };
 };
 
-const getJobCard = async ({ employeeId, month } = {}) => {
-  if (!employeeId) throw new ApiError(400, "employeeId is required");
+const getJobCard = async ({ userId, month } = {}) => {
+  if (!userId) throw new ApiError(400, "employeeId is required");
   const range = requireMonth(month);
-  const [policy, employees] = await Promise.all([getPolicy(), loadEmployees({ employeeId })]);
+  const [policy, employees] = await Promise.all([getPolicy(), loadEmployees({ userId })]);
   const employee = employees[0];
-  if (!employee) throw new ApiError(404, "Employee not found");
+  if (!employee) throw new ApiError(404, "User not found");
 
   const [rows, punches] = await Promise.all([
-    loadDays({ employeeId, attendanceDate: { [Op.between]: [range.from, range.to] } }),
+    loadDays({ userId, attendanceDate: { [Op.between]: [range.from, range.to] } }),
     findEmployeePunches(employee, addDays(range.from, -1), addDays(range.to, 1)),
   ]);
   const byDate = new Map(rows.map((row) => [row.attendanceDate, row]));
@@ -283,14 +299,14 @@ const findEmployeePunches = (employee, from, to) => {
   return db.attendancePunch.findAll({
     where: {
       punchDate: { [Op.between]: [from, to] },
-      [Op.or]: [{ employeeId: employee.Id }, ...(pin ? [{ employeeId: null, employeePin: pin }] : [])],
+      [Op.or]: [{ userId: employee.Id }, ...(pin ? [{ userId: null, employeePin: pin }] : [])],
     },
     order: [["punchDate", "ASC"], ["punchClock", "ASC"]],
     raw: true,
   });
 };
 
-const getPunches = async ({ from, to, employeeId, pin, source, limit } = {}) => {
+const getPunches = async ({ from, to, userId, pin, source, limit } = {}) => {
   const end = to ? requireYmd(to, "to") : bdToday();
   const start = from ? requireYmd(from, "from") : end;
   const where = { punchDate: { [Op.between]: [start, end] } };
@@ -300,13 +316,13 @@ const getPunches = async ({ from, to, employeeId, pin, source, limit } = {}) => 
   const employees = await loadEmployees();
   const pinOwners = buildPinOwners(employees.filter(isTrackedEmployee));
   const byId = new Map(employees.map((employee) => [employee.Id, employee]));
-  if (employeeId) {
-    const employee = byId.get(Number(employeeId));
-    if (!employee) throw new ApiError(404, "Employee not found");
+  if (userId) {
+    const employee = byId.get(Number(userId));
+    if (!employee) throw new ApiError(404, "User not found");
     const employeePinValue = employeePin(employee);
     where[Op.or] = [
-      { employeeId: employee.Id },
-      ...(employeePinValue ? [{ employeeId: null, employeePin: employeePinValue }] : []),
+      { userId: employee.Id },
+      ...(employeePinValue ? [{ userId: null, employeePin: employeePinValue }] : []),
     ];
   }
 
@@ -318,7 +334,7 @@ const getPunches = async ({ from, to, employeeId, pin, source, limit } = {}) => 
     raw: true,
   });
   return rows.map((row) => {
-    const ownerIds = row.employeeId ? [Number(row.employeeId)] : pinOwners.get(String(row.employeePin || "").trim()) || [];
+    const ownerIds = row.userId ? [Number(row.userId)] : pinOwners.get(String(row.employeePin || "").trim()) || [];
     return {
       ...row,
       employees: ownerIds.map((id) => byId.get(id)).filter(Boolean).map((employee) => ({ Id: employee.Id, name: employee.name })),
@@ -332,7 +348,7 @@ const getDashboard = async ({ date } = {}) => {
   const [daily, policy] = await Promise.all([getDaily({ date: today }), getPolicy()]);
   const monthRows = await loadDays({ attendanceDate: { [Op.between]: [monthFrom, today] } });
   const byEmployee = monthRows.reduce((acc, row) => {
-    (acc[row.employeeId] = acc[row.employeeId] || []).push(row);
+    (acc[row.userId] = acc[row.userId] || []).push(row);
     return acc;
   }, {});
   const monthly = Object.values(byEmployee).map((rows) => summarize(rows, policy));
@@ -355,23 +371,23 @@ const getDashboard = async ({ date } = {}) => {
 
 // --- Recompute / manual corrections ------------------------------------------
 
-const recompute = async ({ from, to, employeeId } = {}) => {
+const recompute = async ({ from, to, userId } = {}) => {
   const end = to ? requireYmd(to, "to") : bdToday();
   const start = from ? requireYmd(from, "from") : end;
   if (start > end) throw new ApiError(400, "from must not be after to");
-  return recomputeNow({ from: start, to: end, employeeIds: employeeId ? [Number(employeeId)] : null });
+  return recomputeNow({ from: start, to: end, employeeIds: userId ? [Number(userId)] : null });
 };
 
-const addManualPunch = async ({ employeeId, date, time, note } = {}, user = {}) => {
-  if (!employeeId) throw new ApiError(400, "employeeId is required");
+const addManualPunch = async ({ userId, date, time, note } = {}, user = {}) => {
+  if (!userId) throw new ApiError(400, "employeeId is required");
   requireYmd(date, "date");
   if (clockToMinutes(time) === null) throw new ApiError(400, "time must be HH:MM");
-  const employee = await db.employeeList.findByPk(employeeId, { attributes: ["Id"] });
-  if (!employee) throw new ApiError(404, "Employee not found");
+  const employee = await db.user.findByPk(userId, { attributes: ["Id"] });
+  if (!employee) throw new ApiError(404, "User not found");
   const clock = String(time).length === 5 ? `${time}:00` : String(time).slice(0, 8);
   const row = await db.attendancePunch.create({
     punchKey: `manual:${crypto.randomUUID()}`,
-    employeeId: employee.Id,
+    userId: employee.Id,
     punchDate: date,
     punchClock: clock,
     source: "manual",
@@ -388,9 +404,9 @@ const deleteManualPunch = async (id) => {
   if (row.source !== "manual") {
     throw new ApiError(400, "Only manual punches can be deleted here; device punches are kept as recorded");
   }
-  const { employeeId, punchDate } = row;
+  const { userId, punchDate } = row;
   await row.destroy();
-  await recomputeNow({ from: addDays(punchDate, -1), to: punchDate, employeeIds: [employeeId] });
+  await recomputeNow({ from: addDays(punchDate, -1), to: punchDate, employeeIds: [userId] });
   return { deleted: true };
 };
 
@@ -405,14 +421,14 @@ const OVERRIDE_VALUES = {
 };
 
 // Sets a day's status by hand and locks it against the engine.
-const overrideDay = async ({ employeeId, date, status, note, clearLate, clearEarlyLeave } = {}, user = {}) => {
-  if (!employeeId) throw new ApiError(400, "employeeId is required");
+const overrideDay = async ({ userId, date, status, note, clearLate, clearEarlyLeave } = {}, user = {}) => {
+  if (!userId) throw new ApiError(400, "employeeId is required");
   requireYmd(date, "date");
   if (!OVERRIDE_VALUES[status]) throw new ApiError(400, `status must be one of: ${DAY_STATUSES.join(", ")}`);
   if (date > bdToday()) throw new ApiError(400, "A future date cannot be overridden");
   if (!note || !String(note).trim()) throw new ApiError(400, "A note is required for a manual override");
 
-  const existing = await db.attendanceDay.findOne({ where: { employeeId, attendanceDate: date } });
+  const existing = await db.attendanceDay.findOne({ where: { userId, attendanceDate: date } });
   const keepFlags = status === "Present" || status === "Half Day" || status === "Half Leave";
   const patch = {
     status,
@@ -428,31 +444,31 @@ const overrideDay = async ({ employeeId, date, status, note, clearLate, clearEar
     manualNote: String(note).trim().slice(0, 255),
   };
   if (existing) await existing.update(patch);
-  else await db.attendanceDay.create({ employeeId, attendanceDate: date, ...patch });
-  return db.attendanceDay.findOne({ where: { employeeId, attendanceDate: date }, raw: true });
+  else await db.attendanceDay.create({ userId, attendanceDate: date, ...patch });
+  return db.attendanceDay.findOne({ where: { userId, attendanceDate: date }, raw: true });
 };
 
-const clearOverride = async ({ employeeId, date } = {}) => {
-  if (!employeeId) throw new ApiError(400, "employeeId is required");
+const clearOverride = async ({ userId, date } = {}) => {
+  if (!userId) throw new ApiError(400, "employeeId is required");
   requireYmd(date, "date");
   await db.attendanceDay.update(
     { isLocked: false, lockedByUserId: null, manualNote: null, source: "auto" },
-    { where: { employeeId, attendanceDate: date } },
+    { where: { userId, attendanceDate: date } },
   );
-  await recomputeNow({ from: date, to: date, employeeIds: [Number(employeeId)] });
-  return db.attendanceDay.findOne({ where: { employeeId, attendanceDate: date }, raw: true });
+  await recomputeNow({ from: date, to: date, employeeIds: [Number(userId)] });
+  return db.attendanceDay.findOne({ where: { userId, attendanceDate: date }, raw: true });
 };
 
 // --- Shift assignments -----------------------------------------------------------
 
 const assignmentIncludes = [
-  { model: db.employeeList, as: "employee", attributes: ["Id", "name", "employee_id"], required: false },
+  { model: db.user, as: "user", attributes: ["Id", "FirstName", "LastName", "Email"], required: false },
   { model: db.shift, as: "shift", attributes: ["Id", "name", "startTime", "endTime", "weeklyOffDays"], required: false },
 ];
 
-const listAssignments = async ({ employeeId, shiftId, activeOn, searchTerm } = {}) => {
+const listAssignments = async ({ userId, shiftId, activeOn, searchTerm } = {}) => {
   const where = {};
-  if (employeeId) where.employeeId = employeeId;
+  if (userId) where.userId = userId;
   if (shiftId) where.shiftId = shiftId;
   if (activeOn && isYmd(activeOn)) {
     where.effectiveFrom = { [Op.lte]: activeOn };
@@ -464,7 +480,10 @@ const listAssignments = async ({ employeeId, shiftId, activeOn, searchTerm } = {
       include: assignmentIncludes,
       order: [["effectiveFrom", "DESC"], ["Id", "DESC"]],
     })
-  ).map((row) => row.get({ plain: true }));
+  ).map((row) => {
+    const plain = row.get({ plain: true });
+    return { ...plain, employee: plain.user ? { Id: plain.user.Id, name: userName(plain.user) } : null };
+  });
   if (searchTerm && String(searchTerm).trim()) {
     const term = String(searchTerm).trim().toLowerCase();
     rows = rows.filter(
@@ -512,7 +531,7 @@ const cleanAssignment = (payload = {}) => {
 // that started earlier is closed the day before; one that starts on/after
 // the new date (and would overlap) is rejected.
 const createAssignments = async (payload = {}, user = {}) => {
-  const ids = (Array.isArray(payload.employeeIds) ? payload.employeeIds : [payload.employeeId])
+  const ids = (Array.isArray(payload.userIds) ? payload.userIds : [])
     .map(Number)
     .filter(Boolean);
   if (!ids.length) throw new ApiError(400, "Select at least one employee");
@@ -522,10 +541,10 @@ const createAssignments = async (payload = {}, user = {}) => {
 
   return db.sequelize.transaction(async (transaction) => {
     const created = [];
-    for (const employeeId of ids) {
+    for (const userId of ids) {
       const overlapping = await db.employeeShiftAssignment.findAll({
         where: {
-          employeeId,
+          userId,
           ...(data.effectiveTo ? { effectiveFrom: { [Op.lte]: data.effectiveTo } } : {}),
           [Op.or]: [{ effectiveTo: null }, { effectiveTo: { [Op.gte]: data.effectiveFrom } }],
         },
@@ -535,14 +554,14 @@ const createAssignments = async (payload = {}, user = {}) => {
         if (row.effectiveFrom >= data.effectiveFrom) {
           throw new ApiError(
             400,
-            `Employee #${employeeId} already has a shift from ${row.effectiveFrom}; edit or delete it first`,
+            `User #${userId} already has a shift from ${row.effectiveFrom}; edit or delete it first`,
           );
         }
         await row.update({ effectiveTo: addDays(data.effectiveFrom, -1) }, { transaction });
       }
       created.push(
         await db.employeeShiftAssignment.create(
-          { ...data, employeeId, createdByUserId: user.Id || null },
+          { ...data, userId, createdByUserId: user.Id || null },
           { transaction },
         ),
       );
@@ -558,7 +577,7 @@ const updateAssignment = async (id, payload = {}) => {
   const clash = await db.employeeShiftAssignment.findOne({
     where: {
       Id: { [Op.ne]: row.Id },
-      employeeId: row.employeeId,
+      userId: row.userId,
       ...(data.effectiveTo ? { effectiveFrom: { [Op.lte]: data.effectiveTo } } : {}),
       [Op.or]: [{ effectiveTo: null }, { effectiveTo: { [Op.gte]: data.effectiveFrom } }],
     },
@@ -586,7 +605,7 @@ const getSetup = async () => {
       ? db.zktecoDeviceUser.findAll({ attributes: ["serialNumber", "pin", "name", "lastSeenAt"], raw: true })
       : [],
     db.attendancePunch.findAll({
-      where: { employeeId: null, punchDate: { [Op.gte]: addDays(today, -60) } },
+      where: { userId: null, punchDate: { [Op.gte]: addDays(today, -60) } },
       attributes: [
         "employeePin",
         [db.sequelize.fn("COUNT", db.sequelize.col("Id")), "punches"],
@@ -599,7 +618,7 @@ const getSetup = async () => {
 
   const tracked = employees.filter(isTrackedEmployee);
   const pinOwners = buildPinOwners(tracked);
-  const assignmentByEmployee = new Map(assignments.map((row) => [Number(row.employeeId), row]));
+  const assignmentByEmployee = new Map(assignments.map((row) => [Number(row.userId), row]));
   const punchesByPin = new Map(recentPins.map((row) => [String(row.employeePin || "").trim(), row]));
   const deviceUserByPin = new Map(deviceUsers.map((row) => [String(row.pin).trim(), row]));
 
@@ -609,7 +628,7 @@ const getSetup = async () => {
     return {
       ...employeeInfo(employee),
       attendancePin: employee.attendancePin || null,
-      pinSource: employee.attendancePin ? "attendancePin" : employee.employee_id ? "employee_id" : employee.employeeCode ? "employeeCode" : null,
+      pinSource: employee.attendancePin ? "attendancePin" : "userId",
       attendanceExempt: Boolean(employee.attendanceExempt),
       joiningDate: employee.joiningDate,
       exitDate: employee.exitDate,
@@ -640,8 +659,8 @@ const getSetup = async () => {
 };
 
 const updateEmployeeSetup = async (id, payload = {}) => {
-  const employee = await db.employeeList.findByPk(id);
-  if (!employee) throw new ApiError(404, "Employee not found");
+  const employee = await db.user.findByPk(id);
+  if (!employee) throw new ApiError(404, "User not found");
   const patch = {};
   if (payload.attendancePin !== undefined) {
     const pin = String(payload.attendancePin || "").trim();
@@ -657,22 +676,54 @@ const updateEmployeeSetup = async (id, payload = {}) => {
     patch.exitDate = payload.exitDate ? requireYmd(payload.exitDate, "exitDate") : null;
   }
   if (payload.shiftId !== undefined) patch.shiftId = payload.shiftId ? Number(payload.shiftId) : null;
-  await employee.update(patch);
+  if (payload.departmentId !== undefined) {
+    patch.departmentId = payload.departmentId ? Number(payload.departmentId) : null;
+  }
+  await employee.update(patch, { fields: Object.keys(patch) });
   return employee;
+};
+
+// Users for the pickers (shift assignment, leave, correction). scope=all
+// also returns exempt users (e.g. approvers, requesters); each row carries
+// the leader of the person's department and the departments they lead.
+const getPeople = async ({ scope } = {}) => {
+  const [people, departments] = await Promise.all([
+    loadEmployees(),
+    db.department.findAll({
+      where: { teamLeaderUserId: { [Op.ne]: null } },
+      attributes: ["Id", "name", "teamLeaderUserId"],
+      raw: true,
+    }),
+  ]);
+  const leads = departments.reduce((acc, department) => {
+    (acc[department.teamLeaderUserId] = acc[department.teamLeaderUserId] || []).push(department.name);
+    return acc;
+  }, {});
+  return people
+    .filter((person) =>
+      scope === "all" ? !/inactive|deactive/i.test(String(person.status || "")) : isTrackedEmployee(person),
+    )
+    .map((person) => ({
+      ...employeeInfo(person),
+      exempt: Boolean(person.attendanceExempt),
+      status: person.status,
+      teamLeaderUserId: person.department?.teamLeaderUserId || null,
+      leaderOf: leads[person.Id] || [],
+    }));
 };
 
 // --- Leave balance -----------------------------------------------------------------
 
-const getLeaveBalance = async ({ year, employeeId } = {}) => {
+const getLeaveBalance = async ({ year, userId } = {}) => {
   const y = /^\d{4}$/.test(String(year || "")) ? String(year) : bdToday().slice(0, 4);
   const from = `${y}-01-01`;
   const to = `${y}-12-31`;
   const [employees, types, requests, days] = await Promise.all([
-    loadEmployees({ employeeId }),
+    loadEmployees({ userId }),
     db.leaveType.findAll({ where: { status: { [Op.ne]: "Inactive" } }, raw: true, order: [["name", "ASC"]] }),
     db.leaveRequest.findAll({
       where: {
-        ...(employeeId ? { employeeId } : {}),
+        ...(userId ? { userId } : {}),
         startDate: { [Op.lte]: to },
         endDate: { [Op.gte]: from },
         approvalStatus: { [Op.in]: ["Approved", "Pending"] },
@@ -680,7 +731,7 @@ const getLeaveBalance = async ({ year, employeeId } = {}) => {
       raw: true,
     }),
     loadDays({
-      ...(employeeId ? { employeeId } : {}),
+      ...(userId ? { userId } : {}),
       attendanceDate: { [Op.between]: [from, to] },
       leaveTypeId: { [Op.ne]: null },
     }),
@@ -692,13 +743,13 @@ const getLeaveBalance = async ({ year, employeeId } = {}) => {
   // started, calendar days of the request are used.
   const usedFromDays = {};
   days.forEach((day) => {
-    const key = `${day.employeeId}|${day.leaveTypeId}`;
+    const key = `${day.userId}|${day.leaveTypeId}`;
     usedFromDays[key] = (usedFromDays[key] || 0) + n(day.leaveValue);
   });
   const usedBeforeTracking = {};
   const pending = {};
   requests.forEach((request) => {
-    const key = `${request.employeeId}|${request.leaveTypeId}`;
+    const key = `${request.userId}|${request.leaveTypeId}`;
     const start = maxYmd(String(request.startDate).slice(0, 10), from);
     const end = minYmd(String(request.endDate).slice(0, 10), to);
     if (request.approvalStatus === "Pending") {
@@ -771,6 +822,7 @@ module.exports = {
   getSetup,
   updateEmployeeSetup,
   getLeaveBalance,
+  getPeople,
   getPolicyWithShifts,
   savePolicy,
   summarize,

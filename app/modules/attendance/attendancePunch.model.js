@@ -1,7 +1,7 @@
 // One raw punch. Device punches (ZKTeco ADMS) carry the device PIN and are
-// matched to an employee at compute time (EmployeeList.attendancePin, falling
-// back to employee_id / employeeCode), so fixing a PIN later re-attributes old
-// punches. Manual / regularization punches carry employeeId directly.
+// matched to a user at compute time (Users.attendancePin, falling back to the
+// user's Id), so fixing a PIN later re-attributes old punches. Manual /
+// regularization punches carry userId directly.
 //
 // punchDate + punchClock are Bangladesh local time exactly as the device
 // reported it — the engine works on these, never on server-local time.
@@ -26,7 +26,7 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING(64),
         allowNull: true,
       },
-      employeeId: {
+      userId: {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
@@ -82,7 +82,7 @@ module.exports = (sequelize, DataTypes) => {
       indexes: [
         { fields: ["punchDate"] },
         { fields: ["employeePin", "punchDate"] },
-        { fields: ["employeeId", "punchDate"] },
+        { fields: ["userId", "punchDate"] },
       ],
     },
   );

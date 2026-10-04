@@ -20,6 +20,11 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         allowNull: true,
       },
+      // The user who approves this department's leave requests.
+      teamLeaderUserId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       status: {
         type: DataTypes.STRING(32),
         allowNull: true,

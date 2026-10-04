@@ -15,6 +15,12 @@ const regularizationIncludes = [
   },
   {
     model: User,
+    as: "attendanceUser",
+    attributes: ["Id", "FirstName", "LastName", "Email"],
+    required: false,
+  },
+  {
+    model: User,
     as: "requestedBy",
     attributes: ["Id", "FirstName", "LastName", "Email"],
     required: false,

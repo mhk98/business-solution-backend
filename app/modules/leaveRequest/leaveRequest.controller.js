@@ -5,7 +5,7 @@ const { LeaveRequestFilterAbleFields } = require("./leaveRequest.constants");
 const LeaveRequestService = require("./leaveRequest.service");
 
 const insertIntoDB = catchAsync(async (req, res) => {
-  const result = await LeaveRequestService.insertIntoDB(req.body);
+  const result = await LeaveRequestService.insertIntoDB(req.body, req.user);
   sendResponse(res, { statusCode: 200, success: true, message: "Leave request created successfully", data: result });
 });
 const getAllFromDB = catchAsync(async (req, res) => {
@@ -27,7 +27,7 @@ const getMyLeaveRequests = catchAsync(async (req, res) => {
   sendResponse(res, { statusCode: 200, success: true, message: "Employee leave requests fetched successfully", data: result });
 });
 const updateOneFromDB = catchAsync(async (req, res) => {
-  const result = await LeaveRequestService.updateOneFromDB(req.params.id, req.body);
+  const result = await LeaveRequestService.updateOneFromDB(req.params.id, req.body, req.user);
   sendResponse(res, { statusCode: 200, success: true, message: "Leave request updated successfully", data: result });
 });
 const deleteIdFromDB = catchAsync(async (req, res) => {
@@ -35,4 +35,14 @@ const deleteIdFromDB = catchAsync(async (req, res) => {
   sendResponse(res, { statusCode: 200, success: true, message: "Leave request deleted successfully", data: result });
 });
 
-module.exports = { insertIntoDB, getAllFromDB, getAllFromDBWithoutQuery, getDataById, getMyLeaveRequests, updateOneFromDB, deleteIdFromDB };
+const getMyApprovals = catchAsync(async (req, res) => {
+  const result = await LeaveRequestService.getMyApprovals(req.user);
+  sendResponse(res, { statusCode: 200, success: true, message: "Leave approvals fetched", data: result });
+});
+
+const decideLeave = catchAsync(async (req, res) => {
+  const result = await LeaveRequestService.decideLeave(req.params.id, req.body, req.user);
+  sendResponse(res, { statusCode: 200, success: true, message: `Leave request ${req.body?.decision?.toLowerCase() || "updated"}`, data: result });
+});
+
+module.exports = { getMyApprovals, decideLeave, insertIntoDB, getAllFromDB, getAllFromDBWithoutQuery, getDataById, getMyLeaveRequests, updateOneFromDB, deleteIdFromDB };

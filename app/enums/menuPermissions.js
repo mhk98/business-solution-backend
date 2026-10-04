@@ -121,6 +121,7 @@ const MENU_PERMISSIONS = {
   SHIFT_MANAGEMENT: "shift_management",
   HOLIDAY_MANAGEMENT: "holiday_management",
   ATTENDANCE: "attendance",
+  ATTENDANCE_MANAGEMENT: "attendance_management",
   ATTENDANCE_DEVICE: "attendance_device",
   LEAVE_MANAGEMENT: "leave_management",
   DAILY_WORK_REPORTS: "daily_work_reports",

@@ -1,7 +1,7 @@
 const router = require("express").Router();
 const { ENUM_USER_ROLE } = require("../../enums/user");
 const auth = require("../../middlewares/auth");
-const { requireMenuPermission } = require("../../middlewares/requireMenuPermission");
+const { requireMenuPermission, requireAnyPermission } = require("../../middlewares/requireMenuPermission");
 const AttendanceController = require("./attendance.controller");
 
 const ADMINS = [ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN, ENUM_USER_ROLE.HR];
@@ -14,6 +14,12 @@ router.get("/monthly", ...view, AttendanceController.getMonthly);
 router.get("/job-card", ...view, AttendanceController.getJobCard);
 router.get("/punches", ...view, AttendanceController.getPunches);
 router.get("/dashboard", auth(), AttendanceController.getDashboard);
+router.get(
+  "/people",
+  auth(),
+  requireAnyPermission(["attendance", "shift_management", "leave_management", "department_management"]),
+  AttendanceController.getPeople,
+);
 router.get("/leave-balance", auth(), requireMenuPermission("leave_management"), AttendanceController.getLeaveBalance);
 
 router.post("/recompute", ...manage, AttendanceController.recompute);

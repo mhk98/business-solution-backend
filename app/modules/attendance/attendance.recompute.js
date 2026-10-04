@@ -91,7 +91,7 @@ const syncRegularizationPunches = async (row) => {
       if (!parts) return null;
       return {
         punchKey: `reg:${row.Id}:${kind}`,
-        employeeId: row.employeeId,
+        userId: row.userId,
         punchDate: parts.date,
         punchClock: parts.clock,
         punchAt: new Date(value),
@@ -103,7 +103,7 @@ const syncRegularizationPunches = async (row) => {
     .filter(Boolean);
   if (punches.length) {
     await db.attendancePunch.bulkCreate(punches, {
-      updateOnDuplicate: ["employeeId", "punchDate", "punchClock", "punchAt", "note", "updatedAt"],
+      updateOnDuplicate: ["userId", "punchDate", "punchClock", "punchAt", "note", "updatedAt"],
     });
   }
   await db.attendancePunch.destroy({
@@ -199,35 +199,36 @@ const registerAttendanceHooks = () => {
   });
 
   watchModel(db.leaveRequest, (row) =>
-    row.employeeId && row.startDate
-      ? [{ from: ymd(row.startDate), to: ymd(row.endDate) || ymd(row.startDate), employeeIds: [row.employeeId] }]
+    row.userId && row.startDate
+      ? [{ from: ymd(row.startDate), to: ymd(row.endDate) || ymd(row.startDate), employeeIds: [row.userId] }]
       : [],
   );
 
   watchModel(db.employeeShiftAssignment, (row) =>
-    row.employeeId && row.effectiveFrom
-      ? [{ from: ymd(row.effectiveFrom), to: ymd(row.effectiveTo) || bdToday(), employeeIds: [row.employeeId] }]
+    row.userId && row.effectiveFrom
+      ? [{ from: ymd(row.effectiveFrom), to: ymd(row.effectiveTo) || bdToday(), employeeIds: [row.userId] }]
       : [],
   );
 
   // A shift's timing has no history, so an edit re-applies from this month.
   watchModel(db.shift, () => [{ from: monthStart(), to: bdToday() }]);
 
-  watchModel(db.employeeList, (row) => {
+  // Attendance people are Users (PIN, joining/exit, default shift live there).
+  watchModel(db.user, (row) => {
     if (!row.Id) return [];
     const from = minYmd(monthStart(), ymd(row.joiningDate), ymd(row.exitDate));
     return [{ from, to: bdToday(), employeeIds: [row.Id] }];
   });
 
   watchModel(db.attendanceRegularization, async (row) => {
-    if (!row.Id || !row.employeeId) return [];
+    if (!row.Id || !row.userId) return [];
     // Old and new versions both arrive; always sync from the current row.
     const current = await db.attendanceRegularization.findByPk(row.Id, { paranoid: false, raw: true });
     const dates = await syncRegularizationPunches(current || row);
     const date = ymd(row.attendanceDate);
     const all = [date, ...dates].filter(Boolean).sort();
     if (!all.length) return [];
-    return [{ from: addDays(all[0], -1), to: all.at(-1), employeeIds: [row.employeeId] }];
+    return [{ from: addDays(all[0], -1), to: all.at(-1), employeeIds: [row.userId] }];
   });
 };
 

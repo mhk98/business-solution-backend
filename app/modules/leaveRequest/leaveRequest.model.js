@@ -10,7 +10,12 @@ module.exports = (sequelize, DataTypes) => {
       },
       employeeId: {
         type: DataTypes.INTEGER(10),
-        allowNull: false,
+        allowNull: true,
+      },
+      // The attendance person (Users.Id) the leave is for.
+      userId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
       },
       leaveTypeId: {
         type: DataTypes.INTEGER(10),

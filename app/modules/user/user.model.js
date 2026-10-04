@@ -95,6 +95,34 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
         defaultValue: "Active",
       },
+      // Attendance (app/modules/attendance): device PIN (empty = this Id),
+      // excluded from attendance, first/last working day, default shift and
+      // department.
+      attendancePin: {
+        type: DataTypes.STRING(64),
+        allowNull: true,
+      },
+      attendanceExempt: {
+        type: DataTypes.BOOLEAN,
+        allowNull: true,
+        defaultValue: false,
+      },
+      joiningDate: {
+        type: DataTypes.DATEONLY,
+        allowNull: true,
+      },
+      exitDate: {
+        type: DataTypes.DATEONLY,
+        allowNull: true,
+      },
+      shiftId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
+      departmentId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
       deletedAt: {
         type: DataTypes.DATE,
         allowNull: true, // This will be used for soft delete

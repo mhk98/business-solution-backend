@@ -12,7 +12,10 @@ const AttendancePunch = db.attendancePunch;
 // punchKey = sha1(serial|pin|datetime), so a re-sent punch upserts onto the
 // same row instead of duplicating.
 const buildPunchKey = (serialNumber, pin, dateTime) =>
-  crypto.createHash("sha1").update(`${serialNumber}|${pin}|${dateTime}`).digest("hex");
+  crypto
+    .createHash("sha1")
+    .update(`${serialNumber}|${pin}|${dateTime}`)
+    .digest("hex");
 
 // Devices are added by hand on HRM → Attendance Device (name + serial
 // number). Only a registered device whose status isn't Inactive/Pending is
@@ -28,7 +31,8 @@ const findRegisteredDevice = async (serialNumber) => {
   });
 };
 
-const isAccepted = (device) => Boolean(device) && !IGNORED_STATUSES.has(device.status);
+const isAccepted = (device) =>
+  Boolean(device) && !IGNORED_STATUSES.has(device.status);
 
 // Warn once per serial (per process) so an unknown device that retries every
 // few seconds doesn't flood the log.
@@ -59,13 +63,23 @@ const buildLogDateTime = (logDate, logTime) => {
 const DATE_TIME_RE = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})$/;
 
 // One punch → an AttendancePunch row.
-const buildAttendanceRow = (serialNumber, deviceName, pin, dateTime, extra = {}) => {
+const buildAttendanceRow = (
+  serialNumber,
+  deviceName,
+  pin,
+  dateTime,
+  extra = {},
+) => {
   const match = DATE_TIME_RE.exec(String(dateTime || "").trim());
   const employeePin = String(pin || "").trim();
   if (!employeePin || employeePin === "0" || !match) return null;
   const [, punchDate, punchClock] = match;
   return {
-    punchKey: buildPunchKey(serialNumber, employeePin, `${punchDate} ${punchClock}`),
+    punchKey: buildPunchKey(
+      serialNumber,
+      employeePin,
+      `${punchDate} ${punchClock}`,
+    ),
     employeePin,
     punchDate,
     punchClock,
@@ -73,7 +87,10 @@ const buildAttendanceRow = (serialNumber, deviceName, pin, dateTime, extra = {})
     source: "device",
     deviceSerial: serialNumber,
     deviceName,
-    verifyMode: extra.verify !== undefined && extra.verify !== null ? String(extra.verify).slice(0, 32) : null,
+    verifyMode:
+      extra.verify !== undefined && extra.verify !== null
+        ? String(extra.verify).slice(0, 32)
+        : null,
     rawPayload: { source: "zkteco_adms", serialNumber, ...extra },
   };
 };
@@ -112,7 +129,10 @@ const parseKeyValues = (line) => {
   const fields = {};
   text.split("\t").forEach((part) => {
     const at = part.indexOf("=");
-    if (at > 0) fields[part.slice(0, at).trim().toLowerCase()] = part.slice(at + 1).trim();
+    if (at > 0)
+      fields[part.slice(0, at).trim().toLowerCase()] = part
+        .slice(at + 1)
+        .trim();
   });
   return fields;
 };
@@ -142,11 +162,16 @@ const parseRtLog = (body, serialNumber, deviceName) =>
 const decodeZkTime = (value) => {
   let t = Number(value);
   if (!Number.isFinite(t) || t <= 0) return null;
-  const second = t % 60; t = Math.floor(t / 60);
-  const minute = t % 60; t = Math.floor(t / 60);
-  const hour = t % 24; t = Math.floor(t / 24);
-  const day = (t % 31) + 1; t = Math.floor(t / 31);
-  const month = (t % 12) + 1; t = Math.floor(t / 12);
+  const second = t % 60;
+  t = Math.floor(t / 60);
+  const minute = t % 60;
+  t = Math.floor(t / 60);
+  const hour = t % 24;
+  t = Math.floor(t / 24);
+  const day = (t % 31) + 1;
+  t = Math.floor(t / 31);
+  const month = (t % 12) + 1;
+  t = Math.floor(t / 12);
   const year = t + 2000;
   const pad = (n) => String(n).padStart(2, "0");
   return `${year}-${pad(month)}-${pad(day)} ${pad(hour)}:${pad(minute)}:${pad(second)}`;
@@ -159,13 +184,19 @@ const parseTransactions = (body, serialNumber, deviceName) =>
     .map((line) => {
       const f = parseKeyValues(line);
       if (!isSuccessEvent(f.eventtype)) return null;
-      return buildAttendanceRow(serialNumber, deviceName, f.pin, decodeZkTime(f.time_second), {
-        status: f.inoutstate ?? null,
-        verify: f.verified ?? null,
-        event: f.eventtype ?? null,
-        card: f.cardno && f.cardno !== "0" ? f.cardno : null,
-        line,
-      });
+      return buildAttendanceRow(
+        serialNumber,
+        deviceName,
+        f.pin,
+        decodeZkTime(f.time_second),
+        {
+          status: f.inoutstate ?? null,
+          verify: f.verified ?? null,
+          event: f.eventtype ?? null,
+          card: f.cardno && f.cardno !== "0" ? f.cardno : null,
+          line,
+        },
+      );
     })
     .filter(Boolean);
 
@@ -179,7 +210,10 @@ const saveAttLogs = async (rows) => {
   const dates = rows.map((row) => row.punchDate).sort();
   const { scheduleRecompute } = require("../attendance/attendance.recompute");
   const { addDays } = require("../attendance/attendance.time");
-  scheduleRecompute({ from: addDays(dates[0], -1), to: dates[dates.length - 1] }, 15000);
+  scheduleRecompute(
+    { from: addDays(dates[0], -1), to: dates[dates.length - 1] },
+    15000,
+  );
   return rows.length;
 };
 
@@ -211,7 +245,15 @@ const saveDeviceUsers = async (serialNumber, users) => {
   const now = new Date();
   await ZktecoDeviceUser.bulkCreate(
     users.map((user) => ({ ...user, serialNumber, lastSeenAt: now })),
-    { updateOnDuplicate: ["name", "privilege", "card", "lastSeenAt", "updatedAt"] },
+    {
+      updateOnDuplicate: [
+        "name",
+        "privilege",
+        "card",
+        "lastSeenAt",
+        "updatedAt",
+      ],
+    },
   );
   return users.length;
 };
@@ -224,7 +266,12 @@ let nextCommandId = Date.now() % 100000;
 
 const getSession = (serialNumber) => {
   if (!sessions.has(serialNumber)) {
-    sessions.set(serialNumber, { push3: false, queue: [], userQuery: null, lastUserQueryAt: 0 });
+    sessions.set(serialNumber, {
+      push3: false,
+      queue: [],
+      userQuery: null,
+      lastUserQueryAt: 0,
+    });
   }
   return sessions.get(serialNumber);
 };
@@ -234,7 +281,9 @@ const isPush3Request = (query = {}) =>
   String(query.DeviceType || query.devicetype || "").toLowerCase() === "acc";
 
 const userQueryCommand = (session) =>
-  session.push3 ? "DATA QUERY tablename=user,fielddesc=*,filter=*" : "DATA QUERY USERINFO";
+  session.push3
+    ? "DATA QUERY tablename=user,fielddesc=*,filter=*"
+    : "DATA QUERY USERINFO";
 
 const queueCommand = (session, command, kind) => {
   const id = ++nextCommandId;
@@ -253,7 +302,9 @@ const takeCommand = (serialNumber) => {
   if (next.kind === "users") {
     session.userQuery = { id: next.id, issuedAt: new Date(), done: false };
   }
-  console.log(`[zktecoAdms] SN=${serialNumber}: cmd ${next.id} ${next.command}`);
+  console.log(
+    `[zktecoAdms] SN=${serialNumber}: cmd ${next.id} ${next.command}`,
+  );
   return `C:${next.id}:${next.command}`;
 };
 
@@ -268,14 +319,18 @@ const handleCommandResult = async ({ serialNumber, body }) => {
     if (!query || query.done || id !== query.id) continue;
     query.done = true;
     if (ret < 0 || !ZktecoDeviceUser) {
-      console.warn(`[zktecoAdms] SN=${serialNumber}: user list query failed (Return=${ret})`);
+      console.warn(
+        `[zktecoAdms] SN=${serialNumber}: user list query failed (Return=${ret})`,
+      );
       continue;
     }
     const removed = await ZktecoDeviceUser.destroy({
       where: { serialNumber, lastSeenAt: { [Op.lt]: query.issuedAt } },
     });
     const total = await ZktecoDeviceUser.count({ where: { serialNumber } });
-    console.log(`[zktecoAdms] SN=${serialNumber}: user list synced — ${total} user(s), ${removed} removed`);
+    console.log(
+      `[zktecoAdms] SN=${serialNumber}: user list synced — ${total} user(s), ${removed} removed`,
+    );
   }
   return "OK";
 };
@@ -283,22 +338,46 @@ const handleCommandResult = async ({ serialNumber, body }) => {
 // Rows of a user/transaction table (query answers, or rows the device pushes).
 const saveTableData = async (serialNumber, deviceName, tablename, body) => {
   const name = String(tablename || "").toLowerCase();
-  if (name === "user") return saveDeviceUsers(serialNumber, parseUserLines(body));
+  if (name === "user")
+    return saveDeviceUsers(serialNumber, parseUserLines(body));
   if (name === "transaction") {
     return saveAttLogs(parseTransactions(body, serialNumber, deviceName));
   }
   return 0;
 };
 
+// The device treats "<table>=<n>" as "n of my rows arrived" and resends the
+// packet until n matches what it sent — so acknowledge the rows received
+// (its own count), not how many we kept (door/system events are dropped).
+// Acknowledging fewer kept the device resending one packet every 5 s and
+// blocked every new punch behind it.
+const receivedCount = (query = {}, body = "") =>
+  Number(query.count) || splitLines(body).length;
+
 // POST /querydata?SN=…&type=tabledata&tablename=user&count=N — query answers.
-const handleQueryData = async ({ serialNumber, tablename, table, body, ipAddress }) => {
+const handleQueryData = async ({
+  serialNumber,
+  tablename,
+  table,
+  body,
+  ipAddress,
+  query,
+}) => {
   const device = await findRegisteredDevice(serialNumber);
   if (!isAccepted(device)) return "OK";
   await touchDevice(device, ipAddress);
   const name = tablename || table || "user";
-  const saved = await saveTableData(serialNumber, device.name || null, name, body);
-  console.log(`[zktecoAdms] querydata SN=${serialNumber} table=${name}: ${saved} row(s)`);
-  return `${name}=${saved}`;
+  const saved = await saveTableData(
+    serialNumber,
+    device.name || null,
+    name,
+    body,
+  );
+  const received = receivedCount(query, body);
+  console.log(
+    `[zktecoAdms] querydata SN=${serialNumber} table=${name}: ${received} received, ${saved} saved`,
+  );
+  return `${name}=${received}`;
 };
 
 const listDeviceUsers = async ({ serialNumber } = {}) => {
@@ -333,7 +412,11 @@ const buildHandshake = (serialNumber) =>
 // PUSH 3 devices register first (POST /registry → RegistryCode) and then
 // expect "registry=ok" plus their session options on /cdata and /push.
 const registryCode = (serialNumber) =>
-  crypto.createHash("sha1").update(`kafela-adms|${serialNumber}`).digest("hex").slice(0, 10);
+  crypto
+    .createHash("sha1")
+    .update(`kafela-adms|${serialNumber}`)
+    .digest("hex")
+    .slice(0, 10);
 
 const buildPush3Options = (serialNumber) =>
   [
@@ -357,7 +440,11 @@ const startSession = (serialNumber, push3) => {
   const session = { push3, queue: [], userQuery: null, lastUserQueryAt: 0 };
   sessions.set(serialNumber, session);
   if (push3) {
-    queueCommand(session, "DATA QUERY tablename=transaction,fielddesc=*,filter=*", "transactions");
+    queueCommand(
+      session,
+      "DATA QUERY tablename=transaction,fielddesc=*,filter=*",
+      "transactions",
+    );
   }
   return session;
 };
@@ -367,7 +454,9 @@ const handleHandshake = async ({ serialNumber, ipAddress, query }) => {
   const push3 = isPush3Request(query);
   if (!isAccepted(device)) warnIgnored(serialNumber, ipAddress, device);
   else {
-    console.log(`[zktecoAdms] handshake SN=${serialNumber} push${push3 ? "3" : "1/2"} (${ipAddress || "unknown ip"})`);
+    console.log(
+      `[zktecoAdms] handshake SN=${serialNumber} push${push3 ? "3" : "1/2"} (${ipAddress || "unknown ip"})`,
+    );
     startSession(serialNumber, push3);
   }
   await touchDevice(device, ipAddress);
@@ -390,11 +479,19 @@ const handleRegistry = async ({ serialNumber, ipAddress }) => {
 const handlePushConfig = async ({ serialNumber, ipAddress }) => {
   const device = await findRegisteredDevice(serialNumber);
   await touchDevice(device, ipAddress);
-  if (isAccepted(device) && !getSession(serialNumber).push3) startSession(serialNumber, true);
+  if (isAccepted(device) && !getSession(serialNumber).push3)
+    startSession(serialNumber, true);
   return buildPush3Options(serialNumber);
 };
 
-const handleUpload = async ({ serialNumber, table, tablename, body, ipAddress }) => {
+const handleUpload = async ({
+  serialNumber,
+  table,
+  tablename,
+  body,
+  ipAddress,
+  query,
+}) => {
   const device = await findRegisteredDevice(serialNumber);
   if (!isAccepted(device)) {
     warnIgnored(serialNumber, ipAddress, device);
@@ -413,17 +510,34 @@ const handleUpload = async ({ serialNumber, table, tablename, body, ipAddress })
     const saved = await saveAttLogs(rows);
     // Visible in the host's runtime logs — shows whether punches arrive and
     // whether their lines parse.
-    console.log(`[zktecoAdms] ${tableName} SN=${serialNumber}: ${lineCount} line(s), ${saved} saved`);
+    console.log(
+      `[zktecoAdms] ${tableName} SN=${serialNumber}: ${lineCount} line(s), ${saved} saved`,
+    );
     return tableName === "ATTLOG" ? `OK: ${saved}` : "OK";
   }
   if (tableName === "TABLEDATA") {
-    const saved = await saveTableData(serialNumber, deviceName, tablename, body);
-    console.log(`[zktecoAdms] tabledata SN=${serialNumber} ${tablename || "-"}: ${saved} row(s)`);
-    return `${tablename || "data"}=${saved}`;
+    const saved = await saveTableData(
+      serialNumber,
+      deviceName,
+      tablename,
+      body,
+    );
+    const received = receivedCount(query, body);
+    console.log(
+      `[zktecoAdms] tabledata SN=${serialNumber} ${tablename || "-"}: ${received} received, ${saved} saved`,
+    );
+    return `${tablename || "data"}=${received}`;
   }
-  if (tableName === "OPERLOG" || tableName === "USERINFO" || tableName === "USER") {
+  if (
+    tableName === "OPERLOG" ||
+    tableName === "USERINFO" ||
+    tableName === "USER"
+  ) {
     const saved = await saveDeviceUsers(serialNumber, parseUserLines(body));
-    if (saved) console.log(`[zktecoAdms] ${tableName} SN=${serialNumber}: ${saved} user(s) saved`);
+    if (saved)
+      console.log(
+        `[zktecoAdms] ${tableName} SN=${serialNumber}: ${saved} user(s) saved`,
+      );
     return "OK";
   }
   return "OK"; // rtstate (door status) and other tables
@@ -445,7 +559,10 @@ const handleHeartbeat = async ({ serialNumber, ipAddress }) => {
 const getRecentAdmsLogs = async (limit = 20) =>
   AttendancePunch.findAll({
     where: { source: "device" },
-    order: [["punchDate", "DESC"], ["punchClock", "DESC"]],
+    order: [
+      ["punchDate", "DESC"],
+      ["punchClock", "DESC"],
+    ],
     limit,
     raw: true,
   });

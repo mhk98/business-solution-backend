@@ -1554,22 +1554,52 @@ db.leaveRequest.belongsTo(db.user, {
   as: "approvedBy",
 });
 
-// Attendance (punch → day engine, app/modules/attendance)
-db.employeeList.hasMany(db.attendanceDay, {
-  foreignKey: "employeeId",
+// Attendance (punch → day engine, app/modules/attendance). The attendance
+// person is a User.
+db.user.hasMany(db.attendanceDay, {
+  foreignKey: "userId",
   as: "attendanceDays",
+  constraints: false,
 });
-db.attendanceDay.belongsTo(db.employeeList, {
-  foreignKey: "employeeId",
-  as: "employee",
+db.attendanceDay.belongsTo(db.user, {
+  foreignKey: "userId",
+  as: "user",
+  constraints: false,
 });
-db.employeeList.hasMany(db.employeeShiftAssignment, {
-  foreignKey: "employeeId",
+db.user.hasMany(db.employeeShiftAssignment, {
+  foreignKey: "userId",
   as: "shiftAssignments",
+  constraints: false,
 });
-db.employeeShiftAssignment.belongsTo(db.employeeList, {
-  foreignKey: "employeeId",
-  as: "employee",
+db.employeeShiftAssignment.belongsTo(db.user, {
+  foreignKey: "userId",
+  as: "user",
+  constraints: false,
+});
+db.user.belongsTo(db.shift, {
+  foreignKey: "shiftId",
+  as: "attendanceShift",
+  constraints: false,
+});
+db.user.belongsTo(db.department, {
+  foreignKey: "departmentId",
+  as: "attendanceDepartment",
+  constraints: false,
+});
+db.leaveRequest.belongsTo(db.user, {
+  foreignKey: "userId",
+  as: "attendanceUser",
+  constraints: false,
+});
+db.department.belongsTo(db.user, {
+  foreignKey: "teamLeaderUserId",
+  as: "teamLeader",
+  constraints: false,
+});
+db.attendanceRegularization.belongsTo(db.user, {
+  foreignKey: "userId",
+  as: "attendanceUser",
+  constraints: false,
 });
 db.shift.hasMany(db.employeeShiftAssignment, {
   foreignKey: "shiftId",
@@ -1889,6 +1919,17 @@ const ensureAttendanceColumns = async () => {
     isHalfDay: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: false },
     halfDaySession: { type: DataTypes.STRING(16), allowNull: true },
   });
+  await addMissing(db.department, {
+    teamLeaderUserId: { type: DataTypes.INTEGER(10), allowNull: true },
+  });
+  await addMissing(db.user, {
+    attendancePin: { type: DataTypes.STRING(64), allowNull: true },
+    attendanceExempt: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: false },
+    joiningDate: { type: DataTypes.DATEONLY, allowNull: true },
+    exitDate: { type: DataTypes.DATEONLY, allowNull: true },
+    shiftId: { type: DataTypes.INTEGER(10), allowNull: true },
+    departmentId: { type: DataTypes.INTEGER(10), allowNull: true },
+  });
   await addMissing(db.employeeShiftAssignment, {
     startTime: { type: DataTypes.STRING(16), allowNull: true },
     endTime: { type: DataTypes.STRING(16), allowNull: true },
@@ -1898,11 +1939,6 @@ const ensureAttendanceColumns = async () => {
   await addMissing(db.attendancePolicy, {
     holidayWorkPaid: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     weeklyOffWorkPaid: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
-  });
-  await addMissing(db.employeeList, {
-    attendancePin: { type: DataTypes.STRING(64), allowNull: true },
-    attendanceExempt: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: false },
-    exitDate: { type: DataTypes.DATEONLY, allowNull: true },
   });
 };
 
@@ -4520,8 +4556,38 @@ const ensureMarketingExpenseColumns = async () => {
   });
 };
 
-db.sequelize
-  .sync({ force: false })
+// The attendance person moved from EmployeeLists (employeeId) to Users
+// (userId). Tables first built on employeeId need the userId column BEFORE
+// sync(), which otherwise fails adding the model's userId indexes (and every
+// ensure step after it is skipped). The old column is only made optional —
+// rows keyed by it stay as they are and are no longer read.
+const prepareAttendanceUserKey = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  for (const model of [
+    db.attendanceDay,
+    db.employeeShiftAssignment,
+    db.attendancePunch,
+    db.leaveRequest,
+    db.attendanceRegularization,
+  ]) {
+    const tableName = model.getTableName();
+    let columns;
+    try {
+      columns = await queryInterface.describeTable(tableName);
+    } catch {
+      continue; // not created yet — sync() builds it with userId
+    }
+    if (!columns.userId) {
+      await queryInterface.addColumn(tableName, "userId", { type: DataTypes.INTEGER(10), allowNull: true });
+    }
+    if (columns.employeeId && columns.employeeId.allowNull === false) {
+      await queryInterface.changeColumn(tableName, "employeeId", { type: DataTypes.INTEGER(10), allowNull: true });
+    }
+  }
+};
+
+prepareAttendanceUserKey()
+  .then(() => db.sequelize.sync({ force: false }))
   .then(async () => {
     const loanTable = db.loan.getTableName();
     const loanColumns = await db.sequelize.getQueryInterface().describeTable(loanTable);
