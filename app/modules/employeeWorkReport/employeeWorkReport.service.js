@@ -73,7 +73,7 @@ const removeWorkReportCharges = async (reportId) => {
   }
 };
 
-const PRIVILEGED_ROLES = new Set(["superAdmin", "admin", "marketer"]);
+const PRIVILEGED_ROLES = new Set(["superAdmin", "admin", "marketer", "leaderCs"]);
 const TOTAL_ASSIGN_SOURCE_FIELDS = [
   "failedGiven",
   "pendingGiven",

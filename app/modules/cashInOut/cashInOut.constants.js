@@ -1,6 +1,7 @@
 const CashInOutFilterAbleFields = [
   "searchTerm",
   "paymentMode",
+  "bankAccount",
   "paymentStatus",
   "startDate",
   "endDate",

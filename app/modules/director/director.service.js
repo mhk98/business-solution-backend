@@ -38,6 +38,15 @@ const addBalancesToDirectors = async (directors) => {
         ),
         "totalProfit",
       ],
+      [
+        db.Sequelize.fn(
+          "SUM",
+          db.Sequelize.literal(
+            "CASE WHEN type = 'Withdraw' THEN amount ELSE 0 END",
+          ),
+        ),
+        "totalWithdraw",
+      ],
       [db.Sequelize.fn("MAX", db.Sequelize.col("date")), "lastDate"],
     ],
     where: {
@@ -50,10 +59,14 @@ const addBalancesToDirectors = async (directors) => {
   const balanceMap = rows.reduce((acc, row) => {
     const totalInvest = normalizeAmount(row.totalInvest);
     const totalProfit = normalizeAmount(row.totalProfit);
+    const totalWithdraw = normalizeAmount(row.totalWithdraw);
+    // Balance = investment still in the business; profit taken is shown on
+    // its own and does not reduce it.
     acc[row.directorId] = {
       totalInvest,
       totalProfit,
-      netBalance: totalInvest - totalProfit,
+      totalWithdraw,
+      netBalance: totalInvest - totalWithdraw,
       lastDate: row.lastDate,
     };
     return acc;
@@ -63,6 +76,7 @@ const addBalancesToDirectors = async (directors) => {
     ...director,
     totalInvest: balanceMap[director.Id]?.totalInvest || 0,
     totalProfit: balanceMap[director.Id]?.totalProfit || 0,
+    totalWithdraw: balanceMap[director.Id]?.totalWithdraw || 0,
     netBalance: balanceMap[director.Id]?.netBalance || 0,
     lastDate: balanceMap[director.Id]?.lastDate || null,
   }));
@@ -118,6 +132,10 @@ const getAllFromDB = async (filters, options) => {
     (sum, director) => sum + normalizeAmount(director.totalProfit),
     0,
   );
+  const totalWithdraw = allDirectorsWithBalances.reduce(
+    (sum, director) => sum + normalizeAmount(director.totalWithdraw),
+    0,
+  );
 
   return {
     meta: {
@@ -126,7 +144,8 @@ const getAllFromDB = async (filters, options) => {
       limit,
       totalInvest,
       totalProfit,
-      netBalance: totalInvest - totalProfit,
+      totalWithdraw,
+      netBalance: totalInvest - totalWithdraw,
     },
     data: await addBalancesToDirectors(rows),
   };
@@ -164,7 +183,10 @@ const getDirectorInvestmentReport = async () => {
     .map((director) => ({
       directorId: director.Id,
       name: director.name || "Unknown Director",
-      investAmount: normalizeAmount(director.totalInvest),
+      // Investment still in the business (withdrawn investment taken out).
+      investAmount:
+        normalizeAmount(director.totalInvest) -
+        normalizeAmount(director.totalWithdraw),
     }))
     .filter((row) => row.investAmount > 0)
     .sort((a, b) => b.investAmount - a.investAmount);

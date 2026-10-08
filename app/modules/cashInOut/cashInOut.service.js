@@ -50,6 +50,17 @@ const normalizeOptionalId = (value) => {
   return Number.isNaN(numberValue) ? null : numberValue;
 };
 
+// Director ledger row type. Cash In is always an Investment; on Cash Out the
+// Book form picks "Investment" (money taken back from the investment →
+// Withdraw) or "Profit". Old entries without a choice keep their saved type,
+// else Cash Out stays "Profit" as before.
+const resolveDirectorShareType = (paymentStatus, directorEntryType, fallbackType) => {
+  if (paymentStatus !== "CashOut") return "Invest";
+  if (directorEntryType === "Investment") return "Withdraw";
+  if (directorEntryType === "Profit") return "Profit";
+  return fallbackType === "Withdraw" ? "Withdraw" : "Profit";
+};
+
 const formatDateOnly = (date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -253,6 +264,7 @@ const insertIntoDB = async (data) => {
     packagingManufacturerId,
     ownerId,
     directorId,
+    directorEntryType,
     employeeId,
     file,
     voucherPrefix,
@@ -499,7 +511,7 @@ const insertIntoDB = async (data) => {
           directorId: finalDirectorId,
           bookId: finalBookId,
           cashInOutId: result.Id,
-          type: paymentStatus === "CashOut" ? "Profit" : "Invest",
+          type: resolveDirectorShareType(paymentStatus, directorEntryType),
           amount,
           remarks: remarks || note || "",
           date: date || normalizedDate,
@@ -514,6 +526,23 @@ const insertIntoDB = async (data) => {
 };
 
 // Fund transfers affect mode balances but are not income or expense entries.
+// Entries saved while CashInOuts.bankAccount was INT have long account
+// numbers clipped to 2147483647; they still match the account through the
+// bank name when that bank has exactly one account.
+const CLIPPED_ACCOUNT = "2147483647";
+const buildBankAccountCondition = async (accountNumber) => {
+  const account = await db.bankAccount.findOne({ where: { accountNumber }, raw: true });
+  if (!account?.bankName) return { bankAccount: accountNumber };
+  const sameBank = await db.bankAccount.count({ where: { bankName: account.bankName } });
+  if (sameBank !== 1) return { bankAccount: accountNumber };
+  return {
+    [Op.or]: [
+      { bankAccount: accountNumber },
+      { bankAccount: CLIPPED_ACCOUNT, bankName: account.bankName },
+    ],
+  };
+};
+
 const getBookTransferTotals = async (filters = {}) => {
   const excludedFields = [
     "category", "categoryId", "lender", "loanId", "refNo", "supplierId",
@@ -523,6 +552,17 @@ const getBookTransferTotals = async (filters = {}) => {
   if (excludedFields.some((key) => filters[key] !== undefined && filters[key] !== null && filters[key] !== "")) return empty;
   const conditions = [{ status: "Active" }];
   if (filters.bookId) conditions.push({ bookId: filters.bookId });
+  // Fund transfers reference the account by BankAccount Id, while the Book
+  // filter passes the account number.
+  let accountIds = null;
+  if (filters.bankAccount) {
+    const accounts = await db.bankAccount.findAll({
+      where: { accountNumber: String(filters.bankAccount) },
+      attributes: ["Id"], raw: true,
+    });
+    if (!accounts.length) return empty;
+    accountIds = accounts.map((account) => account.Id);
+  }
   const date = {};
   if (filters.startDate) date[Op.gte] = toDateOnly(filters.startDate);
   if (filters.endDate) date[Op.lte] = toDateOnly(filters.endDate);
@@ -534,6 +574,7 @@ const getBookTransferTotals = async (filters = {}) => {
     if (filters.paymentStatus && filters.paymentStatus !== paymentStatus) return 0;
     const legConditions = [...conditions];
     if (filters.paymentMode) legConditions.push({ [`${direction}PaymentMode`]: filters.paymentMode });
+    if (accountIds) legConditions.push({ [`${direction}BankAccount`]: { [Op.in]: accountIds } });
     if (filters.searchTerm && String(filters.searchTerm).trim()) {
       const pattern = `%${String(filters.searchTerm).trim()}%`;
       legConditions.push({ [Op.or]: [
@@ -762,10 +803,15 @@ const getAllFromDB = async (filters, options) => {
     bookId,
     categoryId,
     voucherNo,
+    bankAccount,
     ...otherFilters
   } = filters;
 
   const baseConditions = [];
+
+  if (bankAccount && String(bankAccount).trim()) {
+    baseConditions.push(await buildBankAccountCondition(String(bankAccount).trim()));
+  }
 
   if (searchTerm && String(searchTerm).trim()) {
     const term = String(searchTerm).trim();
@@ -862,6 +908,11 @@ const getAllFromDB = async (filters, options) => {
       { model: Loan, as: "loan", required: false },
       { model: Owner, as: "owner", required: false },
       { model: Director, as: "director", required: false },
+      {
+        model: DirectorProfitShare,
+        attributes: ["Id", "type"],
+        required: false,
+      },
       { model: Category, as: "categoryInfo", required: false },
     ],
     offset: skip,
@@ -1008,6 +1059,11 @@ const getDataById = async (id) => {
       { model: Loan, as: "loan", required: false },
       { model: Owner, as: "owner", required: false },
       { model: Director, as: "director", required: false },
+      {
+        model: DirectorProfitShare,
+        attributes: ["Id", "type"],
+        required: false,
+      },
       { model: Category, as: "categoryInfo", required: false },
     ],
     paranoid: true,
@@ -1063,6 +1119,7 @@ const updateOneFromDB = async (id, payload) => {
     packagingManufacturerId,
     ownerId,
     directorId,
+    directorEntryType,
     date,
     file,
     paymentStatus,
@@ -1148,7 +1205,7 @@ const updateOneFromDB = async (id, payload) => {
     // Cash part → one "Paid" row, discount part → one "Discount" row, each
     // upserted by (cashInOutId, status) from the entry's saved values.
     const savedEntry = await CashInOut.findByPk(id, {
-      attributes: ["amount", "discountAmount"],
+      attributes: ["amount", "discountAmount", "paymentStatus"],
       transaction: t,
     });
     const upsertSupplierRow = async (status, rowAmount) => {
@@ -1429,7 +1486,11 @@ const updateOneFromDB = async (id, payload) => {
         directorId: finalDirectorId,
         bookId: finalBookId,
         cashInOutId: id,
-        type: paymentStatus === "CashOut" ? "Profit" : "Invest",
+        type: resolveDirectorShareType(
+          paymentStatus || savedEntry?.paymentStatus,
+          directorEntryType,
+          existingDirectorProfitShare?.type,
+        ),
         amount,
         remarks: remarks || note || "",
         date,
@@ -1491,6 +1552,11 @@ const getAllFromDBWithoutQuery = async () => {
       { model: Loan, as: "loan", required: false },
       { model: Owner, as: "owner", required: false },
       { model: Director, as: "director", required: false },
+      {
+        model: DirectorProfitShare,
+        attributes: ["Id", "type"],
+        required: false,
+      },
       { model: Category, as: "categoryInfo", required: false },
     ],
     paranoid: true,

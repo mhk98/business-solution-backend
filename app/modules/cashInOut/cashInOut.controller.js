@@ -28,6 +28,15 @@ const normalizeOptionalText = (value) => {
   return text;
 };
 
+// Director party on a Book entry: "Investment" or "Profit" (Profit is a
+// Cash Out only choice). Anything else means "not chosen".
+const normalizeDirectorEntryType = (value) => {
+  const type = String(value || "").trim().toLowerCase();
+  if (type === "investment" || type === "invest") return "Investment";
+  if (type === "profit") return "Profit";
+  return undefined;
+};
+
 const normalizeRole = (role) =>
   String(role || "")
     .trim()
@@ -233,6 +242,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     packagingManufacturerId,
     ownerId,
     directorId,
+    directorEntryType,
     partyType,
     voucherPrefix,
     refNo,
@@ -402,6 +412,15 @@ const insertIntoDB = catchAsync(async (req, res) => {
     throw new ApiError(400, "Director is required");
   }
 
+  const finalDirectorEntryType = normalizeDirectorEntryType(directorEntryType);
+  if (
+    isDirectorParty &&
+    finalDirectorEntryType === "Profit" &&
+    (paymentStatus) !== "CashOut"
+  ) {
+    throw new ApiError(400, "Director Profit is only for Cash Out");
+  }
+
   const normalizedNote = normalizeOptionalText(note);
   const finalStatus = String(status || "").trim() || "Active";
   const loanFields = await resolveLoanFields({
@@ -438,6 +457,7 @@ const insertIntoDB = catchAsync(async (req, res) => {
     packagingManufacturerId: finalPackagingManufacturerId, // ✅ only CashOut হলে value যাবে, নাহলে null
     ownerId: finalOwnerId,
     directorId: finalDirectorId,
+    directorEntryType: finalDirectorEntryType,
     voucherPrefix: normalizeOptionalText(voucherPrefix) || "KM-",
   };
 
@@ -597,6 +617,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     packagingManufacturerId,
     ownerId,
     directorId,
+    directorEntryType,
     partyType,
     refNo,
     fromParty,
@@ -707,6 +728,15 @@ const updateOneFromDB = catchAsync(async (req, res) => {
     throw new ApiError(400, "Director is required");
   }
 
+  const finalDirectorEntryType = normalizeDirectorEntryType(directorEntryType);
+  if (
+    isDirectorParty &&
+    finalDirectorEntryType === "Profit" &&
+    (paymentStatus || existing.paymentStatus) !== "CashOut"
+  ) {
+    throw new ApiError(400, "Director Profit is only for Cash Out");
+  }
+
   const loanFields = await resolveLoanFields({
     category,
     partyType,
@@ -753,6 +783,7 @@ const updateOneFromDB = catchAsync(async (req, res) => {
         : undefined,
     ownerId: ownerId !== undefined ? finalOwnerId : undefined,
     directorId: directorId !== undefined ? finalDirectorId : undefined,
+    directorEntryType: finalDirectorEntryType,
     ...(amountNumber !== undefined ? { amount: amountNumber } : {}),
     ...(finalDiscount !== undefined ? { discountAmount: finalDiscount } : {}),
 

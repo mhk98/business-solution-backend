@@ -25,8 +25,8 @@ const normalizeAmount = (value) => {
 
 const normalizeType = (value) => {
   const type = String(value || "Invest").trim();
-  if (!["Invest", "Profit"].includes(type)) {
-    throw new ApiError(400, "Type must be Invest or Profit");
+  if (!["Invest", "Withdraw", "Profit"].includes(type)) {
+    throw new ApiError(400, "Type must be Invest, Withdraw or Profit");
   }
   return type;
 };
@@ -124,7 +124,7 @@ const getAllFromDB = async (filters, options) => {
     { model: Book, as: "book", required: false },
   ];
 
-  const [data, count, totalInvest, totalProfit] = await Promise.all([
+  const [data, count, totalInvest, totalProfit, totalWithdraw] = await Promise.all([
     DirectorProfitShare.findAll({
       where,
       include,
@@ -145,10 +145,15 @@ const getAllFromDB = async (filters, options) => {
       where: { [Op.and]: [...andConditions, { type: "Profit" }] },
       include,
     }),
+    DirectorProfitShare.sum("amount", {
+      where: { [Op.and]: [...andConditions, { type: "Withdraw" }] },
+      include,
+    }),
   ]);
 
   const invest = Number(totalInvest || 0);
   const profit = Number(totalProfit || 0);
+  const withdraw = Number(totalWithdraw || 0);
 
   return {
     meta: {
@@ -157,7 +162,8 @@ const getAllFromDB = async (filters, options) => {
       limit,
       totalInvest: invest,
       totalProfit: profit,
-      netBalance: invest - profit,
+      totalWithdraw: withdraw,
+      netBalance: invest - withdraw,
     },
     data,
   };
