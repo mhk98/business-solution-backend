@@ -28,14 +28,47 @@ const toNumber = (value) => {
 
 const roundQuantity = (value) => Math.round(value * 10000) / 10000;
 
-const perComboRows = (rows, idKey, combo) =>
+// Same rule as the Mixer form's Unit box: a recipe row keeps its own unit
+// only when it belongs to the stock's weight/volume family (Gram/Kg,
+// Ml/Liter); otherwise the stock's unit wins. Older recipes saved packaging
+// rows as "Pcs" for Gram items — the Mixer screen shows Gram, so must this.
+const UNIT_FAMILIES = [
+  ["gram", "kg"],
+  ["ml", "liter", "litre"],
+];
+const unitKey = (unit) => String(unit || "").trim().toLowerCase();
+const resolveRowUnit = (rowUnit, stockUnit) => {
+  const family = UNIT_FAMILIES.find((members) =>
+    members.includes(unitKey(stockUnit)),
+  );
+  if (family && family.includes(unitKey(rowUnit))) return rowUnit;
+  return stockUnit || rowUnit || "Pcs";
+};
+
+const loadItemUnits = async (metas) => {
+  const itemIds = new Set();
+  for (const meta of metas) {
+    meta.mixItems.forEach((item) => itemIds.add(Number(item.manufactureId)));
+    meta.packagingItems.forEach((item) => itemIds.add(Number(item.itemMasterId)));
+  }
+  const items = itemIds.size
+    ? await ItemMaster.findAll({
+        where: { Id: [...itemIds] },
+        attributes: ["Id", "name", "unit"],
+        paranoid: false,
+      })
+    : [];
+  return new Map(items.map((item) => [Number(item.Id), item]));
+};
+
+const perComboRows = (rows, idKey, combo, items) =>
   (rows || []).map((row) => ({
     [idKey]: Number(row[idKey]),
-    unit: row.unit || "Pcs",
+    unit: resolveRowUnit(row.unit, items.get(Number(row[idKey]))?.unit),
     perCombo: roundQuantity(toNumber(row.unitValue) / combo),
   }));
 
-const scaleRows = (rows, idKey, combo, quantity) =>
+const scaleRows = (rows, idKey, combo, quantity, items) =>
   (rows || []).map((row) => {
     const unitValue = roundQuantity((toNumber(row.unitValue) / combo) * quantity);
     return {
@@ -43,7 +76,7 @@ const scaleRows = (rows, idKey, combo, quantity) =>
       unitValue,
       value: unitValue,
       quantity: 1,
-      unit: row.unit || "Pcs",
+      unit: resolveRowUnit(row.unit, items.get(Number(row[idKey]))?.unit),
     };
   });
 
@@ -76,22 +109,10 @@ const loadTemplates = async () => {
 const getCombos = async () => {
   const templates = [...(await loadTemplates()).values()];
 
-  const itemIds = new Set();
-  for (const { meta } of templates) {
-    meta.mixItems.forEach((item) => itemIds.add(Number(item.manufactureId)));
-    meta.packagingItems.forEach((item) => itemIds.add(Number(item.itemMasterId)));
-  }
-  const items = itemIds.size
-    ? await ItemMaster.findAll({
-        where: { Id: [...itemIds] },
-        attributes: ["Id", "name"],
-        paranoid: false,
-      })
-    : [];
-  const itemNames = new Map(items.map((item) => [Number(item.Id), item.name]));
+  const items = await loadItemUnits(templates.map(({ meta }) => meta));
   const withName = (row, idKey) => ({
     ...row,
-    name: itemNames.get(row[idKey]) || `Item #${row[idKey]}`,
+    name: items.get(row[idKey])?.name || `Item #${row[idKey]}`,
   });
 
   return templates
@@ -103,13 +124,14 @@ const getCombos = async () => {
       manufacturerName: meta.manufacturerName || row.manufacturerName || null,
       warehouseId: meta.warehouseId || null,
       lastMixedOn: row.date,
-      mixItems: perComboRows(meta.mixItems, "manufactureId", combo).map((item) =>
+      mixItems: perComboRows(meta.mixItems, "manufactureId", combo, items).map((item) =>
         withName(item, "manufactureId"),
       ),
       packagingItems: perComboRows(
         meta.packagingItems,
         "itemMasterId",
         combo,
+        items,
       ).map((item) => withName(item, "itemMasterId")),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -138,6 +160,7 @@ const insertIntoDB = async (payload = {}) => {
   if (!warehouse) throw new ApiError(404, "Warehouse not found");
 
   const { row, meta, combo } = template;
+  const items = await loadItemUnits([meta]);
   const inventory = await InventoryMaster.findOne({
     where: { productId },
     attributes: ["sale_price"],
@@ -151,12 +174,13 @@ const insertIntoDB = async (payload = {}) => {
       productId,
       manufacturerId: meta.manufacturerId || row.manufacturerId || null,
       warehouseId,
-      mixItems: scaleRows(meta.mixItems, "manufactureId", combo, quantity),
+      mixItems: scaleRows(meta.mixItems, "manufactureId", combo, quantity, items),
       packagingItems: scaleRows(
         meta.packagingItems,
         "itemMasterId",
         combo,
         quantity,
+        items,
       ),
       date: payload.date || new Date().toISOString().slice(0, 10),
       note: String(payload.note || "").trim() || "Combo Production",

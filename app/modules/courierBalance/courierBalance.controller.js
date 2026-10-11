@@ -11,6 +11,14 @@ const insertIntoDB = catchAsync(async (req, res) => {
   respond(res, "Courier balance created!!", await CourierBalanceService.insertIntoDB(req.body));
 });
 
+const getReportCoverage = catchAsync(async (req, res) => {
+  respond(
+    res,
+    "Courier report coverage fetched!!",
+    await CourierBalanceService.getReportCoverage(pick(req.query, ["from", "to"])),
+  );
+});
+
 const getAllFromDB = catchAsync(async (req, res) => {
   const filters = pick(req.query, CourierBalanceFilterAbleFields);
   const options = pick(req.query, ["limit", "page", "sortBy", "sortOrder"]);
@@ -35,6 +43,7 @@ const deleteIdFromDB = catchAsync(async (req, res) => {
 });
 
 module.exports = {
+  getReportCoverage,
   insertIntoDB,
   getAllFromDB,
   getDataById,

@@ -1614,6 +1614,7 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     lenderPayable,
     directorInvestment,
     courierBalance,
+    courierOpeningBalance,
     cashOpeningBalance,
     cashOpeningBalanceByPaymentMode,
     cashEndingBalance,
@@ -1642,6 +1643,7 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     getLenderPayableReport({ from, to }),
     getDirectorInvestmentReport(),
     getCourierBalanceReport({ from, to }),
+    from ? getCourierBalanceReport({ before: from }) : null,
     getCashOpeningBalance(from),
     getCashOpeningBalanceByPaymentMode(from),
     getCashEndingBalance(to),
@@ -1741,6 +1743,7 @@ const getInventoryStockReport = async ({ from, to } = {}) => {
     lenderPayable,
     directorInvestment,
     courierBalance,
+    courierOpeningBalance,
   };
 };
 

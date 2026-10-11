@@ -104,6 +104,11 @@ const updateOneFromDB = async (id, payload) => {
     throw new ApiError(404, "Asset not found");
   }
 
+  // Stock rows are linked by assetId but show their own name; keep it in step.
+  if (data.name) {
+    await AssetsStock.update({ name: data.name }, { where: { assetId: id } });
+  }
+
   return updatedCount;
 };
 

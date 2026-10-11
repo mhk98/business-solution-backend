@@ -51,6 +51,16 @@ const updateOneFromDB = catchAsync(async (req, res) => {
   });
 });
 
+const updateUnitCost = catchAsync(async (req, res) => {
+  const result = await ItemMasterService.updateUnitCostFromDB(req.params.id, req.body);
+  sendResponse(res, {
+    statusCode: 200,
+    success: true,
+    message: "Unit cost updated successfully!!",
+    data: result,
+  });
+});
+
 const deleteIdFromDB = catchAsync(async (req, res) => {
   const result = await ItemMasterService.deleteIdFromDB(req.params.id);
   sendResponse(res, {
@@ -76,6 +86,7 @@ const ItemMasterController = {
   insertIntoDB,
   getDataById,
   updateOneFromDB,
+  updateUnitCost,
   deleteIdFromDB,
   getAllFromDBWithoutQuery,
 };

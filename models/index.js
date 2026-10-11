@@ -155,6 +155,10 @@ db.inventoryAuditAdjustment =
     db.sequelize,
     DataTypes,
   );
+db.approvalRequest = require("../app/modules/approval/approvalRequest.model")(
+  db.sequelize,
+  DataTypes,
+);
 
 db.inTransitProduct =
   require("../app/modules/inTransitProduct/inTransitProduct.model")(
@@ -523,11 +527,10 @@ db.attendanceLog = require("../app/modules/attendanceLog/attendanceLog.model")(
   DataTypes,
 );
 
-db.attendancePunch =
-  require("../app/modules/attendance/attendancePunch.model")(
-    db.sequelize,
-    DataTypes,
-  );
+db.attendancePunch = require("../app/modules/attendance/attendancePunch.model")(
+  db.sequelize,
+  DataTypes,
+);
 
 db.attendanceDay = require("../app/modules/attendance/attendanceDay.model")(
   db.sequelize,
@@ -552,11 +555,10 @@ db.zktecoDeviceUser =
     DataTypes,
   );
 
-db.zktecoAdmsTrace =
-  require("../app/modules/zktecoAdms/zktecoAdmsTrace.model")(
-    db.sequelize,
-    DataTypes,
-  );
+db.zktecoAdmsTrace = require("../app/modules/zktecoAdms/zktecoAdmsTrace.model")(
+  db.sequelize,
+  DataTypes,
+);
 
 db.attendanceSummary =
   require("../app/modules/attendanceSummary/attendanceSummary.model")(
@@ -1586,6 +1588,11 @@ db.user.belongsTo(db.department, {
   as: "attendanceDepartment",
   constraints: false,
 });
+db.user.belongsTo(db.designation, {
+  foreignKey: "designationId",
+  as: "userDesignation",
+  constraints: false,
+});
 db.leaveRequest.belongsTo(db.user, {
   foreignKey: "userId",
   as: "attendanceUser",
@@ -1892,6 +1899,32 @@ db.payable.belongsTo(db.supplier, { foreignKey: "supplierId", as: "supplier" });
 // NOTE: production এ force:true দিবেন না
 // =====================
 
+// Daily Profit & Loss By Product keeps its product lines for print/email.
+const ensureProfitLossItemsColumn = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.profitLoss.getTableName();
+  const definition = await queryInterface.describeTable(tableName);
+  if (!definition.items) {
+    await queryInterface.addColumn(tableName, "items", {
+      type: DataTypes.JSON,
+      allowNull: true,
+    });
+  }
+};
+
+// ApprovalRequests columns added after the table was first created.
+const ensureApprovalRequestColumns = async () => {
+  const queryInterface = db.sequelize.getQueryInterface();
+  const tableName = db.approvalRequest.getTableName();
+  const definition = await queryInterface.describeTable(tableName);
+  if (!definition.notificationIds) {
+    await queryInterface.addColumn(tableName, "notificationIds", {
+      type: DataTypes.JSON,
+      allowNull: true,
+    });
+  }
+};
+
 // Columns the attendance engine reads on the shared HR tables.
 const ensureAttendanceColumns = async () => {
   const queryInterface = db.sequelize.getQueryInterface();
@@ -1916,7 +1949,11 @@ const ensureAttendanceColumns = async () => {
     departmentIds: { type: DataTypes.JSON, allowNull: true },
   });
   await addMissing(db.leaveRequest, {
-    isHalfDay: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: false },
+    isHalfDay: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+      defaultValue: false,
+    },
     halfDaySession: { type: DataTypes.STRING(16), allowNull: true },
   });
   await addMissing(db.department, {
@@ -1924,11 +1961,16 @@ const ensureAttendanceColumns = async () => {
   });
   await addMissing(db.user, {
     attendancePin: { type: DataTypes.STRING(64), allowNull: true },
-    attendanceExempt: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: false },
+    attendanceExempt: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+      defaultValue: false,
+    },
     joiningDate: { type: DataTypes.DATEONLY, allowNull: true },
     exitDate: { type: DataTypes.DATEONLY, allowNull: true },
     shiftId: { type: DataTypes.INTEGER(10), allowNull: true },
     departmentId: { type: DataTypes.INTEGER(10), allowNull: true },
+    designationId: { type: DataTypes.INTEGER(10), allowNull: true },
   });
   await addMissing(db.employeeShiftAssignment, {
     startTime: { type: DataTypes.STRING(16), allowNull: true },
@@ -1937,8 +1979,16 @@ const ensureAttendanceColumns = async () => {
     graceOutMinutes: { type: DataTypes.INTEGER, allowNull: true },
   });
   await addMissing(db.attendancePolicy, {
-    holidayWorkPaid: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
-    weeklyOffWorkPaid: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    holidayWorkPaid: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
+    weeklyOffWorkPaid: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
   });
 };
 
@@ -1947,7 +1997,9 @@ const ensureAttendanceColumns = async () => {
 // is the same sha1 the ADMS service computes, so re-runs and re-sent punches
 // never duplicate. The old table itself is left untouched.
 const migrateLegacyDevicePunches = async () => {
-  const [tables] = await db.sequelize.query("SHOW TABLES LIKE 'StellarAttendanceLogs'");
+  const [tables] = await db.sequelize.query(
+    "SHOW TABLES LIKE 'StellarAttendanceLogs'",
+  );
   if (!tables.length) return;
   const punchTable = db.attendancePunch.getTableName();
   await db.sequelize.query(
@@ -2305,7 +2357,11 @@ const ensureChargeEmployeeColumns = async () => {
 // are left alone so this stays idempotent across boots.
 const backfillWorkReportCharges = async () => {
   const targets = [
-    ["codChangeDiscount", db.codChange, "CS Work Report — Discount (COD Change)"],
+    [
+      "codChangeDiscount",
+      db.codChange,
+      "CS Work Report — Discount (COD Change)",
+    ],
     ["shippingCharge", db.shippingCharge, "CS Work Report — Shipping Charge"],
     ["advancePayment", db.deliveryAdvance, "CS Work Report — Advance Payment"],
   ];
@@ -4514,10 +4570,14 @@ const linkDollarSupplierDuesToMarketingExpenses = async () => {
     `${row.dollarSupplierId}|${String(row.date).slice(0, 10)}|${Math.round(Number(row.amount || 0))}`;
   const group = (rows) => {
     const map = new Map();
-    rows.forEach((row) => map.set(keyOf(row), [...(map.get(keyOf(row)) || []), row]));
+    rows.forEach((row) =>
+      map.set(keyOf(row), [...(map.get(keyOf(row)) || []), row]),
+    );
     return map;
   };
-  const expenseGroups = group(expenses.filter((row) => !linkedIds.has(Number(row.Id))));
+  const expenseGroups = group(
+    expenses.filter((row) => !linkedIds.has(Number(row.Id))),
+  );
   const dueGroups = group(dues);
   for (const [key, expenseRows] of expenseGroups) {
     const dueRows = dueGroups.get(key) || [];
@@ -4578,10 +4638,16 @@ const prepareAttendanceUserKey = async () => {
       continue; // not created yet — sync() builds it with userId
     }
     if (!columns.userId) {
-      await queryInterface.addColumn(tableName, "userId", { type: DataTypes.INTEGER(10), allowNull: true });
+      await queryInterface.addColumn(tableName, "userId", {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      });
     }
     if (columns.employeeId && columns.employeeId.allowNull === false) {
-      await queryInterface.changeColumn(tableName, "employeeId", { type: DataTypes.INTEGER(10), allowNull: true });
+      await queryInterface.changeColumn(tableName, "employeeId", {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      });
     }
   }
 };
@@ -4589,11 +4655,25 @@ const prepareAttendanceUserKey = async () => {
 prepareAttendanceUserKey()
   .then(() => db.sequelize.sync({ force: false }))
   .then(async () => {
+    // New columns the running code already selects: added first, so a failing
+    // step further down this chain cannot leave them missing.
+    for (const ensureColumns of [ensureApprovalRequestColumns, ensureProfitLossItemsColumn]) {
+      try {
+        await ensureColumns();
+      } catch (error) {
+        console.error(`${ensureColumns.name} failed:`, error?.message || error);
+      }
+    }
+
     const loanTable = db.loan.getTableName();
-    const loanColumns = await db.sequelize.getQueryInterface().describeTable(loanTable);
+    const loanColumns = await db.sequelize
+      .getQueryInterface()
+      .describeTable(loanTable);
     if (!loanColumns.loanType) {
       await db.sequelize.getQueryInterface().addColumn(loanTable, "loanType", {
-        type: DataTypes.STRING(16), allowNull: false, defaultValue: "BORROWED",
+        type: DataTypes.STRING(16),
+        allowNull: false,
+        defaultValue: "BORROWED",
       });
     }
     await ensureCashInOutRefNoColumn();
@@ -4869,6 +4949,8 @@ prepareAttendanceUserKey()
 
     console.log("Connection re-synced successfully");
   })
-  .catch((err) => console.error("Error on re-sync:", err));
+  .catch((err) =>
+    console.error("Error on re-sync:", err?.message || err, err?.stack || ""),
+  );
 
 module.exports = db;

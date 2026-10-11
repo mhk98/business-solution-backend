@@ -83,6 +83,47 @@ const loadEmployees = async ({ departmentId, searchTerm, userId } = {}) => {
   });
 };
 
+// Only employees registered on an attendance device are listed: a PIN in the
+// device's user list (ZktecoDeviceUsers, synced from the device) or any punch
+// from that device (by userId or PIN — device punches usually carry only the
+// PIN). deviceId narrows it to one device; without it every device counts.
+// A site with no device data at all keeps showing everyone.
+const filterRegisteredOnDevice = async (employees, deviceId) => {
+  const devices = await db.attendanceDevice.findAll({
+    where: deviceId ? { Id: deviceId } : {},
+    attributes: ["Id", "name", "serialNumber"],
+    raw: true,
+  });
+  if (deviceId && !devices.length) throw new ApiError(404, "Attendance device not found");
+  const serials = devices.map((device) => device.serialNumber).filter(Boolean);
+  const names = devices.map((device) => device.name).filter(Boolean);
+  const punchWhere = [
+    ...(serials.length ? [{ deviceSerial: { [Op.in]: serials } }] : []),
+    ...(names.length ? [{ deviceName: { [Op.in]: names } }] : []),
+  ];
+  const [deviceUsers, punches] = await Promise.all([
+    serials.length && db.zktecoDeviceUser
+      ? db.zktecoDeviceUser.findAll({ where: { serialNumber: { [Op.in]: serials } }, attributes: ["pin"], raw: true })
+      : [],
+    punchWhere.length
+      ? db.attendancePunch.findAll({
+          where: { [Op.or]: punchWhere },
+          attributes: ["userId", "employeePin"],
+          group: ["userId", "employeePin"],
+          raw: true,
+        })
+      : [],
+  ]);
+  const userIds = new Set(punches.filter((row) => row.userId).map((row) => Number(row.userId)));
+  const pins = new Set(
+    [...deviceUsers.map((row) => row.pin), ...punches.map((row) => row.employeePin)]
+      .map((pin) => String(pin || "").trim())
+      .filter(Boolean),
+  );
+  if (!deviceId && !userIds.size && !pins.size) return employees;
+  return employees.filter((employee) => userIds.has(Number(employee.Id)) || pins.has(employeePin(employee)));
+};
+
 const employeeInfo = (employee) => ({
   Id: employee.Id,
   name: employee.name,
@@ -187,9 +228,10 @@ const summarize = (days, policy) => {
 
 // --- Reports -----------------------------------------------------------------
 
-const getDaily = async ({ date, departmentId, status, searchTerm } = {}) => {
+const getDaily = async ({ date, departmentId, deviceId, status, searchTerm } = {}) => {
   const day = date ? requireYmd(date, "date") : bdToday();
-  const [policy, employees] = await Promise.all([getPolicy(), loadEmployees({ departmentId, searchTerm })]);
+  const [policy, allEmployees] = await Promise.all([getPolicy(), loadEmployees({ departmentId, searchTerm })]);
+  const employees = await filterRegisteredOnDevice(allEmployees, deviceId);
   const ids = employees.map((employee) => employee.Id);
   const rows = ids.length ? await loadDays({ attendanceDate: day, userId: { [Op.in]: ids } }) : [];
   const byEmployee = new Map(rows.map((row) => [Number(row.userId), row]));
@@ -221,18 +263,24 @@ const getDaily = async ({ date, departmentId, status, searchTerm } = {}) => {
     });
   }
 
+  // Device filter options (sent here so report viewers don't need the
+  // Attendance Device menu permission).
+  const devices = await db.attendanceDevice.findAll({ attributes: ["Id", "name"], order: [["name", "ASC"]], raw: true });
+
   return {
     date: day,
     trackFromDate: policy.trackFromDate,
     beforeTracking: day < policy.trackFromDate,
     counts,
+    devices,
     rows: list,
   };
 };
 
-const getMonthly = async ({ month, from, to, departmentId, searchTerm } = {}) => {
+const getMonthly = async ({ month, from, to, departmentId, deviceId, searchTerm } = {}) => {
   const range = from && to ? { from: requireYmd(from, "from"), to: requireYmd(to, "to") } : requireMonth(month);
-  const [policy, employees] = await Promise.all([getPolicy(), loadEmployees({ departmentId, searchTerm })]);
+  const [policy, allEmployees] = await Promise.all([getPolicy(), loadEmployees({ departmentId, searchTerm })]);
+  const employees = await filterRegisteredOnDevice(allEmployees, deviceId);
   const ids = employees.map((employee) => employee.Id);
   const rows = ids.length
     ? await loadDays({ attendanceDate: { [Op.between]: [range.from, range.to] }, userId: { [Op.in]: ids } })
@@ -687,11 +735,18 @@ const updateEmployeeSetup = async (id, payload = {}) => {
 // also returns exempt users (e.g. approvers, requesters); each row carries
 // the leader of the person's department and the departments they lead.
 const getPeople = async ({ scope } = {}) => {
-  const [people, departments] = await Promise.all([
+  const [people, departments, deviceUsers, devicePunchers] = await Promise.all([
     loadEmployees(),
     db.department.findAll({
       where: { teamLeaderUserId: { [Op.ne]: null } },
       attributes: ["Id", "name", "teamLeaderUserId"],
+      raw: true,
+    }),
+    db.zktecoDeviceUser ? db.zktecoDeviceUser.findAll({ attributes: ["pin"], raw: true }) : [],
+    db.attendancePunch.findAll({
+      where: { source: "device" },
+      attributes: ["userId", "employeePin"],
+      group: ["userId", "employeePin"],
       raw: true,
     }),
   ]);
@@ -699,6 +754,14 @@ const getPeople = async ({ scope } = {}) => {
     (acc[department.teamLeaderUserId] = acc[department.teamLeaderUserId] || []).push(department.name);
     return acc;
   }, {});
+  // Registered on a device = enrolled there (device user list) or has punched on one.
+  const devicePins = new Set(
+    [...deviceUsers.map((row) => row.pin), ...devicePunchers.map((row) => row.employeePin)]
+      .map((pin) => String(pin || "").trim())
+      .filter(Boolean),
+  );
+  const deviceUserIds = new Set(devicePunchers.filter((row) => row.userId).map((row) => Number(row.userId)));
+  const isOnDevice = (person) => deviceUserIds.has(Number(person.Id)) || devicePins.has(employeePin(person));
   return people
     .filter((person) =>
       scope === "all" ? !/inactive|deactive/i.test(String(person.status || "")) : isTrackedEmployee(person),
@@ -709,6 +772,7 @@ const getPeople = async ({ scope } = {}) => {
       status: person.status,
       teamLeaderUserId: person.department?.teamLeaderUserId || null,
       leaderOf: leads[person.Id] || [],
+      onDevice: isOnDevice(person),
     }));
 };
 

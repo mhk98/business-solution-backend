@@ -15,6 +15,12 @@ router.post(
 router.get("/", auth(), ItemMasterController.getAllFromDB);
 router.get("/all", auth(), ItemMasterController.getAllFromDBWithoutQuery);
 router.get("/:id", auth(), ItemMasterController.getDataById);
+// Unit Cost edit — admin & superAdmin only.
+router.patch(
+  "/:id/unit-cost",
+  auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
+  ItemMasterController.updateUnitCost,
+);
 router.delete(
   "/:id",
   auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),

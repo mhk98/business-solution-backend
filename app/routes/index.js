@@ -2,6 +2,7 @@ const express = require("express");
 const UserRoutes = require("../modules/user/user.routes");
 const ProductRoutes = require("../modules/product/product.routes");
 const AssetRoutes = require("../modules/asset/asset.routes");
+const ApprovalRoutes = require("../modules/approval/approval.routes");
 const AssetsPurchaseRoutes = require("../modules/assetsPurchase/assetsPurchase.routes");
 const AssetsStockRoutes = require("../modules/assetsStock/assetsStock.routes");
 const ReceivedProductRoutes = require("../modules/receivedProduct/receivedProduct.routes");
@@ -621,6 +622,10 @@ const moduleRoutes = [
   {
     path: "/inventory",
     route: InventoryOverviewRoutes,
+  },
+  {
+    path: "/approvals",
+    route: ApprovalRoutes,
   },
 ];
 

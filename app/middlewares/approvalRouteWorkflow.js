@@ -11,34 +11,19 @@ const {
 const {
   rebuildAssetsStockBalances,
 } = require("../modules/assetsStock/assetsStockSync");
+const {
+  REQUISITION_MODEL_KEYS,
+  closeOpenRequests,
+  findOpenRequest,
+  isApprover,
+  notifyApprovers,
+  registerWorkflowModel,
+  rebuildAssetsIfNeeded,
+  stockDeleteService,
+} = require("../modules/approval/approvalCore");
 
 const Notification = db.notification;
 const User = db.user;
-// Records that move stock must be deleted through their own service, which
-// puts the stock back and logs the StockMovement — a bare Model.destroy would
-// drop the document but leave its stock effect in place. Required lazily to
-// avoid require cycles with the services.
-const STOCK_DELETE_SERVICES = [
-  "receivedProduct", "inTransitProduct", "returnProduct", "purchaseReturnProduct",
-  "posReport", "damageProduct", "damageRepair", "damageRepaired", "mixer",
-  "manufacture", "stockAdjustment", "factoryStockAdjustment", "packagingItemPurchase",
-  "packagingItemStockAdjustment", "packagingFactoryStockAdjustment",
-];
-// Same idea for documents whose delete must also clear a linked ledger row
-// (Item Requisition → its supplier due; DM Expense Cash In → its dollar
-// supplier due).
-const LINKED_DELETE_SERVICE_PATHS = {
-  itemRequisition: "../modules/itemRequision/itemRequision.service",
-  marketingExpense: "../modules/marketingExpense/marketingExpense.service",
-};
-const stockDeleteService = (modelKey) => {
-  if (LINKED_DELETE_SERVICE_PATHS[modelKey]) {
-    return require(LINKED_DELETE_SERVICE_PATHS[modelKey]);
-  }
-  return STOCK_DELETE_SERVICES.includes(modelKey)
-    ? require(`../modules/${modelKey}/${modelKey}.service`)
-    : null;
-};
 const PENDING_UPDATE_NOTE = "[Approval pending for update]";
 const UPDATE_APPROVED_NOTE = "[Update request approved]";
 
@@ -115,7 +100,8 @@ const notifyApprovedAssetsRequisition = async (req) => {
   );
 };
 
-const applyApprovalWorkflow =
+// Requisitions keep the original flow (see REQUISITION_MODEL_KEYS).
+const legacyApprovalWorkflow =
   ({ modelKey, entityLabel, updatePrivilegedRoles }) =>
   async (req, res, next) => {
     try {
@@ -301,6 +287,197 @@ const applyApprovalWorkflow =
     }
   };
 
+// Approval rules for everything except requisitions:
+//  - Create: non-approvers' back-dated entries are Pending (unchanged).
+//  - Edit/Delete by admin, superAdmin or a department head: applied directly, Active.
+//  - Edit/Delete by anyone else: the record turns Pending / Pending Delete and
+//    the request waits in ApprovalRequests. Approve applies it, reject puts the
+//    record back as it was (app/modules/approval).
+const STRIPPED_WORKFLOW_FIELDS = ["pendingAction", "approvalNote", "requestedByUserId"];
+
+const stripWorkflowFields = (Model, body) => {
+  const next = { ...body };
+  STRIPPED_WORKFLOW_FIELDS.forEach((field) => {
+    if (!hasAttribute(Model, field)) delete next[field];
+  });
+  if (!hasAttribute(Model, "status")) delete next.status;
+  return next;
+};
+
+// Services read `actorRole` from the body to decide whether a change may skip
+// approval; it is set here from the signed-in user, never trusted from the form.
+const approverActorRole = (user) =>
+  [ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN].includes(user?.role)
+    ? user.role
+    : ENUM_USER_ROLE.ADMIN;
+
+// An approver's own edit ends up Active unless they chose another real status
+// (e.g. Inactive on a master record).
+const approverStatus = (status) => {
+  const value = String(status || "").trim();
+  return value && !/^pending/i.test(value) ? value : "Active";
+};
+
+const fileMeta = (file) =>
+  file
+    ? {
+        fieldname: file.fieldname,
+        originalname: file.originalname,
+        encoding: file.encoding,
+        mimetype: file.mimetype,
+        destination: file.destination,
+        filename: file.filename,
+        path: file.path,
+        size: file.size,
+      }
+    : null;
+
+const submitApprovalRequest = async ({ req, Model, modelKey, entityLabel, action }) => {
+  const recordId = Number(req.params.id);
+  const existing = await Model.findOne({ where: { Id: recordId } });
+  if (!existing) {
+    throw new ApiError(404, `${entityLabel || "Record"} not found`);
+  }
+  if (await findOpenRequest(modelKey, recordId)) {
+    throw new ApiError(
+      409,
+      `This ${entityLabel || "record"} is already waiting for approval`,
+    );
+  }
+
+  const reason = action === "Delete" ? String(readDeleteNote(req) || "").trim() : "";
+  const { actorRole: _ignored, ...body } = req.body || {};
+
+  const request = await db.approvalRequest.create({
+    modelKey,
+    entityLabel: entityLabel || modelKey,
+    recordId,
+    action,
+    payload: action === "Update" ? { body, file: fileMeta(req.file) } : null,
+    method: req.method,
+    url: `${req.baseUrl}${req.path}`,
+    previousStatus: hasAttribute(Model, "status") ? existing.status : null,
+    previousNote: hasAttribute(Model, "note") ? existing.note : null,
+    reason: reason || null,
+    requestedByUserId: req.user?.Id || null,
+  });
+
+  if (hasAttribute(Model, "status")) {
+    const flag = { status: action === "Delete" ? "Pending Delete" : "Pending" };
+    // Delete reasons were always shown in the record's note; reject restores the old one.
+    if (reason && hasAttribute(Model, "note")) flag.note = reason;
+    await Model.update(flag, { where: { Id: recordId } });
+    await rebuildAssetsIfNeeded(modelKey);
+  }
+
+  const requester = [req.user?.FirstName, req.user?.LastName].filter(Boolean).join(" ") || "A user";
+  const notifications = await notifyApprovers(
+    `${requester} requested to ${action === "Delete" ? "delete" : "edit"} a ${entityLabel || "record"} — awaiting approval`,
+    req.user?.Id,
+  );
+  await request.update({ notificationIds: notifications.map((row) => row.id) });
+
+  return Model.findOne({ where: { Id: recordId } });
+};
+
+const applyApprovalWorkflow = ({ modelKey, entityLabel, updatePrivilegedRoles }) => {
+  registerWorkflowModel(modelKey, entityLabel);
+  const legacy = legacyApprovalWorkflow({ modelKey, entityLabel, updatePrivilegedRoles });
+
+  const middleware = async (req, res, next) => {
+    try {
+      const resolvedModelKey = resolveWorkflowModelKey(modelKey, req);
+      if (REQUISITION_MODEL_KEYS.has(resolvedModelKey)) {
+        return legacy(req, res, next);
+      }
+      registerWorkflowModel(resolvedModelKey, entityLabel);
+
+      const Model = db[resolvedModelKey];
+      if (!Model) {
+        throw new ApiError(
+          500,
+          `${entityLabel || resolvedModelKey} workflow model not found`,
+        );
+      }
+
+      const approver = await isApprover(req.user);
+
+      if (req.method === "POST") {
+        const nextBody = applyCreateWorkflow(req.body || {}, req.user || {}, {
+          hasDateField: hasAttribute(Model, "date"),
+          privileged: approver,
+        });
+        nextBody.actorRole = approver ? approverActorRole(req.user) : req.user?.role;
+        req.body = stripWorkflowFields(Model, nextBody);
+        return next();
+      }
+
+      if (!["PUT", "PATCH", "DELETE"].includes(req.method)) {
+        return next();
+      }
+
+      if (approver) {
+        if (req.method !== "DELETE") {
+          req.body = stripWorkflowFields(Model, {
+            ...(req.body || {}),
+            status: approverStatus(req.body?.status),
+            pendingAction: null,
+            approvalNote: null,
+            requestedByUserId: null,
+            actorRole: approverActorRole(req.user),
+          });
+        }
+        await closeOpenRequests(
+          resolvedModelKey,
+          req.params.id,
+          req.user?.Id,
+          req.method === "DELETE" ? "Deleted by an approver" : "Edited directly by an approver",
+        );
+        return next();
+      }
+
+      // Ownership guard: employees can only request delete for their own KPI rows.
+      if (
+        req.method === "DELETE" &&
+        resolvedModelKey === "kpi" &&
+        req.user?.role === ENUM_USER_ROLE.EMPLOYEE
+      ) {
+        const existing = await Model.findOne({ where: { Id: req.params.id } });
+        if (existing && Number(existing.userId) !== Number(req.user?.Id)) {
+          const employeeProfile = await db.employeeList.findOne({
+            where: { userId: req.user?.Id },
+            attributes: ["Id"],
+          });
+          if (!employeeProfile || Number(employeeProfile.Id) !== Number(existing.employeeId)) {
+            throw new ApiError(403, "You can only request delete for your own KPI");
+          }
+        }
+      }
+
+      const action = req.method === "DELETE" ? "Delete" : "Update";
+      const record = await submitApprovalRequest({
+        req,
+        Model,
+        modelKey: resolvedModelKey,
+        entityLabel,
+        action,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `${entityLabel || "Record"} ${action === "Delete" ? "delete" : "update"} request submitted for approval`,
+        data: record,
+      });
+    } catch (error) {
+      return next(error);
+    }
+  };
+
+  // Lets the Approvals API find the update route to replay an approved edit.
+  middleware.isApprovalWorkflow = true;
+  return middleware;
+};
+
 const approvePendingWorkflow =
   ({ modelKey, entityLabel }) =>
   async (req, res, next) => {
@@ -317,6 +494,23 @@ const approvePendingWorkflow =
       const existing = await Model.findOne({ where: { Id: req.params.id } });
       if (!existing) {
         throw new ApiError(404, `${entityLabel || "Record"} not found`);
+      }
+
+      // An edit/delete waiting in ApprovalRequests is applied by the Approvals service.
+      const openRequest = !REQUISITION_MODEL_KEYS.has(resolvedModelKey)
+        ? await findOpenRequest(resolvedModelKey, req.params.id)
+        : null;
+      if (openRequest) {
+        const result = await require("../modules/approval/approval.service").approve(
+          `request-${openRequest.Id}`,
+          req.user,
+          req,
+        );
+        return res.status(200).json({
+          success: true,
+          message: `${entityLabel || "Record"} approved successfully`,
+          data: { ...result, workflowAction: result.status === "Deleted" ? "deleted" : "approved" },
+        });
       }
 
       if (

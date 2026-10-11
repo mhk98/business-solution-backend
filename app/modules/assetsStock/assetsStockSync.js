@@ -196,10 +196,38 @@ const getMovementQueryAttributes = (Model, extraAttributes = []) => {
   return attributes;
 };
 
+// Rows flagged while an edit/delete waits for approval still count with their
+// current values until the request is approved (see app/modules/approval).
+const countedWhere = async (modelKey, transaction) => {
+  const waiting = db.approvalRequest
+    ? await db.approvalRequest.findAll({
+        where: { modelKey, status: "Pending" },
+        attributes: ["recordId"],
+        raw: true,
+        transaction,
+      })
+    : [];
+  const waitingIds = waiting.map((row) => row.recordId);
+  return waitingIds.length
+    ? {
+        [Op.or]: [
+          { status: { [Op.in]: STOCK_STATUSES } },
+          { Id: { [Op.in]: waitingIds }, status: { [Op.in]: ["Pending", "Pending Delete"] } },
+        ],
+      }
+    : { status: { [Op.in]: STOCK_STATUSES } };
+};
+
 const rebuildAssetsStockBalances = async (transaction) => {
   if (!AssetsStock) return;
 
   await ensureSeedAssetsStocks(transaction);
+
+  const [purchaseWhere, saleWhere, damageWhere] = await Promise.all([
+    countedWhere("assetsPurchase", transaction),
+    countedWhere("assetsSale", transaction),
+    countedWhere("assetsDamage", transaction),
+  ]);
 
   const [stocks, purchases, sales, damages] = await Promise.all([
     AssetsStock.findAll({
@@ -214,7 +242,7 @@ const rebuildAssetsStockBalances = async (transaction) => {
         "date",
         "createdAt",
       ]),
-      where: { status: { [Op.in]: STOCK_STATUSES } },
+      where: purchaseWhere,
       order: [
         ["date", "DESC"],
         ["createdAt", "DESC"],
@@ -225,13 +253,13 @@ const rebuildAssetsStockBalances = async (transaction) => {
     }),
     AssetsSale.findAll({
       attributes: getMovementQueryAttributes(AssetsSale),
-      where: { status: { [Op.in]: STOCK_STATUSES } },
+      where: saleWhere,
       raw: true,
       transaction,
     }),
     AssetsDamage.findAll({
       attributes: getMovementQueryAttributes(AssetsDamage),
-      where: { status: { [Op.in]: STOCK_STATUSES } },
+      where: damageWhere,
       raw: true,
       transaction,
     }),

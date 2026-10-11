@@ -45,6 +45,14 @@ const login = catchAsync(async (req, res) => {
   }
 });
 
+// Multipart form values arrive as strings; "" / "null" mean "none".
+const toOptionalId = (value) => {
+  const number = Number(value);
+  return value === undefined || value === null || value === "" || value === "null" || !Number.isInteger(number) || number <= 0
+    ? null
+    : number;
+};
+
 const register = catchAsync(async (req, res) => {
   const {
     FirstName,
@@ -70,6 +78,8 @@ const register = catchAsync(async (req, res) => {
     PostalCode,
     Country,
     role,
+    departmentId: toOptionalId(req.body.departmentId),
+    designationId: toOptionalId(req.body.designationId),
     image: getUploadedDocumentPath(req.files, "image"),
     idCard: getUploadedDocumentPath(req.files, "idCard"),
     cv: getUploadedDocumentPath(req.files, "cv"),
@@ -168,6 +178,13 @@ const updateUserFromDB = catchAsync(async (req, res) => {
     Country,
     // Only admins can change a user's role — prevent privilege escalation
     ...(isAdmin && role ? { role } : {}),
+    // Department / Designation: admin only; "" clears it.
+    ...(isAdmin && req.body.departmentId !== undefined
+      ? { departmentId: toOptionalId(req.body.departmentId) }
+      : {}),
+    ...(isAdmin && req.body.designationId !== undefined
+      ? { designationId: toOptionalId(req.body.designationId) }
+      : {}),
     image: getUploadedDocumentPath(req.files, "image"),
     idCard: getUploadedDocumentPath(req.files, "idCard"),
     cv: getUploadedDocumentPath(req.files, "cv"),

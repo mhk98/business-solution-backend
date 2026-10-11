@@ -3,6 +3,7 @@ const ItemMasterFilterAbleFileds = [
   "startDate",
   "endDate",
   "name",
+  "itemIds",
 ];
 
 const ItemMasterSearchableFields = [""];

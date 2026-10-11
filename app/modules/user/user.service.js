@@ -187,6 +187,10 @@ const getAllUserFromDB = async (filters, options, actor) => {
     limit,
     paranoid: true,
     attributes: { exclude: ["Password"] }, // ✅ important
+    include: [
+      { model: db.department, as: "attendanceDepartment", attributes: ["Id", "name"], required: false },
+      { model: db.designation, as: "userDesignation", attributes: ["Id", "name"], required: false },
+    ],
     order:
       options.sortBy && options.sortOrder
         ? [[options.sortBy, options.sortOrder]]

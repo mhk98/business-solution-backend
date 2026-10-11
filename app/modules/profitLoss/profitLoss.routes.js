@@ -9,6 +9,7 @@ const {
   approvePendingWorkflow,
 } = require("../../middlewares/approvalRouteWorkflow");
 const ProfitLossController = require("./profitLoss.controller");
+const { registerWorkflowModel } = require("../approval/approvalCore");
 const router = require("express").Router();
 
 const profitLossPermissionByMode = {
@@ -28,6 +29,11 @@ const profitLossModelKeyByMode = {
   user: "userProfitLoss",
   product: "profitLoss",
 };
+
+// The model is picked per request, so list all three for the Approvals page up front.
+registerWorkflowModel("profitLoss", "Daily Profit & Loss By Product");
+registerWorkflowModel("autoProfitLoss", "Auto Profit & Loss");
+registerWorkflowModel("userProfitLoss", "Daily Profit & Loss By User");
 
 const resolveProfitLossModelKey = (req) =>
   profitLossModelKeyByMode[req.body?.mode || req.query?.mode] || "profitLoss";

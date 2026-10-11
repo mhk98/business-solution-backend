@@ -12,6 +12,10 @@ const IGNORED_ROUTE_SEGMENTS = [
   "verify",
   "forgot",
   "reset",
+  // Approve/reject are keyed by the record in the URL, not the body, so
+  // different records would look like the same request.
+  "approve",
+  "reject",
 ];
 
 const duplicateRequestLocks = new Map();

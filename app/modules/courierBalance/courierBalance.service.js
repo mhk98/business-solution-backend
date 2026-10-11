@@ -84,8 +84,14 @@ const deleteIdFromDB = async (id) => CourierBalance.destroy({ where: { Id: id } 
 // END date: the entries of the latest date on or before `to` (several entries
 // on that date, e.g. one per courier, are added). `from` doesn't limit it —
 // the last snapshot before the range is still the balance on `to`.
-const getCourierBalanceReport = async ({ from, to } = {}) => {
-  const where = to ? { date: { [Op.lte]: to } } : {};
+// `before` gives the opening balance: the latest snapshot dated strictly
+// before that day (e.g. the report's start date).
+const getCourierBalanceReport = async ({ from, to, before } = {}) => {
+  const where = before
+    ? { date: { [Op.lt]: before } }
+    : to
+      ? { date: { [Op.lte]: to } }
+      : {};
   const latest = await CourierBalance.findOne({
     where,
     attributes: ["date"],
@@ -114,8 +120,51 @@ const getCourierBalanceReport = async ({ from, to } = {}) => {
   };
 };
 
+const previousDay = (ymd) => {
+  const date = new Date(`${ymd}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+};
+
+// The Book report needs courier stock and courier balance entered for the day
+// before its start date (opening) and for its end date (closing). Lists what
+// is missing; an empty list means the report can be generated.
+const getReportCoverage = async ({ from, to } = {}) => {
+  const isYmd = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+  if (!isYmd(from) || !isYmd(to)) {
+    throw new ApiError(400, "from and to (YYYY-MM-DD) are required");
+  }
+  const openingDate = previousDay(from);
+  const checks = [
+    { key: "courierStock", label: "কুরিয়ার স্টক", Model: db.courierProductStock },
+    { key: "courierBalance", label: "কুরিয়ার ব্যালেন্স", Model: CourierBalance },
+  ];
+  const dates = [
+    { key: "opening", date: openingDate },
+    { key: "closing", date: to },
+  ];
+  const results = await Promise.all(
+    checks.flatMap((check) =>
+      dates.map(async (day) => ({
+        item: check.key,
+        label: check.label,
+        when: day.key,
+        date: day.date,
+        found: (await check.Model.count({ where: { date: day.date } })) > 0,
+      })),
+    ),
+  );
+  return {
+    openingDate,
+    closingDate: to,
+    ok: results.every((row) => row.found),
+    missing: results.filter((row) => !row.found),
+  };
+};
+
 module.exports = {
   getCourierBalanceReport,
+  getReportCoverage,
   insertIntoDB,
   getAllFromDB,
   getDataById,

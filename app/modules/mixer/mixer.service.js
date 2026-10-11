@@ -20,6 +20,9 @@ const {
   toBaseStockPayload,
 } = require("../../../helpers/unitConversionHelper");
 const { logStockMovement } = require("../../../shared/stockMovementLogger");
+const {
+  assertUnitMatchesStockRow,
+} = require("../../../shared/itemStockUnitGuard");
 const itemFifo = require("../../../shared/itemFifoCostLayers");
 const { costAtCurrentAverage } = require("../../../shared/averageCost");
 const productFifo = require("../../../shared/fifoCostLayers");
@@ -515,6 +518,43 @@ const findManufactureStockRow = async (item, manufacturerId, transaction) => {
   }
 
   return null;
+};
+
+// Every recipe row's unit must fit the stock row it is taken from (Gram/Kg,
+// Ml/Liter, or the same plain unit) — "Pcs" for Ajwa kept in Gram would be
+// counted as grams. Only rows sent in the request are checked, so an old
+// recipe saved before this guard can still be edited or deleted.
+const assertMixerRowUnits = async ({
+  mixItems,
+  packagingItems,
+  manufacturerId,
+  transaction,
+}) => {
+  for (const row of Array.isArray(mixItems) ? mixItems : []) {
+    const item = await ItemMaster.findOne({
+      where: { Id: Number(row?.manufactureId || 0) },
+      transaction,
+    });
+    if (!item) continue;
+    if (manufacturerId) {
+      const stockRow = await findManufactureStockRow(
+        item,
+        manufacturerId,
+        transaction,
+      );
+      assertUnitMatchesStockRow(stockRow || item, row?.unit, "Factory Stock");
+    } else {
+      assertUnitMatchesStockRow(item, row?.unit);
+    }
+  }
+
+  for (const row of Array.isArray(packagingItems) ? packagingItems : []) {
+    const item = await ItemMaster.findOne({
+      where: { Id: Number(row?.itemMasterId || 0) },
+      transaction,
+    });
+    assertUnitMatchesStockRow(item, row?.unit);
+  }
 };
 
 const reconcileManufactureStock = async (
@@ -1351,6 +1391,12 @@ const insertIntoDB = async (payload, internal = {}) => {
   );
 
   return db.sequelize.transaction(async (t) => {
+    await assertMixerRowUnits({
+      mixItems,
+      packagingItems,
+      manufacturerId: Number(manufacturerId || 0) || null,
+      transaction: t,
+    });
     // A user-entered (custom) Purchase Price wins over the recipe costing;
     // the flag is kept in the note meta so later edits keep honouring it.
     outputPrices.purchase_price_custom = Boolean(purchase_price_custom);
@@ -1699,6 +1745,12 @@ const updateOneFromDB = async (id, payload) => {
       manufacturerId === "" || manufacturerId == null
         ? previousContext.manufacturerId
         : Number(manufacturerId);
+    await assertMixerRowUnits({
+      mixItems,
+      packagingItems,
+      manufacturerId: nextManufacturerId || null,
+      transaction: t,
+    });
     const nextManufacturer =
       nextManufacturerId &&
       (nextManufacturerId !== previousContext.manufacturerId ||

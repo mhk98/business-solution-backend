@@ -42,7 +42,8 @@ const shouldCreateBePending = (payload = {}, options = {}) => {
 };
 
 const applyCreateWorkflow = (payload = {}, user = {}, options = {}) => {
-  const privileged = isPrivilegedRole(user.role);
+  // `options.privileged` lets the caller decide (e.g. department heads count as approvers).
+  const privileged = options.privileged ?? isPrivilegedRole(user.role);
   const nextStatus = privileged
     ? payload.status || "Active"
     : shouldCreateBePending(payload, options)

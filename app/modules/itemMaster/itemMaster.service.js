@@ -16,6 +16,7 @@ const {
 } = require("../../../shared/directStockEdit");
 const { ItemMasterSearchableFields } = require("./itemMaster.constants");
 const { buildItemUnitCostResolver, baseOf } = require("../../../shared/itemUnitCostResolver");
+const { businessDate, POOLS, stockQuantity } = require("../../../shared/stockReportBalances");
 const ItemMaster = db.itemMaster;
 
 // Item Stock always shows quantity/unit exactly as purchased (e.g. Ml, not
@@ -76,9 +77,20 @@ const insertIntoDB = async (data) => {
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
 
-  const { searchTerm, startDate, endDate, ...otherFilters } = filters;
+  const { searchTerm, startDate, endDate, itemIds, ...otherFilters } = filters;
 
   const andConditions = [];
+
+  if (itemIds !== undefined && itemIds !== "") {
+    const values = (Array.isArray(itemIds) ? itemIds : [itemIds])
+      .flatMap((value) => String(value).split(","))
+      .map((value) => value.trim());
+    if (values.some((value) => !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0)) {
+      throw new ApiError(400, "itemIds must contain positive integer IDs");
+    }
+    const ids = [...new Set(values.map(Number))];
+    if (ids.length) andConditions.push({ itemId: { [Op.in]: ids } });
+  }
 
   // ✅ Search (ILIKE)
   if (searchTerm && searchTerm.trim()) {
@@ -172,6 +184,52 @@ const updateOneFromDB = async (id, payload) => {
   return result;
 };
 
+// Unit Cost edit (admin/superAdmin): quantity stays, total value becomes
+// quantity × the entered unit cost. Logged as a zero-quantity REVALUATION
+// movement so the average cost engine keeps the entered price as the new
+// average instead of blending it back.
+const updateUnitCostFromDB = async (id, payload = {}) => {
+  const record = await ItemMaster.findOne({ where: { Id: id } });
+  if (!record) throw new ApiError(404, "Item stock not found");
+
+  const unitCost = Number(payload.unitCost);
+  if (payload.unitCost === "" || payload.unitCost === null || !Number.isFinite(unitCost) || unitCost < 0) {
+    throw new ApiError(400, "Unit cost must be a non-negative number");
+  }
+  const average = Math.round(unitCost * 10000) / 10000;
+  const quantity = stockQuantity(record.get({ plain: true }), POOLS.ItemStock);
+  const cost = Math.round(average * Math.max(quantity, 0) * 100) / 100;
+
+  await db.sequelize.transaction(async (transaction) => {
+    await record.update({ cost }, { transaction });
+    await db.stockMovement.create(
+      {
+        sourceType: "PriceRevaluation",
+        sourceId: record.Id,
+        operation: "REVALUATION",
+        stockType: "ItemStock",
+        stockRowId: record.Id,
+        itemId: record.itemId,
+        name: record.name,
+        direction: "NONE",
+        unit: record.unit,
+        date: businessDate(),
+        quantityChange: 0,
+        balanceBefore: Number(record.unitValue || 0),
+        balanceAfter: Number(record.unitValue || 0),
+        averageCostAfter: average,
+      },
+      { transaction },
+    );
+    transaction.afterCommit(() =>
+      require("../../../shared/averageCostRunner").scheduleAverageRecompute(),
+    );
+  });
+
+  const [updated] = await attachLastUnitCost([toPlainStockRow(await record.reload())]);
+  return updated;
+};
+
 const getAllFromDBWithoutQuery = async () => {
   const result = await ItemMaster.findAll({
     paranoid: true,
@@ -186,6 +244,7 @@ const ItemMasterService = {
   insertIntoDB,
   deleteIdFromDB,
   updateOneFromDB,
+  updateUnitCostFromDB,
   getDataById,
   getAllFromDBWithoutQuery,
 };

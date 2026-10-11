@@ -81,6 +81,13 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
         defaultValue: 0,
       },
+      // Per-product lines of the calculation, so a saved record can be
+      // printed/emailed later: [{ name, sku, unitsSold, costPrice,
+      // sellingPrice, totalCost, totalRevenue, profit }].
+      items: {
+        type: DataTypes.JSON,
+        allowNull: true,
+      },
 
       cost: {
         type: DataTypes.INTEGER(10),
