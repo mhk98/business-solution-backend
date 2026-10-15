@@ -147,7 +147,10 @@ const getAllFromDB = async (filters, options) => {
   const [count, totalQuantity, totalBalance] = await Promise.all([
     ItemMaster.count({ where: whereConditions }),
     ItemMaster.sum("unitValue", { where: whereConditions }),
-    ItemMaster.sum("cost", { where: whereConditions }),
+    // Empty rows keep a reference cost (see averageCostRunner) — not stock value.
+    ItemMaster.sum("cost", {
+      where: { [Op.and]: [whereConditions, { unitValue: { [Op.gt]: 0 } }] },
+    }),
   ]);
 
   return {

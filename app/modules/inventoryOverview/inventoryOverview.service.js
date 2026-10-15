@@ -1363,6 +1363,9 @@ const buildUnitPriceMap = (rows, idField, fallbackMap = new Map()) => {
   rows.filter((row) => !row.deletedAt).forEach((row) => {
     const id = Number(row[idField]);
     if (!id) return;
+    // An empty row keeps a reference cost (averageCostRunner) — not value;
+    // adding it to a sibling row's stock would inflate the unit price.
+    if (n(row.unitValue) <= 0) return;
     const total = totals.get(id) || { quantity: 0, cost: 0 };
     total.quantity += n(row.unitValue);
     total.cost += n(row.cost);

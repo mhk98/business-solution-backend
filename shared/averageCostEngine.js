@@ -96,6 +96,7 @@ const replayAverages = ({ movements, stocksByType, fromDate, costedAfterId = 0, 
     bySource.get(docKey(row)).push(row);
   }
   const updates = new Map(); // Id → { unitCost, unitCostConsumed, averageCostAfter }
+  const maxInCost = new Map(); // pool key → highest inbound unit cost replayed
   const costOf = (row, field) => {
     const updated = updates.get(row.Id);
     if (updated && updated[field] != null) return updated[field];
@@ -137,6 +138,9 @@ const replayAverages = ({ movements, stocksByType, fromDate, costedAfterId = 0, 
       } else if (row.unitCost != null && Number(row.unitCost) > 0) {
         cost = Number(row.unitCost);
       }
+      if (!REVERSAL_OPERATIONS.has(row.operation)) {
+        maxInCost.set(row.key, Math.max(maxInCost.get(row.key) || 0, cost));
+      }
       const qtyBefore = Math.max(pool.qty, 0);
       pool.avg = qtyBefore > 0 ? (qtyBefore * pool.avg + change * cost) / (qtyBefore + change) : cost;
       update.unitCost = round4(cost);
@@ -150,10 +154,17 @@ const replayAverages = ({ movements, stocksByType, fromDate, costedAfterId = 0, 
       const quantity = -change;
       const inbound = REVERSAL_OPERATIONS.has(row.operation) ? original(row, true) : null;
       if (inbound) {
+        // Deleting/editing a purchase un-blends it at its own price — unless
+        // part of the stock is already used and that leaves a nonsense
+        // average (below 0 or above any price the row was ever bought at);
+        // then the units leave at the current average, which stays as is.
         const cost = costOf(inbound, "unitCost") ?? pool.avg;
         const qtyAfter = pool.qty - quantity;
-        if (qtyAfter > 0) pool.avg = (pool.qty * pool.avg - quantity * cost) / qtyAfter;
-        update.unitCostConsumed = round4(cost);
+        const ceiling = Math.max(maxInCost.get(row.key) || 0, pool.avg);
+        const unblended = qtyAfter > 0 ? (pool.qty * pool.avg - quantity * cost) / qtyAfter : pool.avg;
+        const sane = unblended >= 0 && unblended <= ceiling + 0.0001;
+        if (qtyAfter > 0 && sane) pool.avg = unblended;
+        update.unitCostConsumed = round4(sane ? cost : pool.avg);
       } else {
         update.unitCostConsumed = round4(pool.avg);
         lastTransferOut.set(`${docKey(row)}|${row.type}`, update.unitCostConsumed);

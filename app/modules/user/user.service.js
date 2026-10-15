@@ -15,6 +15,7 @@ const sendEmail = require("../../middlewares/sendEmail");
 const welcomeCredentialsTemplate = require("../../utils/emailTemplates/welcomeCredentials");
 const RolePermissionService = require("../rolePermission/rolePermission.service");
 const { ENUM_USER_ROLE } = require("../../enums/user");
+const MasterPermissionService = require("../masterPermission/masterPermission.service");
 const DEFAULT_REGISTER_PASSWORD = "123456";
 const VALID_USER_ROLES = Object.values(ENUM_USER_ROLE);
 const USER_ROLE_ALIASES = VALID_USER_ROLES.reduce((acc, role) => {
@@ -169,10 +170,9 @@ const getAllUserFromDB = async (filters, options, actor) => {
     deletedAt: { [Op.is]: null }, // Only include records with deletedAt as null (not deleted)
   });
 
-  // Only a superAdmin viewer gets to see superAdmin rows — everyone else
-  // (including plain Admin, who can otherwise edit any profile) never sees
-  // them in this list.
-  if (actor?.role !== ENUM_USER_ROLE.SUPER_ADMIN) {
+  // Master permission users can view every role for editing.
+  const { canManageMasterPermission } = await MasterPermissionService.getSelfPermission(actor);
+  if (!canManageMasterPermission) {
     andConditions.push({
       role: { [Op.ne]: ENUM_USER_ROLE.SUPER_ADMIN },
     });
@@ -215,7 +215,8 @@ const getUserById = async (id, actor) => {
 
   if (
     result?.role === ENUM_USER_ROLE.SUPER_ADMIN &&
-    Number(actor?.Id) !== Number(result.Id)
+    Number(actor?.Id) !== Number(result.Id) &&
+    !(await MasterPermissionService.getSelfPermission(actor)).canManageMasterPermission
   ) {
     throw new ApiError(403, "Access denied.");
   }
@@ -256,7 +257,8 @@ const updateUserFromDB = async (id, payload, actor) => {
 
   if (
     existing.role === ENUM_USER_ROLE.SUPER_ADMIN &&
-    Number(actor?.Id) !== Number(existing.Id)
+    Number(actor?.Id) !== Number(existing.Id) &&
+    !(await MasterPermissionService.getSelfPermission(actor)).canManageMasterPermission
   ) {
     throw new ApiError(403, "Access denied.");
   }

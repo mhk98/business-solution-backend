@@ -8,8 +8,14 @@ const {
   applyApprovalWorkflow,
 } = require("../../middlewares/approvalRouteWorkflow");
 
+const { registerWorkflowModel } = require("../approval/approvalCore");
+
 const PettyCashController = require("./pettyCash.controller");
 const router = require("express").Router();
+
+// Listed in Approvals from boot (not only after the first petty cash request);
+// approving there runs the requisition's own approve (Book Cash Out).
+registerWorkflowModel("pettyCashRequisition", "Petty Cash Requisition");
 const pettyCashAccess = requireAnyPermission([
   "petty_cash",
   "petty_cash_requisition",

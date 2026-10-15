@@ -4,6 +4,7 @@ const ManufactureProductionFilterAbleFileds = [
   "endDate",
   "name",
   "manufacturerId",
+  "itemId",
 ];
 
 const ManufactureProductionSearchableFields = ["name", "manufacturerName"];

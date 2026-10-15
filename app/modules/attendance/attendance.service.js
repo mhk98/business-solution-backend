@@ -790,7 +790,7 @@ const getLeaveBalance = async ({ year, userId } = {}) => {
         ...(userId ? { userId } : {}),
         startDate: { [Op.lte]: to },
         endDate: { [Op.gte]: from },
-        approvalStatus: { [Op.in]: ["Approved", "Pending"] },
+        approvalStatus: { [Op.in]: ["Approved", "Pending", "Leader Approved"] },
       },
       raw: true,
     }),
@@ -816,7 +816,7 @@ const getLeaveBalance = async ({ year, userId } = {}) => {
     const key = `${request.userId}|${request.leaveTypeId}`;
     const start = maxYmd(String(request.startDate).slice(0, 10), from);
     const end = minYmd(String(request.endDate).slice(0, 10), to);
-    if (request.approvalStatus === "Pending") {
+    if (request.approvalStatus !== "Approved") {
       pending[key] = (pending[key] || 0) + (request.isHalfDay ? 0.5 : dateRange(start, end).length);
       return;
     }

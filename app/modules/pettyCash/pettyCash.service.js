@@ -247,7 +247,9 @@ const approveRequisition = async (id, actor = {}, updates = {}) => {
       return { deleted: true, workflowAction: "deleted" };
     }
 
-    if (requisition.status === "Approved" && requisition.pettyCashId) {
+    // Already approved — including the old backlog approved by status only
+    // (no pettyCashId) on 2026-10-12, whose cash was never meant to move.
+    if (requisition.status === "Approved") {
       return requisition;
     }
 

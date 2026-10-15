@@ -209,7 +209,7 @@ const getAllFromDB = async (filters, options) => {
     : {};
 
   // ✅ total count + total quantity (same filters)
-  const [data, count, quantityRows] = await Promise.all([
+  const [data, count, quantityRows, averageLive] = await Promise.all([
     InventoryMaster.findAll({
       where: whereConditions,
       offset: skip,
@@ -224,16 +224,23 @@ const getAllFromDB = async (filters, options) => {
     InventoryMaster.count({ where: whereConditions }),
     InventoryMaster.findAll({
       where: whereConditions,
-      attributes: ["quantity", "variants", "purchase_price"],
+      attributes: ["quantity", "variants", "purchase_price", "averageCost"],
       paranoid: true,
     }),
+    isAverageCostLive(),
   ]);
   const totalQuantity = quantityRows.reduce(
     (sum, row) => sum + getInventoryDisplayQuantity(row),
     0,
   );
+  // Same valuation as the Dashboard and All Books: qty × weighted-average
+  // cost once average costing is live, variant purchase prices before that.
   const totalStockBalance = quantityRows.reduce(
-    (sum, row) => sum + getInventoryStockBalance(row),
+    (sum, row) =>
+      sum +
+      (averageLive && row.averageCost !== null && row.averageCost !== undefined
+        ? getInventoryDisplayQuantity(row) * Number(row.averageCost || 0)
+        : getInventoryStockBalance(row)),
     0,
   );
 

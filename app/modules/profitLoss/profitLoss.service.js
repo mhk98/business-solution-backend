@@ -160,6 +160,58 @@ const sendInvoiceEmail = async (payload, actor) => {
   };
 };
 
+const toDateKey = (value) => {
+  if (!value) return null;
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10);
+  }
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+// Total Order for By Product / Intransit invoices comes from the CS Work
+// Report of the record's date — matched on sales type for By Product, all
+// sales types for Intransit (its salesType is "Auto Profit & Loss").
+const attachCsTotalOrder = async (rows, mode) => {
+  const plain = rows.map((row) => (row?.toJSON ? row.toJSON() : row));
+  const dates = [
+    ...new Set(plain.map((r) => toDateKey(r.date || r.createdAt)).filter(Boolean)),
+  ];
+  if (!dates.length) return plain;
+
+  const grouped = await db.employeeWorkReport.findAll({
+    attributes: [
+      "reportDate",
+      "saleType",
+      [db.sequelize.fn("SUM", db.sequelize.col("totalOrder")), "orders"],
+    ],
+    where: { reportDate: { [Op.in]: dates } },
+    group: ["reportDate", "saleType"],
+    raw: true,
+  });
+
+  const byDate = {};
+  const byDateType = {};
+  grouped.forEach((g) => {
+    const key = toDateKey(g.reportDate);
+    const orders = Number(g.orders) || 0;
+    byDate[key] = (byDate[key] || 0) + orders;
+    const typeKey = `${key}|${g.saleType || ""}`;
+    byDateType[typeKey] = (byDateType[typeKey] || 0) + orders;
+  });
+
+  return plain.map((r) => {
+    const key = toDateKey(r.date || r.createdAt);
+    const totalOrder =
+      mode === "auto"
+        ? byDate[key] || 0
+        : byDateType[`${key}|${r.salesType || ""}`] || 0;
+    return { ...r, totalOrder };
+  });
+};
+
 const getAllFromDB = async (filters, options) => {
   const { page, limit, skip } = paginationHelpers.calculatePagination(options);
 
@@ -234,10 +286,13 @@ const getAllFromDB = async (filters, options) => {
   });
 
   const total = await Model.count({ where: whereConditions });
+  const resolvedMode = resolveMode(mode);
+  const data =
+    resolvedMode === "user" ? result : await attachCsTotalOrder(result, resolvedMode);
 
   return {
     meta: { page, limit, total },
-    data: result,
+    data,
   };
 };
 

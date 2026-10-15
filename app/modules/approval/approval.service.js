@@ -15,6 +15,7 @@ const {
 } = require("./approvalCore");
 
 const LEGACY_UPDATE_MARKER = /\[Approval pending for update\]/;
+const PETTY_CASH_REQUISITION = "pettyCashRequisition";
 const IGNORED_CHANGE_FIELDS = new Set([
   "Id", "userId", "actorRole", "status", "createdAt", "updatedAt", "deletedAt",
   "pendingAction", "approvalNote", "requestedByUserId",
@@ -159,7 +160,14 @@ const listPending = async (user) => {
         entityLabel: WORKFLOW_MODELS.get(modelKey) || modelKey,
         recordId: row.Id,
         // Old-style edits were already saved; approving/rejecting only clears the flag.
-        action: isDelete ? "Delete" : legacyUpdate ? "Update (already saved)" : "Create",
+        // A petty cash requisition waits for its pay-out approval, edited or not.
+        action: isDelete
+          ? "Delete"
+          : modelKey === PETTY_CASH_REQUISITION
+            ? "Requisition"
+            : legacyUpdate
+              ? "Update (already saved)"
+              : "Create",
         reason: isDelete ? row.note || null : null,
         requestedBy: null,
         requestedAt: row.updatedAt || row.createdAt,
@@ -388,6 +396,20 @@ const approve = async (key, approver, req) => {
     await deleteWorkflowRecord(modelKey, recordId);
     return { action: "Delete", status: "Deleted" };
   }
+  // A petty cash requisition is approved through its own service: that is
+  // what adds the Petty Cash Cash In and the Book Cash Out.
+  if (modelKey === PETTY_CASH_REQUISITION) {
+    const PettyCashService = require("../pettyCash/pettyCash.service");
+    await PettyCashService.approveRequisition(recordId, approver);
+    // Same notice the Petty Cash page sends on approve.
+    const accountants = await db.user.findAll({
+      where: { role: ENUM_USER_ROLE.ACCOUNTANT, Id: { [Op.ne]: approver.Id } },
+      attributes: ["Id"],
+      raw: true,
+    });
+    await notifyUsers(accountants.map((user) => user.Id), "Petty cash requisition request approved", "petty-cash");
+    return { action: "Requisition", status: "Approved" };
+  }
   const patch = { status: "Active" };
   if (hasAttribute(db[modelKey], "note") && LEGACY_UPDATE_MARKER.test(String(row.note || ""))) {
     patch.note = clearLegacyMarker(row.note);
@@ -415,6 +437,18 @@ const reject = async (key, approver, note) => {
   const { modelKey, recordId } = parsed;
   const row = await scannedRecord(modelKey, recordId);
   const Model = db[modelKey];
+  // A requisition is a request, not a transaction. Rejecting a delete keeps
+  // it as it was (Approved once paid, else waiting); rejecting the
+  // requisition itself marks it Rejected — nothing is paid out.
+  if (modelKey === PETTY_CASH_REQUISITION) {
+    if (row.status === "Pending Delete") {
+      await Model.update({ status: row.pettyCashId ? "Approved" : "Pending" }, { where: { Id: recordId } });
+      return { action: "Delete", status: row.pettyCashId ? "Approved" : "Pending" };
+    }
+    const reason = note ? String(note).slice(0, 255) : clearLegacyMarker(row.note);
+    await Model.update({ status: "Rejected", note: reason || null }, { where: { Id: recordId } });
+    return { action: "Requisition", status: "Rejected" };
+  }
   if (row.status === "Pending Delete") {
     // Delete requested before ApprovalRequests existed: keep the record.
     await Model.update({ status: "Active" }, { where: { Id: recordId } });

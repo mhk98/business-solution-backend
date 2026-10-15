@@ -1390,7 +1390,7 @@ const insertIntoDB = async (payload, internal = {}) => {
     mixerOthersCost,
   );
 
-  return db.sequelize.transaction(async (t) => {
+  const run = async (t) => {
     await assertMixerRowUnits({
       mixItems,
       packagingItems,
@@ -1503,7 +1503,12 @@ const insertIntoDB = async (payload, internal = {}) => {
     });
 
     return sanitizeMixerRecord(result);
-  });
+  };
+
+  // Combo Production batches several entries into one caller transaction.
+  return internal.transaction
+    ? run(internal.transaction)
+    : db.sequelize.transaction(run);
 };
 const getAllFromDB = async (
   filters,

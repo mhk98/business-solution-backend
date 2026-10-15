@@ -6,22 +6,28 @@ const {
 const { uploadUserDocuments } = require("../../middlewares/upload");
 const UserController = require("./user.controller");
 const ApiError = require("../../../error/ApiError");
+const MasterPermissionService = require("../masterPermission/masterPermission.service");
 const router = require("express").Router();
 
-// Middleware: allow if requesting own profile OR has user_management permission
-const selfOrAdmin = (req, res, next) => {
-  const requestedId = String(req.params.id);
-  const callerId = String(req.user?.Id);
-  const role = req.user?.role;
+// Allow own profile, admins, and users with master permission.
+const selfOrAdmin = async (req, res, next) => {
+  try {
+    const requestedId = String(req.params.id);
+    const callerId = String(req.user?.Id);
+    const role = req.user?.role;
 
-  const isAdmin = [
-    ENUM_USER_ROLE.SUPER_ADMIN,
-    ENUM_USER_ROLE.ADMIN,
-  ].includes(role);
+    const isAdmin = [
+      ENUM_USER_ROLE.SUPER_ADMIN,
+      ENUM_USER_ROLE.ADMIN,
+    ].includes(role);
 
-  if (callerId === requestedId || isAdmin) return next();
+    if (callerId === requestedId || isAdmin ||
+        (await MasterPermissionService.getSelfPermission(req.user)).canManageMasterPermission) return next();
 
-  return next(new ApiError(403, "Access denied."));
+    return next(new ApiError(403, "Access denied."));
+  } catch (error) {
+    return next(error);
+  }
 };
 
 // ── Public ──────────────────────────────────────────────
@@ -35,7 +41,14 @@ router.post("/logout", auth(), UserController.logout);
 router.get(
   "/",
   auth(),
-  requireMenuPermission("user_management"),
+  async (req, res, next) => {
+    try {
+      if ((await MasterPermissionService.getSelfPermission(req.user)).canManageMasterPermission) return next();
+      return requireMenuPermission("user_management")(req, res, next);
+    } catch (error) {
+      return next(error);
+    }
+  },
   UserController.getAllUserFromDB,
 );
 

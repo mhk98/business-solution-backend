@@ -99,7 +99,10 @@ const getAllFromDB = async (filters, options) => {
     }),
     ManufactureStock.count({ where: whereConditions }),
     ManufactureStock.sum("unitValue", { where: whereConditions }),
-    ManufactureStock.sum("cost", { where: whereConditions }),
+    // Empty rows keep a reference cost (see averageCostRunner) — not stock value.
+    ManufactureStock.sum("cost", {
+      where: { [Op.and]: [whereConditions, { unitValue: { [Op.gt]: 0 } }] },
+    }),
   ]);
 
   return {

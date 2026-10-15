@@ -137,28 +137,34 @@ const getCombos = async () => {
     .sort((a, b) => a.name.localeCompare(b.name));
 };
 
-const insertIntoDB = async (payload = {}) => {
-  const productId = Number(payload.productId || 0);
-  const quantity = toNumber(payload.quantity);
-  const warehouseId = Number(payload.warehouseId || 0);
+// One modal submit can add several combos (each to its own Stock Product).
+// Payload: { date, note, items: [{ productId, warehouseId, quantity }] } —
+// a single { productId, warehouseId, quantity } is still accepted. All rows
+// are saved in one transaction, so either every combo is added or none.
+const normalizeItems = (payload) => {
+  const rawItems = Array.isArray(payload.items) ? payload.items : [payload];
+  if (!rawItems.length) throw new ApiError(400, "Add at least one combo");
 
-  if (!productId) throw new ApiError(400, "Combo is required");
-  if (!warehouseId) throw new ApiError(400, "Warehouse is required");
-  if (!(quantity > 0)) {
-    throw new ApiError(400, "Quantity must be greater than 0");
-  }
+  return rawItems.map((item, index) => {
+    const label = rawItems.length > 1 ? `Row ${index + 1}: ` : "";
+    const productId = Number(item?.productId || 0);
+    const warehouseId = Number(item?.warehouseId || 0);
+    const quantity = toNumber(item?.quantity);
 
-  const template = (await loadTemplates()).get(productId);
-  if (!template) {
-    throw new ApiError(
-      404,
-      "No Mixer recipe found for this combo — make it once from Mixer first",
-    );
-  }
+    if (!productId) throw new ApiError(400, `${label}Combo is required`);
+    if (!warehouseId) throw new ApiError(400, `${label}Warehouse is required`);
+    if (!(quantity > 0)) {
+      throw new ApiError(400, `${label}Quantity must be greater than 0`);
+    }
+    return { productId, warehouseId, quantity, label };
+  });
+};
 
-  const warehouse = await Warehouse.findOne({ where: { Id: warehouseId } });
-  if (!warehouse) throw new ApiError(404, "Warehouse not found");
-
+const buildMixerPayload = async (
+  { productId, warehouseId, quantity },
+  template,
+  { date, note },
+) => {
   const { row, meta, combo } = template;
   const items = await loadItemUnits([meta]);
   const inventory = await InventoryMaster.findOne({
@@ -169,33 +175,77 @@ const insertIntoDB = async (payload = {}) => {
   // Product, and Combo Production shouldn't change it.
   const salePrice = toNumber(inventory?.sale_price) || toNumber(meta.sale_price);
 
-  return MixerService.insertIntoDB(
-    {
-      productId,
-      manufacturerId: meta.manufacturerId || row.manufacturerId || null,
-      warehouseId,
-      mixItems: scaleRows(meta.mixItems, "manufactureId", combo, quantity, items),
-      packagingItems: scaleRows(
-        meta.packagingItems,
-        "itemMasterId",
-        combo,
-        quantity,
-        items,
-      ),
-      date: payload.date || new Date().toISOString().slice(0, 10),
-      note: String(payload.note || "").trim() || "Combo Production",
-      combo: quantity,
-      variants: [],
-      purchase_price_custom: false,
-      sale_price: salePrice,
-      unitWage: 0,
-      othersCost: 0,
-    },
-    {
-      entryType: COMBO_PRODUCTION_ENTRY_TYPE,
-      templateMixerId: row.Id,
-    },
-  );
+  return {
+    productId,
+    manufacturerId: meta.manufacturerId || row.manufacturerId || null,
+    warehouseId,
+    mixItems: scaleRows(meta.mixItems, "manufactureId", combo, quantity, items),
+    packagingItems: scaleRows(
+      meta.packagingItems,
+      "itemMasterId",
+      combo,
+      quantity,
+      items,
+    ),
+    date,
+    note,
+    combo: quantity,
+    variants: [],
+    purchase_price_custom: false,
+    sale_price: salePrice,
+    unitWage: 0,
+    othersCost: 0,
+  };
+};
+
+const insertIntoDB = async (payload = {}) => {
+  const entries = normalizeItems(payload);
+  const shared = {
+    date: payload.date || new Date().toISOString().slice(0, 10),
+    note: String(payload.note || "").trim() || "Combo Production",
+  };
+
+  const templates = await loadTemplates();
+  const warehouseIds = [...new Set(entries.map((entry) => entry.warehouseId))];
+  const warehouses = await Warehouse.findAll({
+    where: { Id: warehouseIds },
+    attributes: ["Id"],
+  });
+  const knownWarehouses = new Set(warehouses.map((w) => Number(w.Id)));
+
+  const prepared = [];
+  for (const entry of entries) {
+    const template = templates.get(entry.productId);
+    if (!template) {
+      throw new ApiError(
+        404,
+        `${entry.label}No Mixer recipe found for this combo — make it once from Mixer first`,
+      );
+    }
+    if (!knownWarehouses.has(entry.warehouseId)) {
+      throw new ApiError(404, `${entry.label}Warehouse not found`);
+    }
+    prepared.push({
+      templateMixerId: template.row.Id,
+      payload: await buildMixerPayload(entry, template, shared),
+    });
+  }
+
+  const results = await db.sequelize.transaction(async (transaction) => {
+    const created = [];
+    for (const { templateMixerId, payload: mixerPayload } of prepared) {
+      created.push(
+        await MixerService.insertIntoDB(mixerPayload, {
+          entryType: COMBO_PRODUCTION_ENTRY_TYPE,
+          templateMixerId,
+          transaction,
+        }),
+      );
+    }
+    return created;
+  });
+
+  return Array.isArray(payload.items) ? results : results[0];
 };
 
 const getAllFromDB = (filters, options) =>

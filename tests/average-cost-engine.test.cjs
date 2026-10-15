@@ -127,3 +127,31 @@ test('after a factory edit the transfer enters at the edited outbound cost', () 
   assert.equal(averages.get('ItemStock:row:3').average, 15);
   assert.equal(averages.get('FactoryStock:row:7').average, 15);
 });
+
+test('deleting a partly-used purchase never leaves a nonsense average', () => {
+  // 5 @10 + 5 @30 → 20; 4 used → 6 @20. Un-blending either purchase at its own
+  // price gives −30 or 70 per unit, so the units leave at the average instead.
+  for (const [deleted, price] of [[2, 30], [1, 10]]) {
+    id = 0;
+    const movements = [
+      mv({ stockType: 'ProductStock', productId: 5, sourceType: 'ReceivedProduct', sourceId: 1, date: '2026-10-02', quantityChange: 5, unitCost: 10 }),
+      mv({ stockType: 'ProductStock', productId: 5, sourceType: 'ReceivedProduct', sourceId: 2, date: '2026-10-02', quantityChange: 5, unitCost: 30 }),
+      mv({ stockType: 'ProductStock', productId: 5, sourceType: 'InTransitProduct', sourceId: 9, date: '2026-10-03', quantityChange: -4 }),
+      mv({ stockType: 'ProductStock', productId: 5, sourceType: 'ReceivedProduct', sourceId: deleted, date: '2026-10-04', quantityChange: -5, unitCost: price, operation: 'DELETE' }),
+    ];
+    const { updates, averages } = replayAverages({ movements, stocksByType: product(1, 0), fromDate: '2026-10-01' });
+    assert.equal(updates.get(4).unitCostConsumed, 20);
+    assert.equal(averages.get('ProductStock:product:5').average, 20);
+  }
+});
+
+test('deleting an unused purchase still un-blends at its own price', () => {
+  id = 0;
+  const movements = [
+    mv({ stockType: 'ProductStock', productId: 5, sourceType: 'ReceivedProduct', sourceId: 1, date: '2026-10-02', quantityChange: 5, unitCost: 10 }),
+    mv({ stockType: 'ProductStock', productId: 5, sourceType: 'ReceivedProduct', sourceId: 2, date: '2026-10-02', quantityChange: 5, unitCost: 30 }),
+    mv({ stockType: 'ProductStock', productId: 5, sourceType: 'ReceivedProduct', sourceId: 2, date: '2026-10-04', quantityChange: -5, unitCost: 30, operation: 'DELETE' }),
+  ];
+  const { averages } = replayAverages({ movements, stocksByType: product(5, 0), fromDate: '2026-10-01' });
+  assert.equal(averages.get('ProductStock:product:5').average, 10);
+});

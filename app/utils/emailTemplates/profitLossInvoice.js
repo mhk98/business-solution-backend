@@ -66,6 +66,7 @@ const profitLossInvoiceTemplate = ({
     returnRate = 0,
     returnDeduction = 0,
     finalProfit = 0,
+    totalOrder,
   } = calculationSummary;
 
   // ── Calculation summary ──────────────────────────────────────────────────
@@ -73,6 +74,7 @@ const profitLossInvoiceTemplate = ({
   const breakdownSection = `
       ${sectionTitle("Calculation Summary")}
       <table role="presentation" width="100%" style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;">
+        ${totalOrder !== undefined && totalOrder !== null ? summaryRow("Total Order", fmtNum(totalOrder)) : ""}
         ${summaryRow(Number(totalCost) > 0 ? "Total Sale" : "Total Revenue", fmtCurrency(effectiveTotalRevenue))}
         ${Number(totalCost) > 0 ? summaryRow("Total Purchase", fmtCurrency(totalCost)) : ""}
         ${summaryRow("Gross Profit", fmtCurrency(grossProfit), { strong: true, color: moneyColor(grossProfit), shaded: true })}

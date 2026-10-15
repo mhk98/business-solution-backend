@@ -124,6 +124,13 @@ const MENU_PERMISSIONS = {
   ATTENDANCE_MANAGEMENT: "attendance_management",
   ATTENDANCE_DEVICE: "attendance_device",
   LEAVE_MANAGEMENT: "leave_management",
+  // Attendance submenus that used to share "attendance" / "leave_management".
+  ATTENDANCE_SETUP: "attendance_setup",
+  ATTENDANCE_CORRECTION: "attendance_correction",
+  ATTENDANCE_POLICY: "attendance_policy",
+  LEAVE_TYPE: "leave_type",
+  // Parent of the Leave menu (Leave Requests / Leave Types).
+  LEAVE_MENU: "leave_menu",
   DAILY_WORK_REPORTS: "daily_work_reports",
   CS_WORK_REPORTS: "cs_work_reports",
   LOGISTIC_WORK_REPORTS: "logistic_work_reports",

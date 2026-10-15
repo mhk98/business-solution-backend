@@ -12,6 +12,11 @@ router.get("/", auth(), requireMenuPermission("leave_management"), LeaveRequestC
 router.get("/all", auth(), requireMenuPermission("leave_management"), LeaveRequestController.getAllFromDBWithoutQuery);
 // The assigned approver (team leader) needs no Leave Management permission.
 router.get("/approvals", auth(), LeaveRequestController.getMyApprovals);
+router.get("/approvals/count", auth(), LeaveRequestController.getMyApprovalCount);
+// My Leave: every logged-in user applies / cancels for themself.
+router.get("/my", auth(), LeaveRequestController.getMyLeave);
+router.post("/my", auth(), LeaveRequestController.applyMyLeave);
+router.post("/my/:id/cancel", auth(), LeaveRequestController.cancelMyLeave);
 router.post("/:id/decide", auth(), LeaveRequestController.decideLeave);
 router.get("/me", auth(), requireAnyPermission(["employee_profile", "leave_management"]), LeaveRequestController.getMyLeaveRequests);
 router.get("/:id", auth(), requireMenuPermission("leave_management"), LeaveRequestController.getDataById);

@@ -45,4 +45,21 @@ const decideLeave = catchAsync(async (req, res) => {
   sendResponse(res, { statusCode: 200, success: true, message: `Leave request ${req.body?.decision?.toLowerCase() || "updated"}`, data: result });
 });
 
-module.exports = { getMyApprovals, decideLeave, insertIntoDB, getAllFromDB, getAllFromDBWithoutQuery, getDataById, getMyLeaveRequests, updateOneFromDB, deleteIdFromDB };
+const getMyLeave = catchAsync(async (req, res) => {
+  const result = await LeaveRequestService.getMyLeave(req.user, req.query);
+  sendResponse(res, { statusCode: 200, success: true, message: "My leave fetched", data: result });
+});
+const applyMyLeave = catchAsync(async (req, res) => {
+  const result = await LeaveRequestService.applyMyLeave(req.body, req.user);
+  sendResponse(res, { statusCode: 200, success: true, message: "Leave request sent to your team leader", data: result });
+});
+const cancelMyLeave = catchAsync(async (req, res) => {
+  const result = await LeaveRequestService.cancelMyLeave(req.params.id, req.user);
+  sendResponse(res, { statusCode: 200, success: true, message: "Leave request cancelled", data: result });
+});
+const getMyApprovalCount = catchAsync(async (req, res) => {
+  const result = await LeaveRequestService.getMyApprovalCount(req.user);
+  sendResponse(res, { statusCode: 200, success: true, message: "Leave approval count fetched", data: result });
+});
+
+module.exports = { getMyLeave, applyMyLeave, cancelMyLeave, getMyApprovalCount, getMyApprovals, decideLeave, insertIntoDB, getAllFromDB, getAllFromDBWithoutQuery, getDataById, getMyLeaveRequests, updateOneFromDB, deleteIdFromDB };

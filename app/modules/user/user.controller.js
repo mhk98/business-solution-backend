@@ -1,3 +1,4 @@
+const MasterPermissionService = require("../masterPermission/masterPermission.service");
 const { getUploadedFilePath } = require("../../config/uploads");
 const catchAsync = require("../../../shared/catchAsync");
 const pick = require("../../../shared/pick");
@@ -145,7 +146,7 @@ const updateUserFromDB = catchAsync(async (req, res) => {
   const isAdmin = [
     ENUM_USER_ROLE.SUPER_ADMIN,
     ENUM_USER_ROLE.ADMIN,
-  ].includes(callerRole);
+  ].includes(callerRole) || (await MasterPermissionService.getSelfPermission(req.user)).canManageMasterPermission;
 
   const {
     FirstName,

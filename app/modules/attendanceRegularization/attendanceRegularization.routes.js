@@ -7,37 +7,37 @@ const AttendanceRegularizationController = require("./attendanceRegularization.c
 router.post(
   "/create",
   auth(),
-  requireMenuPermission("attendance"),
+  requireMenuPermission("attendance_correction"),
   AttendanceRegularizationController.insertIntoDB,
 );
 router.get(
   "/",
   auth(),
-  requireMenuPermission("attendance"),
+  requireMenuPermission("attendance_correction"),
   AttendanceRegularizationController.getAllFromDB,
 );
 router.get(
   "/all",
   auth(),
-  requireMenuPermission("attendance"),
+  requireMenuPermission("attendance_correction"),
   AttendanceRegularizationController.getAllFromDBWithoutQuery,
 );
 router.get(
   "/:id",
   auth(),
-  requireMenuPermission("attendance"),
+  requireMenuPermission("attendance_correction"),
   AttendanceRegularizationController.getDataById,
 );
 router.put(
   "/:id",
   auth(),
-  requireMenuPermission("attendance"),
+  requireMenuPermission("attendance_correction"),
   AttendanceRegularizationController.updateOneFromDB,
 );
 router.delete(
   "/:id",
   auth(ENUM_USER_ROLE.SUPER_ADMIN, ENUM_USER_ROLE.ADMIN),
-  requireMenuPermission("attendance"),
+  requireMenuPermission("attendance_correction"),
   AttendanceRegularizationController.deleteIdFromDB,
 );
 

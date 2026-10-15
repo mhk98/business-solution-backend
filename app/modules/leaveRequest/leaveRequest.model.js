@@ -61,6 +61,20 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.INTEGER(10),
         allowNull: true,
       },
+      // Team leader's step (approvedByUserId is the team leader).
+      leaderApprovedAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
+      // HR's final step — only then the leave is "Approved" and counted.
+      hrApprovedByUserId: {
+        type: DataTypes.INTEGER(10),
+        allowNull: true,
+      },
+      hrApprovedAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+      },
       approvedAt: {
         type: DataTypes.DATE,
         allowNull: true,

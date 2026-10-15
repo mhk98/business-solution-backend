@@ -108,26 +108,29 @@ const getAllFromDBWithoutQuery = async () => {
 
 // Courier product stock for the shared "All Books" / Monthly Reporting Book
 // statement PDF and the Dashboard's Print/Download Book action (see
-// inventoryOverview.service.js's getInventoryStockReport). Each entry is a
-// stock snapshot, not a movement, so per status the balance is the amount of
-// the latest entry: `endingAmount` = latest dated <= `to`, `openingAmount` =
-// latest dated < `from`; `periodAmount` mirrors the ending snapshot (the
-// amount shown for the period) and `date` is that latest entry's date.
+// inventoryOverview.service.js's getInventoryStockReport). Each day's entries
+// are that day's full courier stock: the balance is the entries of the latest
+// day that has any — only the statuses entered that day (e.g. only Pending if
+// only Pending was entered), never an older day's entry of another status.
+// `endingAmount` = latest day <= `to`, `openingAmount` = latest day < `from`;
+// `periodAmount` mirrors the ending snapshot and `date` is that day.
 const getCourierProductStockReport = async ({ from, to } = {}) => {
   const latestByStatus = async (dateCondition) => {
+    const where = dateCondition ? { date: dateCondition } : {};
+    const latestDate = await CourierProductStock.max("date", { where });
+    const latest = new Map();
+    if (!latestDate) return latest;
     const rows = await CourierProductStock.findAll({
-      where: dateCondition ? { date: dateCondition } : {},
+      where: { date: latestDate },
       attributes: ["Id", "status", "date", "amount"],
-      order: [["date", "DESC"], ["createdAt", "DESC"], ["Id", "DESC"]],
+      order: [["createdAt", "DESC"], ["Id", "DESC"]],
       raw: true,
     });
-    const latest = new Map();
     rows.forEach((row) => {
       if (!latest.has(row.status)) latest.set(row.status, row);
     });
     return latest;
   };
-
   const [endingByStatus, openingByStatus] = await Promise.all([
     latestByStatus(to ? { [Op.lte]: to } : null),
     from ? latestByStatus({ [Op.lt]: from }) : Promise.resolve(new Map()),

@@ -20,7 +20,16 @@ const person = (src = {}) => {
   };
 };
 
+const AttendanceSelf = require("./attendance.self");
+
 module.exports = {
+  getMyAttendance: respond("My attendance fetched", (req) => AttendanceSelf.getMyAttendance(req.user, req.query)),
+  applyMyCorrection: respond("Correction request sent to HR", (req) => AttendanceSelf.applyCorrection(req.user, req.body)),
+  cancelMyCorrection: respond("Correction request cancelled", (req) => AttendanceSelf.cancelCorrection(req.user, req.params.id)),
+  getMyTeam: respond("Team attendance fetched", (req) => AttendanceSelf.getMyTeam(req.user, req.query)),
+  getTeamJobCard: respond("Job card fetched", (req) => AttendanceSelf.getTeamJobCard(req.user, req.query)),
+  getCorrectionApprovals: respond("Correction approvals fetched", (req) => AttendanceSelf.getCorrectionApprovals(req.user)),
+  decideCorrection: respond("Correction updated", (req) => AttendanceSelf.decideCorrection(req.user, req.params.id, req.body)),
   getDaily: respond("Daily attendance fetched", (req) => AttendanceService.getDaily(req.query)),
   getMonthly: respond("Monthly attendance fetched", (req) => AttendanceService.getMonthly(req.query)),
   getJobCard: respond("Job card fetched", (req) => AttendanceService.getJobCard(person(req.query))),

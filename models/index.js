@@ -1555,6 +1555,11 @@ db.leaveRequest.belongsTo(db.user, {
   foreignKey: "approvedByUserId",
   as: "approvedBy",
 });
+db.leaveRequest.belongsTo(db.user, {
+  foreignKey: "hrApprovedByUserId",
+  as: "hrApprovedBy",
+  constraints: false,
+});
 
 // Attendance (punch → day engine, app/modules/attendance). The attendance
 // person is a User.
@@ -1955,6 +1960,10 @@ const ensureAttendanceColumns = async () => {
       defaultValue: false,
     },
     halfDaySession: { type: DataTypes.STRING(16), allowNull: true },
+    // Two-step approval: team leader, then HR.
+    leaderApprovedAt: { type: DataTypes.DATE, allowNull: true },
+    hrApprovedByUserId: { type: DataTypes.INTEGER(10), allowNull: true },
+    hrApprovedAt: { type: DataTypes.DATE, allowNull: true },
   });
   await addMissing(db.department, {
     teamLeaderUserId: { type: DataTypes.INTEGER(10), allowNull: true },
@@ -4616,6 +4625,61 @@ const ensureMarketingExpenseColumns = async () => {
   });
 };
 
+// One-time (2026-10-12): the Attendance submenus got their own permission
+// keys, and the saved role permissions are set to the agreed matrix —
+// superAdmin/admin/hr see the whole Attendance menu, accountant only the
+// Attendance Report, every other role none of it (they use My Leave). After
+// this runs, the Role Permissions page owns these keys again.
+const ATTENDANCE_ROLE_MATRIX_MIGRATION = "2026-10-12-attendance-role-matrix";
+const ATTENDANCE_SECTION_KEYS = [
+  "attendance_management",
+  "attendance",
+  "attendance_setup",
+  "attendance_device",
+  "shift_management",
+  "holiday_management",
+  "leave_menu",
+  "leave_type",
+  "leave_management",
+  "attendance_correction",
+  "attendance_policy",
+];
+const applyAttendanceRoleMatrix = async () => {
+  await db.sequelize.query(
+    "CREATE TABLE IF NOT EXISTS `AppMigrations` (`name` VARCHAR(128) NOT NULL PRIMARY KEY, `ranAt` DATETIME NOT NULL)",
+  );
+  const [done] = await db.sequelize.query("SELECT `name` FROM `AppMigrations` WHERE `name` = ?", {
+    replacements: [ATTENDANCE_ROLE_MATRIX_MIGRATION],
+  });
+  if (done.length) return;
+
+  const grants = {
+    admin: ATTENDANCE_SECTION_KEYS,
+    hr: ATTENDANCE_SECTION_KEYS,
+    accountant: ["attendance_management", "attendance"],
+  };
+  const parse = (value) => {
+    if (Array.isArray(value)) return value;
+    try {
+      const parsed = JSON.parse(value || "[]");
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+  const records = await db.rolePermission.findAll();
+  for (const record of records) {
+    if (record.role === "superAdmin") continue;
+    const kept = parse(record.menuPermissions).filter((key) => !ATTENDANCE_SECTION_KEYS.includes(key));
+    const next = [...new Set([...kept, ...(grants[record.role] || [])])];
+    await record.update({ menuPermissions: next });
+    console.log(`[attendance-role-matrix] ${record.role}: ${(grants[record.role] || []).length} attendance keys`);
+  }
+  await db.sequelize.query("INSERT INTO `AppMigrations` (`name`, `ranAt`) VALUES (?, NOW())", {
+    replacements: [ATTENDANCE_ROLE_MATRIX_MIGRATION],
+  });
+};
+
 // The attendance person moved from EmployeeLists (employeeId) to Users
 // (userId). Tables first built on employeeId need the userId column BEFORE
 // sync(), which otherwise fails adding the model's userId indexes (and every
@@ -4946,6 +5010,8 @@ prepareAttendanceUserKey()
         },
       ),
     );
+
+    await applyAttendanceRoleMatrix();
 
     console.log("Connection re-synced successfully");
   })
